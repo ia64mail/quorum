@@ -22,3 +22,18 @@ lerna-debug.log*
 # temp directory
 .temp
 .tmp
+
+# JetBrains IDEs (IntelliJ, WebStorm, etc.)
+.idea/**
+!.idea/runConfigurations/
+!.idea/codeStyles/
+!.idea/inspectionProfiles/
+!.idea/vcs.xml
+!.idea/modules.xml
+!.idea/*.iml
+
+# Always ignore these user-specific files
+.idea/workspace.xml
+.idea/usage.statistics.xml
+.idea/shelf/
+.idea/tasks.xml
