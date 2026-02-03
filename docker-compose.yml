@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  terminal:
+    build:
+      context: .
+      dockerfile: apps/terminal/Dockerfile
+    stdin_open: true
+    tty: true
+    depends_on:
+      - mcp-server
+    environment:
+      - MCP_SERVER_URL=http://mcp-server:3000
+    networks:
+      - quorum-net
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: apps/mcp-server/Dockerfile
+    ports:
+      - "3000:3000"
+    networks:
+      - quorum-net
+
+  architect:
+    build:
+      context: .
+      dockerfile: apps/agent/Dockerfile
+    environment:
+      - AGENT_ROLE=architect
+      - MCP_SERVER_URL=http://mcp-server:3000
+    volumes:
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
+    depends_on:
+      - mcp-server
+    networks:
+      - quorum-net
+
+  teamlead:
+    build:
+      context: .
+      dockerfile: apps/agent/Dockerfile
+    environment:
+      - AGENT_ROLE=teamlead
+      - MCP_SERVER_URL=http://mcp-server:3000
+    volumes:
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
+    depends_on:
+      - mcp-server
+    networks:
+      - quorum-net
+
+  developer:
+    build:
+      context: .
+      dockerfile: apps/agent/Dockerfile
+    environment:
+      - AGENT_ROLE=developer
+      - MCP_SERVER_URL=http://mcp-server:3000
+    volumes:
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
+    depends_on:
+      - mcp-server
+    networks:
+      - quorum-net
+
+  qa:
+    build:
+      context: .
+      dockerfile: apps/agent/Dockerfile
+    environment:
+      - AGENT_ROLE=qa
+      - MCP_SERVER_URL=http://mcp-server:3000
+    volumes:
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
+    depends_on:
+      - mcp-server
+    networks:
+      - quorum-net
+
+  productowner:
+    build:
+      context: .
+      dockerfile: apps/agent/Dockerfile
+    environment:
+      - AGENT_ROLE=productowner
+      - MCP_SERVER_URL=http://mcp-server:3000
+    volumes:
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
+    depends_on:
+      - mcp-server
+    networks:
+      - quorum-net
+
+networks:
+  quorum-net:
+    driver: bridge
