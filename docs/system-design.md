@@ -25,6 +25,7 @@ graph TB
             MSG[Message Broker]
             MCP --- REG
             MCP --- MSG
+            REG -.-> MSG
         end
 
         subgraph "Agent Containers"
@@ -82,12 +83,15 @@ The communication backbone connecting all agents.
 | **Technology** | NestJS MCP server implementation |
 | **Protocol** | MCP (Model Context Protocol) |
 | **Discovery** | Agent registry for role-based lookup |
+| **Messaging** | Message broker for agent-to-agent invocation |
 
 **Responsibilities:**
 - Register and track active agents
-- Route messages between agents
-- Expose agent capabilities as MCP tools
+- Route inter-agent messages via Message Broker
+- Expose `invoke_agent` tool for agent-to-agent communication
 - Manage agent lifecycle (health checks, reconnection)
+
+> **Note:** See [Agent Messaging](agent-messaging.md) for detailed documentation on bidirectional MCP and the Message Broker mechanism.
 
 ### 3. Agent Containers
 
@@ -99,6 +103,7 @@ Identical Docker images configured via environment variables.
 | **Technology** | NestJS shell wrapping Claude Code CLI |
 | **Configuration** | `AGENT_ROLE` environment variable |
 | **Workspace** | Shared volume at `/mnt/quorum/workspace` |
+| **MCP Role** | Dual: client (invoke others) + handler (be invoked) |
 
 **Agent Roles:**
 
@@ -337,7 +342,7 @@ services:
 | Decision | Rationale |
 |----------|-----------|
 | **Single agent image** | Simplifies maintenance; role behavior defined by env vars and prompts |
-| **MCP as communication layer** | Standard protocol, well-supported, bidirectional |
+| **MCP as communication layer** | Standard protocol, well-supported, bidirectional ([details](agent-messaging.md)) |
 | **Shared volume workspace** | All agents see same files, enables real collaboration |
 | **quorum.md configuration** | Keeps Quorum universal, configuration lives in target project |
 | **NestJS monorepo** | Consistent tooling, shared libraries, easier deployment |

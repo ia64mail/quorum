@@ -30,6 +30,14 @@ docs/       # Project documentation (primary contribution point)
 tickets/    # Implementation tasks as flat MD files (local Jira-like workflow)
 ```
 
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [docs/system-design.md](docs/system-design.md) | Overall architecture, containers, deployment |
+| [docs/agent-messaging.md](docs/agent-messaging.md) | Bidirectional MCP concepts, communication patterns |
+| [docs/message-broker.md](docs/message-broker.md) | Message Broker implementation details, safeguards |
+
 ## Build Commands
 
 ```bash
