@@ -91,7 +91,7 @@ The communication backbone connecting all agents.
 - Expose `invoke_agent` tool for agent-to-agent communication
 - Manage agent lifecycle (health checks, reconnection)
 
-> **Note:** See [Agent Messaging](agent-messaging.md) for detailed documentation on bidirectional MCP and the Message Broker mechanism.
+> **Note:** See [Agent Messaging](agent-messaging.md) for detailed documentation on bidirectional MCP and the Message Broker mechanism. See [Context Management](context-management.md) for the context sharing API and [Context Store](context-store.md) for storage backend details.
 
 ### 3. Agent Containers
 

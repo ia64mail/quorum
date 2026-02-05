@@ -171,4 +171,4 @@ Quorum's bidirectional MCP architecture enables:
 
 This architecture transforms MCP from a simple tool-calling protocol into a **multi-agent coordination platform**.
 
-See [Message Broker](message-broker.md) for implementation details including safeguards, transport, and availability handling.
+See [Message Broker](message-broker.md) for implementation details including safeguards, transport, and availability handling. See [Context Management](context-management.md) for the context sharing API and [Context Store](context-store.md) for storage backend details.

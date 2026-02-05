@@ -196,6 +196,8 @@ invoke_agent(architect, "what auth pattern?", {
 invoke_agent(architect, task, { fullConversation: [...] })
 ```
 
+> **Note:** See [Context Management](context-management.md) for the MCP API design, and [Context Store](context-store.md) for implementation details including OpenSearch and embeddings.
+
 ## Transport
 
 WebSocket provides native bidirectional messaging:
