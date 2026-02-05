@@ -221,6 +221,43 @@ sequenceDiagram
     M->>U: Feature complete
 ```
 
+## Context Management
+
+Multi-agent collaboration creates a context management challenge: passing full conversation histories between agents exhausts context windows, while passing too little loses critical decisions. Quorum solves this with a **pull-based context model**.
+
+### Core Principle
+
+Agents don't receive full context on invocation. Instead, they:
+1. Receive minimal bootstrap context (task description + correlation ID)
+2. Query the Context Store for what they need via `context_query`
+3. Store their decisions for others via `context_store`
+
+```mermaid
+graph LR
+    A[Architect] -->|"context_store(project, auth=JWT)"| CS[(Context Store)]
+    CS -->|"context_query(project, auth)"| D[Developer]
+```
+
+### Context Scopes
+
+| Scope | Lifetime | Contents | Example |
+|-------|----------|----------|---------|
+| **Project** | Entire session | Tech stack, constraints, architectural decisions | `"database": "PostgreSQL"` |
+| **Conversation** | Single task chain | Task-specific decisions, intermediate results | `"api_style": "REST"` for ticket QRM-042 |
+| **Agent** | Per-agent instance | Working memory, scratchpad | Developer's local notes |
+
+### Agent Responsibility
+
+Each agent role is prompted to record significant decisions:
+
+- **Architect**: Stores tech choices, patterns, constraints in `project` scope
+- **Team Lead**: Stores task breakdowns, priorities in `conversation` scope
+- **Developer**: Queries decisions before implementing, stores implementation notes
+
+This transforms context from "push everything" to "store decisions, query as needed" — keeping agent context windows lean while preserving team knowledge.
+
+> **Details:** [Context Management](context-management.md) for MCP API design, [Context Store](context-store.md) for storage implementation.
+
 ## NestJS Monorepo Structure
 
 ```
@@ -347,6 +384,7 @@ services:
 | **quorum.md configuration** | Keeps Quorum universal, configuration lives in target project |
 | **NestJS monorepo** | Consistent tooling, shared libraries, easier deployment |
 | **Docker Compose** | Simple orchestration, suitable for single-host development |
+| **Pull-based context** | Agents query what they need vs receiving everything; prevents context exhaustion ([details](context-management.md)) |
 
 ## Network Communication
 
