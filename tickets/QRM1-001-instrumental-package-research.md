@@ -64,7 +64,7 @@ Ink is a React renderer for the terminal. It maps directly to the Terminal App's
 - Streaming text rendering — re-renders as new tokens arrive from `@anthropic-ai/sdk` streams
 - Input handling — captures user text input for the Moderator conversation loop
 
-Ink is the same terminal UI stack used by Claude Code itself. React 18 is its peer dependency.
+Ink is the same terminal UI stack used by Claude Code itself. React 19 is its peer dependency (ink 6.x moved from React 18 to 19).
 
 #### `zod` — Schema Validation
 
@@ -90,16 +90,16 @@ Zod is the schema definition language for MCP tool registration. The `@modelcont
 Add the five core packages to the project's `dependencies` in `package.json`:
 
 ```
-@anthropic-ai/sdk       ^0.71.x
-@modelcontextprotocol/sdk  ^1.x
-ink                     ^5.x
-react                   ^18.x
-zod                     ^3.25.x
+@anthropic-ai/sdk       ^0.73.0
+@modelcontextprotocol/sdk  ^1.26.0
+ink                     ^6.6.0
+react                   ^19.2.4
+zod                     ^4.3.6
 ```
 
-Additionally, `@types/react` is needed as a dev dependency since the project uses TypeScript.
+Additionally, `@types/react` (`^19.2.13`) is needed as a dev dependency since the project uses TypeScript.
 
-Ink 5.x is ESM-only. The current NestJS scaffold uses CommonJS (`ts-jest`, `tsconfig-paths/register`). This is a known integration point — the terminal app's tsconfig may need `"module": "nodenext"` or a dynamic `import()` wrapper. This should be validated at install time and documented if any workaround is needed.
+**ESM/CJS note:** The root `tsconfig.json` already had `"module": "nodenext"` and `"moduleResolution": "nodenext"` configured, so ink's ESM-only nature posed no interop issues. No dynamic `import()` wrappers or additional tsconfig changes were needed.
 
 ### 2. Environment Configuration
 
@@ -126,7 +126,7 @@ DEVELOPER_COUNT=1
 
 Only `ANTHROPIC_API_KEY` is immediately required by the new dependencies. The remaining variables are documented for completeness against `docs/system-design.md` Docker Compose configuration and will be consumed by later implementation tickets.
 
-Add `.env` to `.gitignore` to prevent secret leakage.
+`.env` was already in `.gitignore` from the NestJS scaffold.
 
 ### 3. Verify Installation
 
@@ -137,17 +137,17 @@ After install, confirm that core imports resolve without errors:
 - `import { z } from 'zod'`
 - `import React from 'react'` / `import { render } from 'ink'`
 
-If ESM/CJS interop issues surface with `ink`, document the specific error and workaround.
+No ESM/CJS interop issues surfaced — `tsconfig.json` already uses `"module": "nodenext"`.
 
 ## Acceptance Criteria
 
-- [ ] All five packages installed and listed in `package.json` dependencies
-- [ ] `@types/react` installed as dev dependency
-- [ ] `npm install` completes without peer dependency warnings or errors
-- [ ] `.env.example` created with documented variables
-- [ ] `.env` added to `.gitignore`
-- [ ] TypeScript can resolve imports from all five packages (no type errors on bare imports)
-- [ ] Any ESM/CJS compatibility notes documented in this ticket or a follow-up
+- [x] All five packages installed and listed in `package.json` dependencies
+- [x] `@types/react` installed as dev dependency
+- [x] `npm install` completes without peer dependency warnings or errors
+- [x] `.env.example` created with documented variables
+- [x] `.env` added to `.gitignore` (already present from NestJS scaffold)
+- [x] TypeScript can resolve imports from all five packages (no type errors on bare imports)
+- [x] ESM/CJS compatibility: no issues — `tsconfig.json` already configured with `"module": "nodenext"`
 
 ## Dependencies and References
 
