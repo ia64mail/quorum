@@ -1,243 +1,163 @@
-# QRM1-001: Instrumental Package Research for Quorum POC
+# QRM1-001: Core Package Installation & Configuration
 
 ## Summary
 
-Research and validate the core npm packages required to implement the Quorum multi-agent orchestration system. Focus on Anthropic-native solutions for LLM integration, MCP server/client implementation, and terminal UI rendering. Deliver a validated package selection with working proof-of-concept code snippets.
+Install and configure the five core npm packages that implement the Quorum system design: `@anthropic-ai/sdk` for LLM integration, `@modelcontextprotocol/sdk` for the MCP communication layer, `ink` and `react` for the terminal UI, and `zod` for schema validation. Set up the minimal environment configuration required by these dependencies.
 
 ## Problem Statement
 
-The Quorum system design specifies a multi-container architecture with:
-- Terminal app with Moderator LLM
-- MCP server for agent communication
-- Agent containers wrapping Claude Code
+The Quorum project scaffold exists with NestJS 11 and TypeScript, but lacks the domain-specific packages required by the system architecture. Every container component described in `docs/system-design.md` depends on one or more of these packages:
 
-Before implementation begins, we need validated answers to:
+- The **Terminal App** needs `@anthropic-ai/sdk` (Moderator LLM) and `ink`/`react` (Console UI)
+- The **MCP Server** needs `@modelcontextprotocol/sdk` (server, tool/resource registration) and `zod` (tool input schemas)
+- The **Agent Containers** need `@modelcontextprotocol/sdk` (client connections) and `zod` (schema validation)
 
-| Question | Risk if Unanswered |
-|----------|-------------------|
-| Which SDK for Anthropic LLM integration? | Wrong choice = rewrite core logic |
-| How to build MCP server from scratch? | Underestimate complexity, miss features |
-| What terminal UI library? | Poor UX, streaming issues, maintenance burden |
-| How do MCP ↔ Anthropic types interoperate? | Boilerplate code, type mismatches |
+Without these packages installed and configured, no implementation ticket can proceed. This ticket captures the package selection rationale, documents how each package maps to the architecture, and defines the install + configuration steps.
 
-The Anthropic ecosystem has evolved rapidly (2025-2026), and documentation may be fragmented across:
-- `@anthropic-ai/sdk` (main API)
-- `@anthropic-ai/claude-agent-sdk` (agent framework)
-- `@modelcontextprotocol/sdk` (MCP official)
-- Various community packages
+## Design Context
 
-## Research Objectives
+### Package-to-Architecture Mapping
 
-### 1. LLM Integration Package
+Each package was selected because it directly implements a component or capability described in the system design documentation.
 
-**Evaluate:** `@anthropic-ai/sdk` vs `@anthropic-ai/claude-agent-sdk`
+#### `@anthropic-ai/sdk` — Moderator LLM Integration
 
-| Criteria | @anthropic-ai/sdk | @anthropic-ai/claude-agent-sdk |
-|----------|-------------------|-------------------------------|
-| Streaming support | ? | ? |
-| Tool use / function calling | ? | ? |
-| MCP type helpers | ? | ? |
-| Bundle size | ? | ? |
-| Learning curve | ? | ? |
-| POC suitability | ? | ? |
+| Design Reference | Requirement |
+|-----------------|-------------|
+| `docs/system-design.md` — Terminal App Container | "Built-in Moderator LLM that orchestrates other agents" |
+| `docs/system-design.md` — Agent Collaboration Flow | Moderator initiates all agent orchestration via streaming conversation |
+| `docs/agent-messaging.md` — The `invoke_agent` Tool | Moderator uses tool-use (function calling) to invoke agents through MCP |
 
-**Deliverable:** Recommendation with code sample demonstrating streaming + tool use.
+The Moderator LLM lives in `apps/terminal/src/moderator/`. It requires:
+- **Streaming responses** — the terminal UI renders LLM output as it arrives, not after completion
+- **Tool use** — the Moderator calls `invoke_agent` to delegate work to other agents; the SDK must support tool definitions and tool-result message flows
+- **Message construction** — building multi-turn conversations with system prompts, user input, assistant responses, and tool results
 
-### 2. MCP Server Implementation
+`@anthropic-ai/sdk` is Anthropic's official TypeScript SDK, provides the `Anthropic` client with `messages.stream()` and native tool-use support. It is the direct, low-level SDK — appropriate because Quorum manages its own orchestration loop rather than delegating to an agent framework.
 
-**Evaluate:** `@modelcontextprotocol/sdk`
+#### `@modelcontextprotocol/sdk` — MCP Server & Client
 
-| Aspect | Finding |
-|--------|---------|
-| Server creation API | ? |
-| Transport options (HTTP, stdio, WebSocket) | ? |
-| Tool/Resource/Prompt primitives | ? |
-| Client library included | ? |
-| NestJS integration pattern | ? |
-| Auth helpers | ? |
+| Design Reference | Requirement |
+|-----------------|-------------|
+| `docs/system-design.md` — MCP Server Container | "NestJS MCP server implementation" with Agent Registry and Message Broker |
+| `docs/agent-messaging.md` — Dual-Role Agents | Each agent is both MCP client (outbound calls) and invocation handler (inbound tasks) |
+| `docs/message-broker.md` — Transport | "WebSocket provides native bidirectional messaging" via `@modelcontextprotocol/sdk` |
+| `docs/context-management.md` — MCP Resources & Tools | Resources (`context://project`, `context://conversation/{id}`) and tools (`context_store`, `context_query`, `context_summarize`, `context_stats`) |
 
-**Deliverable:** Minimal MCP server with 2 tools + client connection sample.
+This package is used across all three container types:
+- **MCP Server** (`apps/mcp-server/`) — `McpServer` class for server creation, `server.tool()` for registering `invoke_agent` and context management tools, `server.resource()` / `server.registerResourceTemplate()` for context resources
+- **Terminal App** (`apps/terminal/`) — `Client` class to connect Moderator to MCP Server
+- **Agent Containers** (`apps/agent/`) — `Client` class for outbound MCP calls, plus handler registration for inbound task delivery
+- **Shared library** (`libs/mcp-client/`, `libs/mcp-protocol/`) — reusable client wrapper and protocol type definitions
 
-### 3. Terminal UI Library
+The SDK includes both server and client implementations, transport abstractions (WebSocket, HTTP, stdio), and the primitive registration APIs (tools, resources, prompts) that the design relies on.
 
-**Evaluate:** `ink` + `react` (Claude Code's stack)
+#### `ink` + `react` — Terminal UI
 
-| Aspect | Finding |
-|--------|---------|
-| Streaming text rendering | ? |
-| Input handling | ? |
-| Component model | ? |
-| Known issues / workarounds | ? |
-| Alternatives considered | ? |
+| Design Reference | Requirement |
+|-----------------|-------------|
+| `docs/system-design.md` — Terminal App Container | "Console UI for chat-based interaction with the Moderator" |
+| `docs/system-design.md` — Terminal App Responsibilities | "Accept user input as natural language commands", "Display agent responses and progress" |
 
-**Deliverable:** Simple chat loop UI with streaming response display.
+Ink is a React renderer for the terminal. It maps directly to the Terminal App's UI layer (`apps/terminal/src/ui/`):
+- React component model for composing chat views (message list, input box, status indicators)
+- Streaming text rendering — re-renders as new tokens arrive from `@anthropic-ai/sdk` streams
+- Input handling — captures user text input for the Moderator conversation loop
 
-### 4. Type Interoperability
+Ink is the same terminal UI stack used by Claude Code itself. React 18 is its peer dependency.
 
-**Investigate:** MCP ↔ Anthropic SDK type conversion
+#### `zod` — Schema Validation
 
-| Aspect | Finding |
-|--------|---------|
-| Built-in helpers in @anthropic-ai/sdk | ? |
-| Manual conversion needed | ? |
-| Zod schema compatibility | ? |
+| Design Reference | Requirement |
+|-----------------|-------------|
+| `docs/agent-messaging.md` — `invoke_agent` Tool | Tool schema uses `z.enum()`, `z.string()`, `z.record()`, `z.boolean()` |
+| `docs/context-management.md` — All Context Tools | Every tool input schema (`context_store`, `context_query`, `context_summarize`, `context_stats`) uses zod types |
 
-**Deliverable:** Code sample showing MCP tool → Anthropic tool conversion.
+Zod is the schema definition language for MCP tool registration. The `@modelcontextprotocol/sdk` `server.tool()` API accepts zod schemas as input definitions. Every MCP tool in the design docs is already expressed in zod — this is not an optional choice but a requirement of the MCP SDK.
 
-## Package Candidates
+### Packages Not Selected
 
-### Primary Stack (Anthropic-native)
+| Package | Reason for Exclusion |
+|---------|---------------------|
+| `@anthropic-ai/claude-agent-sdk` | Provides a full agent runtime (file ops, bash execution, tool loops). Quorum implements its own orchestration — agents are Claude Code CLI instances wrapped in NestJS, not SDK-managed agents. Adding this would conflict with the architecture. |
+| `blessed` / `blessed-contrib` | Legacy terminal UI library. Ink's React model is a better fit for composable UI components and is actively maintained. |
+| `commander` | CLI argument parsing. Not needed — the terminal app is a single-purpose chat interface launched via NestJS, not a multi-command CLI tool. |
 
-```json
-{
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.x",
-    "@modelcontextprotocol/sdk": "^1.x",
-    "ink": "^5.x",
-    "react": "^18.x",
-    "zod": "^3.25.x"
-  }
-}
-```
+## Implementation Details
 
-### Secondary Consideration
+### 1. Install Dependencies
 
-| Package | Purpose | Evaluate If |
-|---------|---------|-------------|
-| `@anthropic-ai/claude-agent-sdk` | Full agent capabilities | POC needs file ops, bash execution |
-| `commander` | CLI argument parsing | Terminal app needs subcommands |
-| `blessed` | Alternative terminal UI | Ink proves problematic |
-
-## Evaluation Criteria
-
-Each package will be evaluated against:
-
-| Criterion | Weight | Description |
-|-----------|--------|-------------|
-| **Anthropic Alignment** | High | Official or officially recommended |
-| **POC Suitability** | High | Minimal setup, quick iteration |
-| **Documentation Quality** | Medium | Clear examples, API reference |
-| **Maintenance Status** | Medium | Recent updates, active issues |
-| **Bundle Size** | Low | Acceptable for Docker containers |
-| **Future Compatibility** | Low | Path to production (nice to have) |
-
-## Research Tasks
-
-### Phase 1: SDK Validation
-
-- [ ] Install `@anthropic-ai/sdk` and verify streaming API
-- [ ] Test tool use / function calling with simple example
-- [ ] Verify MCP helper functions exist and work
-- [ ] Document API key configuration pattern
-
-### Phase 2: MCP Server POC
-
-- [ ] Install `@modelcontextprotocol/sdk` with zod peer dependency
-- [ ] Create minimal `McpServer` instance
-- [ ] Add 2 test tools (e.g., `echo`, `get_time`)
-- [ ] Connect with MCP client and invoke tools
-- [ ] Test Streamable HTTP transport
-- [ ] Document NestJS integration approach
-
-### Phase 3: Terminal UI POC
-
-- [ ] Install `ink` and `react`
-- [ ] Create basic chat input/output component
-- [ ] Implement streaming text display
-- [ ] Test with simulated LLM response stream
-- [ ] Document known limitations
-
-### Phase 4: Integration Test
-
-- [ ] Wire Anthropic SDK → MCP tool → Terminal display
-- [ ] Verify end-to-end flow works
-- [ ] Identify any type conversion gaps
-- [ ] Document integration patterns
-
-## Deliverables
-
-### 1. Package Recommendation Document
-
-Update to `docs/package-selection.md`:
-
-```markdown
-# Package Selection
-
-## Approved Packages
-| Package | Version | Purpose | Validation Status |
-|---------|---------|---------|------------------|
-| ... | ... | ... | ✅ Validated |
-
-## Rejected Packages
-| Package | Reason |
-|---------|--------|
-| ... | ... |
-
-## Open Questions
-- ...
-```
-
-### 2. POC Code Samples
-
-Create `poc/` directory with working examples:
+Add the five core packages to the project's `dependencies` in `package.json`:
 
 ```
-poc/
-├── anthropic-streaming/     # SDK streaming demo
-├── mcp-server-minimal/      # Basic MCP server
-├── terminal-ui-chat/        # Ink chat component
-└── integration-test/        # End-to-end wiring
+@anthropic-ai/sdk       ^0.71.x
+@modelcontextprotocol/sdk  ^1.x
+ink                     ^5.x
+react                   ^18.x
+zod                     ^3.25.x
 ```
 
-### 3. Risk Assessment
+Additionally, `@types/react` is needed as a dev dependency since the project uses TypeScript.
 
-Document any discovered risks:
+Ink 5.x is ESM-only. The current NestJS scaffold uses CommonJS (`ts-jest`, `tsconfig-paths/register`). This is a known integration point — the terminal app's tsconfig may need `"module": "nodenext"` or a dynamic `import()` wrapper. This should be validated at install time and documented if any workaround is needed.
 
-| Risk | Severity | Mitigation |
-|------|----------|------------|
-| ... | ... | ... |
+### 2. Environment Configuration
+
+Create a `.env.example` file at project root documenting required environment variables:
+
+```env
+# Required by @anthropic-ai/sdk — Moderator LLM API access
+ANTHROPIC_API_KEY=sk-ant-...
+
+# MCP Server URL — used by terminal app and agent containers to connect
+# (default for docker-compose network)
+MCP_SERVER_URL=http://mcp-server:3000
+
+# Agent role — set per container in docker-compose.yml
+# Values: architect | teamlead | developer | qa | productowner
+AGENT_ROLE=developer
+
+# Host path to target project — mounted as /mnt/quorum/workspace in containers
+WORKSPACE_PATH=/path/to/target/project
+
+# Number of developer agent replicas (default: 1)
+DEVELOPER_COUNT=1
+```
+
+Only `ANTHROPIC_API_KEY` is immediately required by the new dependencies. The remaining variables are documented for completeness against `docs/system-design.md` Docker Compose configuration and will be consumed by later implementation tickets.
+
+Add `.env` to `.gitignore` to prevent secret leakage.
+
+### 3. Verify Installation
+
+After install, confirm that core imports resolve without errors:
+- `import Anthropic from '@anthropic-ai/sdk'`
+- `import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'`
+- `import { Client } from '@modelcontextprotocol/sdk/client/index.js'`
+- `import { z } from 'zod'`
+- `import React from 'react'` / `import { render } from 'ink'`
+
+If ESM/CJS interop issues surface with `ink`, document the specific error and workaround.
 
 ## Acceptance Criteria
 
-### Package Validation
-- [ ] `@anthropic-ai/sdk` streaming confirmed working
-- [ ] `@anthropic-ai/sdk` tool use confirmed working
-- [ ] `@anthropic-ai/sdk` MCP helpers documented
-- [ ] `@modelcontextprotocol/sdk` server creation working
-- [ ] `@modelcontextprotocol/sdk` tool registration working
-- [ ] `@modelcontextprotocol/sdk` client connection working
-- [ ] `ink` streaming text display working
-- [ ] `ink` user input handling working
+- [ ] All five packages installed and listed in `package.json` dependencies
+- [ ] `@types/react` installed as dev dependency
+- [ ] `npm install` completes without peer dependency warnings or errors
+- [ ] `.env.example` created with documented variables
+- [ ] `.env` added to `.gitignore`
+- [ ] TypeScript can resolve imports from all five packages (no type errors on bare imports)
+- [ ] Any ESM/CJS compatibility notes documented in this ticket or a follow-up
 
-### Documentation
-- [ ] `docs/package-selection.md` created with findings
-- [ ] Each POC sample has README with run instructions
-- [ ] Integration patterns documented
+## Dependencies and References
 
-### Decision Made
-- [ ] Final package list approved
-- [ ] Any blocking issues identified and documented
-- [ ] Ready to proceed with QRM1-002 (project scaffolding)
-
-## Dependencies
-
-### Prerequisites
-- [ ] Node.js 22.x installed
-- [ ] Anthropic API key available (`ANTHROPIC_API_KEY`)
-- [ ] npm/pnpm available
-
-### Blocks
-- QRM1-002: Project Scaffolding (cannot start until packages validated)
-- QRM1-003: MCP Server Implementation
-- QRM1-004: Terminal App Implementation
-
-## References
-
+### References
+- [docs/system-design.md](../docs/system-design.md) — Container architecture, NestJS monorepo structure, Docker Compose config
+- [docs/agent-messaging.md](../docs/agent-messaging.md) — Bidirectional MCP, `invoke_agent` tool definition
+- [docs/message-broker.md](../docs/message-broker.md) — Message Broker implementation, WebSocket transport
+- [docs/context-management.md](../docs/context-management.md) — Context MCP tools and resources, zod schemas
+- [docs/context-store.md](../docs/context-store.md) — Context Store interface, storage backends
 - [@anthropic-ai/sdk on npm](https://www.npmjs.com/package/@anthropic-ai/sdk)
-- [Anthropic TypeScript SDK on GitHub](https://github.com/anthropics/anthropic-sdk-typescript)
 - [@modelcontextprotocol/sdk on npm](https://www.npmjs.com/package/@modelcontextprotocol/sdk)
+- [Ink — React for CLI](https://github.com/vadimdemedes/ink)
 - [MCP TypeScript SDK on GitHub](https://github.com/modelcontextprotocol/typescript-sdk)
-- [Ink - React for CLI](https://github.com/vadimdemedes/ink)
-- [@anthropic-ai/claude-agent-sdk](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)
-- [How Claude Code is built](https://newsletter.pragmaticengineer.com/p/how-claude-code-is-built)
-- [MCP Documentation](https://modelcontextprotocol.io/docs)
