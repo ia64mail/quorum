@@ -26,9 +26,15 @@ Agents communicate via MCP server and collaborate according to their roles. Each
 ## Project Structure
 
 ```
-docs/       # Project documentation (primary contribution point)
-tickets/    # Implementation tasks as flat MD files (local Jira-like workflow)
+docs/       # Project documentation — living reference for system architecture
+tickets/    # Ticket library — implementation timeline knowledge base (see tickets/README.md)
 ```
+
+### Ticket Library
+
+The `tickets/` directory is an **implementation timeline knowledge base** — not documentation, but a sequential record of every unit of work. Each ticket is a time snapshot capturing the circumstances, reasoning, and approach for a specific piece of codework. Tickets are primarily for the agent: they explain *why* something was implemented a certain way, while the codebase remains the primary source of truth for *how*.
+
+Tickets complement `docs/` — documentation describes the current system; tickets explain the sequence of decisions that built it. See [tickets/README.md](tickets/README.md) for naming conventions, structure requirements, and writing guidelines.
 
 ## Documentation
 
@@ -39,6 +45,7 @@ tickets/    # Implementation tasks as flat MD files (local Jira-like workflow)
 | [docs/message-broker.md](docs/message-broker.md) | Message Broker implementation details, safeguards |
 | [docs/context-management.md](docs/context-management.md) | Context sharing concepts, MCP resources/tools API |
 | [docs/context-store.md](docs/context-store.md) | Context Store implementation, OpenSearch, embeddings |
+| [tickets/README.md](tickets/README.md) | Ticket library conventions and structure guide |
 
 ## Build Commands
 
