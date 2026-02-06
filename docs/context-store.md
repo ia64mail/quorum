@@ -25,24 +25,25 @@ graph LR
 
 ## Core Interface
 
-All storage backends implement this interface:
+All storage backends implement this abstract class:
 
 ```typescript
-interface ContextStore {
-  set(params: SetParams): Promise<void>;
-  get(scope: string, key: string, id?: string): Promise<unknown | undefined>;
-  getAll(scope: string, id?: string): Promise<Record<string, unknown>>;
-  search(scope: string, query: string, id?: string, maxTokens?: number): Promise<ContextItem[]>;
-  getStats(scope?: string, id?: string): Promise<ContextStats>;
-  on(event: "change", listener: ChangeListener): void;
+abstract class ContextStore {
+  abstract set(params: SetParams): Promise<void>;
+  abstract get(scope: string, key: string, id?: string): Promise<unknown | undefined>;
+  abstract getAll(scope: string, id?: string): Promise<Record<string, unknown>>;
+  abstract search(scope: string, query: string, id?: string, maxTokens?: number): Promise<ContextItem[]>;
+  abstract getStats(scope?: string, id?: string): Promise<ContextStats>;
 }
 ```
+
+An abstract class (not a plain interface) because NestJS DI requires a runtime value as the injection token — TypeScript interfaces are erased at compile time. The abstract class serves as both the type contract and the DI token.
 
 Key design decisions:
 - **Scoped keys**: Items are keyed by `{scope}:{id}:{key}` to partition data
 - **TTL support**: Items can auto-expire via `expiresAt` timestamp
 - **Token budgeting**: `search()` accepts `maxTokens` to limit response size
-- **Event emission**: `change` events trigger MCP resource notifications
+- **Event emission**: Mutations emit events via NestJS `@nestjs/event-emitter` (`EventEmitter2`). Listeners in any module subscribe with `@OnEvent('context.change')` — decoupled from the store class. This replaces the earlier `on(event, listener)` design with a NestJS-idiomatic pattern
 
 ## Storage Backend Evolution
 
@@ -92,6 +93,7 @@ Simple `Map<string, ContextItem>` with:
 - Lazy TTL expiration on read
 - Keyword-based search (substring matching)
 - Token estimation: `Math.ceil(JSON.stringify(value).length / 4)`
+- Change events emitted via injected `EventEmitter2` on `set()` and lazy expiration
 
 Suitable for development only. No persistence, no semantic search.
 
