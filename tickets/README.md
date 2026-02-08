@@ -86,6 +86,9 @@ Use checkboxes for trackability:
 - Prerequisites (other tickets, tools, access)
 - What this ticket blocks
 - Links to relevant docs, packages, or external resources
+
+## Implementation Notes *(added post-implementation)*
+See "Post-Implementation Update" below for format.
 ```
 
 ## Writing Implementation Details
@@ -135,3 +138,60 @@ Here is the full implementation of the MCP server:
 ```
 
 The ticket explains *why*. The code speaks for *how*.
+
+## Post-Implementation Update
+
+After implementation is complete, the ticket **must** be updated with an `## Implementation Notes` section appended at the end. This closes the loop — the ticket starts as a plan and ends as a record of what actually happened.
+
+### When to Update
+
+Update the ticket in the same commit (or PR) that completes the implementation. The implementation notes are part of the deliverable, not an afterthought.
+
+### Required Subsections
+
+```markdown
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** YYYY-MM-DD
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `path/to/file.ts` | Created | Brief description of what this file does |
+| `path/to/other.ts` | Modified | What changed and why |
+
+### Deviations from Ticket Spec
+
+- **What changed.** Why it changed — reference the constraint, lint rule,
+  or codebase convention that motivated the deviation.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — N tests passing (X new + Y existing)
+```
+
+### Guidelines
+
+**Files Created/Modified table:**
+- List every file touched, including test files and barrel exports
+- Action is `Created` or `Modified`
+- Notes column captures the essential "what" — just enough for an agent to understand the file's role without opening it
+
+**Deviations from Ticket Spec:**
+- Only include actual deviations — places where the implementation intentionally differs from what the ticket described
+- Each deviation is a bolded summary followed by the rationale
+- If there are no deviations, omit this subsection entirely
+- This is critical context: a future agent reading the ticket needs to know that the code doesn't match the spec *on purpose*, not by accident
+
+**Verification:**
+- Record the exact commands run and their outcomes
+- Include test counts (new + existing) so regressions are detectable by comparison
+
+### Acceptance Criteria Checkboxes
+
+When updating the ticket, also flip all completed acceptance criteria from `- [ ]` to `- [x]`. This makes completion status visible at a glance.

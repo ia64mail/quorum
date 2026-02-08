@@ -1,8 +1,10 @@
 import { NestFactory } from '@nestjs/core';
+import { TerminalConfigService } from './config';
 import { TerminalModule } from './terminal.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(TerminalModule);
-  await app.listen(process.env.port ?? 3000);
+  const config = app.get(TerminalConfigService);
+  await app.listen(config.app.port);
 }
 void bootstrap();

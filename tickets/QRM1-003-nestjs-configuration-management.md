@@ -307,22 +307,22 @@ Mock `process.env` in tests via `jest.replaceProperty(process, 'env', { ... })` 
 
 ## Acceptance Criteria
 
-- [ ] `@nestjs/config` installed and listed in `package.json` dependencies
-- [ ] Three shared config factory files in `libs/common/src/config/` (`app`, `anthropic`, `mcp`)
-- [ ] Three app-specific config factory files in their respective `apps/*/src/config/` directories (`agent`, `broker`, `context`)
-- [ ] Each factory file is self-contained: env var name, default value, and Zod validation schema live only in that file
-- [ ] `TerminalConfigService` in `apps/terminal/src/config/` injects `app` + `anthropic` + `mcp`
-- [ ] `McpServerConfigService` in `apps/mcp-server/src/config/` injects `app` + `broker` + `context`
-- [ ] `AgentConfigService` in `apps/agent/src/config/` injects `app` + `anthropic` + `mcp` + `agent`
-- [ ] All properties on all config services are non-nullable (no `T | undefined` for config the app requires)
-- [ ] Per-app config modules wrap `ConfigModule.forRoot({ isGlobal: true, load: [...] })` with only that app's namespaces
-- [ ] All three app root modules import their config module; all three `main.ts` files migrated from `process.env.port ?? 3000`
-- [ ] Zero `process.env` access outside of config factory files (enforced by code review)
-- [ ] `.env.example` updated with all env vars organized by namespace group, annotated with which apps consume them
-- [ ] Zod validation in each factory throws a clear error at startup for invalid configuration
-- [ ] Barrel exports from `libs/common/src/config/index.ts` (updated `libs/common/src/index.ts`) and each `apps/*/src/config/index.ts`
-- [ ] Unit tests pass covering factory defaults, overrides, coercion, validation, required-field enforcement, and per-app service wiring
-- [ ] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
+- [x] `@nestjs/config` installed and listed in `package.json` dependencies
+- [x] Three shared config factory files in `libs/common/src/config/` (`app`, `anthropic`, `mcp`)
+- [x] Three app-specific config factory files in their respective `apps/*/src/config/` directories (`agent`, `broker`, `context`)
+- [x] Each factory file is self-contained: env var name, default value, and Zod validation schema live only in that file
+- [x] `TerminalConfigService` in `apps/terminal/src/config/` injects `app` + `anthropic` + `mcp`
+- [x] `McpServerConfigService` in `apps/mcp-server/src/config/` injects `app` + `broker` + `context`
+- [x] `AgentConfigService` in `apps/agent/src/config/` injects `app` + `anthropic` + `mcp` + `agent`
+- [x] All properties on all config services are non-nullable (no `T | undefined` for config the app requires)
+- [x] Per-app config modules wrap `ConfigModule.forRoot({ isGlobal: true, load: [...] })` with only that app's namespaces
+- [x] All three app root modules import their config module; all three `main.ts` files migrated from `process.env.port ?? 3000`
+- [x] Zero `process.env` access outside of config factory files (enforced by code review)
+- [x] `.env.example` updated with all env vars organized by namespace group, annotated with which apps consume them
+- [x] Zod validation in each factory throws a clear error at startup for invalid configuration
+- [x] Barrel exports from `libs/common/src/config/index.ts` (updated `libs/common/src/index.ts`) and each `apps/*/src/config/index.ts`
+- [x] Unit tests pass covering factory defaults, overrides, coercion, validation, required-field enforcement, and per-app service wiring
+- [x] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
 
 ## Dependencies and References
 
@@ -343,3 +343,60 @@ Mock `process.env` in tests via `jest.replaceProperty(process, 'env', { ... })` 
 - [docs/context-store.md](../docs/context-store.md) — Token estimation ratio (chars/4)
 - [@nestjs/config on npm](https://www.npmjs.com/package/@nestjs/config) — Official NestJS configuration module
 - [NestJS Configuration Documentation](https://docs.nestjs.com/techniques/configuration) — `registerAs`, `ConfigType`, `ConfigModule`
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-02-07
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `libs/common/src/config/app.config.ts` | Created | `registerAs('app')` — `PORT` (int, 1–65535, default 3000), `NODE_ENV` (enum, default development) |
+| `libs/common/src/config/anthropic.config.ts` | Created | `registerAs('anthropic')` — `ANTHROPIC_API_KEY` (required, no default), `ANTHROPIC_MODEL` (default claude-sonnet-4-5-20250929) |
+| `libs/common/src/config/mcp.config.ts` | Created | `registerAs('mcp')` — `MCP_SERVER_URL` (URL-validated, default http://mcp-server:3000) |
+| `libs/common/src/config/index.ts` | Created | Barrel export of shared factories |
+| `libs/common/src/config/app.config.spec.ts` | Created | 7 tests: defaults, overrides, coercion, invalid port/nodeEnv, out-of-range port |
+| `libs/common/src/config/anthropic.config.spec.ts` | Created | 5 tests: missing key, empty key, default model, override model, key passthrough |
+| `libs/common/src/config/mcp.config.spec.ts` | Created | 3 tests: default URL, override, invalid URL |
+| `libs/common/src/index.ts` | Modified | Added `export * from './config'` |
+| `apps/terminal/src/config/terminal-config.service.ts` | Created | Injects `app` + `anthropic` + `mcp` |
+| `apps/terminal/src/config/terminal-config.module.ts` | Created | `ConfigModule.forRoot()` with 3 namespaces |
+| `apps/terminal/src/config/index.ts` | Created | Barrel export |
+| `apps/terminal/src/config/terminal-config.service.spec.ts` | Created | 4 tests: wiring, non-nullable app/anthropic/mcp properties |
+| `apps/terminal/src/terminal.module.ts` | Modified | Imported `TerminalConfigModule` |
+| `apps/terminal/src/main.ts` | Modified | Replaced `process.env.port ?? 3000` with `config.app.port` via `app.get(TerminalConfigService)` |
+| `apps/mcp-server/src/config/broker.config.ts` | Created | `registerAs('broker')` — `BROKER_MAX_CALL_DEPTH` (int, min 1, default 5), `BROKER_DEFAULT_TIMEOUT_MS` (int, min 1, default 300000) |
+| `apps/mcp-server/src/config/context.config.ts` | Created | `registerAs('context')` — `CONTEXT_DEFAULT_MAX_TOKENS` (int, min 1, default 2000), `CONTEXT_TOKEN_CHAR_RATIO` (int, min 1, default 4) |
+| `apps/mcp-server/src/config/mcp-server-config.service.ts` | Created | Injects `app` + `broker` + `context` |
+| `apps/mcp-server/src/config/mcp-server-config.module.ts` | Created | `ConfigModule.forRoot()` with 3 namespaces |
+| `apps/mcp-server/src/config/index.ts` | Created | Barrel export |
+| `apps/mcp-server/src/config/broker.config.spec.ts` | Created | 6 tests: defaults, overrides, coercion, non-numeric, zero depth |
+| `apps/mcp-server/src/config/context.config.spec.ts` | Created | 6 tests: defaults, overrides, coercion, non-numeric, zero ratio |
+| `apps/mcp-server/src/config/mcp-server-config.service.spec.ts` | Created | 4 tests: wiring, non-nullable broker/context properties, isolation (no anthropic) |
+| `apps/mcp-server/src/mcp-server.module.ts` | Modified | Imported `McpServerConfigModule` |
+| `apps/mcp-server/src/main.ts` | Modified | Replaced `process.env.port ?? 3000` with `config.app.port` via `app.get(McpServerConfigService)` |
+| `apps/agent/src/config/agent.config.ts` | Created | `registerAs('agent')` — `AGENT_ROLE` (enum of 5 roles, default developer), `AGENT_WORKSPACE_DIR` (string, default /mnt/quorum/workspace) |
+| `apps/agent/src/config/agent-config.service.ts` | Created | Injects `app` + `anthropic` + `mcp` + `agent` |
+| `apps/agent/src/config/agent-config.module.ts` | Created | `ConfigModule.forRoot()` with 4 namespaces |
+| `apps/agent/src/config/index.ts` | Created | Barrel export |
+| `apps/agent/src/config/agent.config.spec.ts` | Created | 5 tests: defaults, role override, all valid roles, invalid role, workspaceDir override |
+| `apps/agent/src/config/agent-config.service.spec.ts` | Created | 3 tests: wiring, non-nullable agent properties, isolation (no broker) |
+| `apps/agent/src/agent.module.ts` | Modified | Imported `AgentConfigModule` |
+| `apps/agent/src/main.ts` | Modified | Replaced `process.env.port ?? 3000` with `config.app.port` via `app.get(AgentConfigService)` |
+| `.env.example` | Modified | Reorganized by namespace group with app annotations |
+| `package.json` | Modified | Added `@nestjs/config` dependency |
+
+### Deviations from Ticket Spec
+
+- **Named exports instead of default exports for `registerAs` factories.** The ticket showed `export default registerAs(...)` but the codebase convention (established in QRM1-002) uses named exports exclusively for barrel re-export consistency. Changed to `export const appConfig = registerAs(...)`. Consumers reference the injection token via `appConfig.KEY` identically.
+- **`import type { ConfigType }` required in config services.** The ticket showed `import { ConfigType } from '@nestjs/config'` but `isolatedModules: true` + `emitDecoratorMetadata: true` requires type-only imports for symbols used only as type annotations in decorated constructors (TS1272). The `import type` form works because `@Inject(config.KEY)` provides the runtime injection token — NestJS doesn't rely on `design:paramtypes` metadata for explicitly injected parameters.
+- **Env var mock strategy uses `process.env` replacement, not `jest.replaceProperty`.** The ticket suggested `jest.replaceProperty(process, 'env', { ... })` but the established test pattern from QRM1-002 (`in-memory-store.spec.ts`) saves `originalEnv`, replaces `process.env` in `beforeEach`, and restores in `afterEach`. Followed the existing convention for consistency.
+
+### Verification
+
+- `npm run build` — compiles successfully (all 3 apps)
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 71 tests passing (43 new + 28 existing across 14 suites)
