@@ -1,8 +1,9 @@
 import { registerAs } from '@nestjs/config';
 import { z } from 'zod';
+import { DEPLOYABLE_AGENT_ROLES } from '@app/common';
 
 const schema = z.object({
-  role: z.enum(['architect', 'teamlead', 'developer', 'qa', 'productowner']),
+  role: z.enum(DEPLOYABLE_AGENT_ROLES),
   workspaceDir: z.string().min(1),
 });
 

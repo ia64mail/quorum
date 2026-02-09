@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { McpServerConfigModule } from './config';
 import { ContextStoreModule } from './context-store';
+import { MessagingModule } from './messaging';
 import { McpServerController } from './mcp-server.controller';
 import { McpServerService } from './mcp-server.service';
 
 @Module({
-  imports: [McpServerConfigModule, ContextStoreModule],
+  imports: [McpServerConfigModule, ContextStoreModule, MessagingModule],
   controllers: [McpServerController],
   providers: [McpServerService],
 })
