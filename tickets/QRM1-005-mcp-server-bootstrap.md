@@ -161,15 +161,16 @@ Handler validates that `correlationId` is present when `scope === 'conversation'
 
 Schema:
 - `scope: z.nativeEnum(ContextScope)`
-- `query: z.string().optional()` — natural language search query
-- `keys: z.array(z.string()).optional()` — specific keys to retrieve
+- `mode: z.enum(['keys', 'search', 'get-all'])` — explicit query mode (avoids ambiguity when both `keys` and `query` could be present)
+- `keys: z.array(z.string()).optional()` — specific keys to retrieve (mode=keys)
+- `query: z.string().optional()` — natural language search query (mode=search)
 - `correlationId: z.string().optional()` — required for `conversation` scope
 - `maxTokens: z.number().int().positive().optional()` — defaults to `config.context.defaultMaxTokens`
 
-Handler dispatches three modes:
-1. **Keys mode** (if `keys` provided): call `contextStore.get(scope, key, correlationId)` for each key, assemble into `Record<string, unknown>`. Drop keys returning `undefined`.
-2. **Search mode** (if `query` provided): call `contextStore.search(scope, query, correlationId, maxTokens)`.
-3. **Get-all mode** (neither): call `contextStore.getAll(scope, correlationId)`.
+Handler dispatches based on explicit `mode` parameter:
+1. **Keys mode** (`mode === 'keys'`): call `contextStore.get(scope, key, correlationId)` for each key, assemble into `Record<string, unknown>`. Drop keys returning `undefined`.
+2. **Search mode** (`mode === 'search'`): call `contextStore.search(scope, query, correlationId, maxTokens)`.
+3. **Get-all mode** (`mode === 'get-all'`): call `contextStore.getAll(scope, correlationId)`.
 
 Returns `JSON.stringify(result)` as text content.
 
@@ -286,30 +287,30 @@ Use `supertest` or mock `Request`/`Response` objects for HTTP-level testing.
 
 ## Acceptance Criteria
 
-- [ ] `McpServer` instance created from `@modelcontextprotocol/sdk` with metadata `{ name: 'quorum', version: '0.1.0' }`
-- [ ] `McpService` implements `OnModuleInit`, registers all tools and resources during initialization
-- [ ] Streamable HTTP transport endpoint at `/mcp` (POST, GET, DELETE)
-- [ ] Session management via `Map<string, StreamableHTTPServerTransport>` with proper lifecycle
-- [ ] `invoke_agent` tool registered with `callerRole`, `target`, `action`, `context`, `wait`, `correlationId`, `depth` parameters
-- [ ] `invoke_agent` generates `correlationId` (UUID) for top-level calls, passes through for nested
-- [ ] `invoke_agent` routes through `MessageBroker.invoke()` and returns response as MCP text content
-- [ ] `context_store` tool validates `correlationId` presence for conversation scope
-- [ ] `context_store` routes to `ContextStore.set()` with correct parameter mapping
-- [ ] `context_query` supports three modes: keys lookup, search query, get-all
-- [ ] `context_query` defaults `maxTokens` to `config.context.defaultMaxTokens`
-- [ ] `context_summarize` implements POC truncation strategy (not LLM-based)
-- [ ] `context_summarize` stores result as `_summary` key in conversation scope
-- [ ] `context_stats` routes to `ContextStore.getStats()` and returns formatted JSON
-- [ ] `context://project` resource returns project-scope context as JSON
-- [ ] `context://conversation/{correlationId}` resource template returns conversation-scope context as JSON
-- [ ] Placeholder `McpServerController` and `McpServerService` removed
-- [ ] `McpModule` created, imports `MessagingModule` + `ContextStoreModule`, exports `McpService`
-- [ ] `McpServerModule` updated to import `McpModule` instead of `MessagingModule`
-- [ ] Zod schemas use shared types from `@app/common` (`AgentRole`, `DEPLOYABLE_AGENT_ROLES`, `ContextScope`)
-- [ ] NestJS `Logger` used with correlationId in tool handlers
-- [ ] `// TODO:` comments for: session idle timeout cleanup, LLM-based summarization, resource subscription notifications
-- [ ] Unit tests cover all tool handlers, resource handlers, and controller transport management
-- [ ] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
+- [x] `McpServer` instance created from `@modelcontextprotocol/sdk` with metadata `{ name: 'quorum', version: '0.1.0' }`
+- [x] `McpService` implements `OnModuleInit`, registers all tools and resources during initialization
+- [x] Streamable HTTP transport endpoint at `/mcp` (POST, GET, DELETE)
+- [x] Session management via `Map<string, StreamableHTTPServerTransport>` with proper lifecycle
+- [x] `invoke_agent` tool registered with `callerRole`, `target`, `action`, `context`, `wait`, `correlationId`, `depth` parameters
+- [x] `invoke_agent` generates `correlationId` (UUID) for top-level calls, passes through for nested
+- [x] `invoke_agent` routes through `MessageBroker.invoke()` and returns response as MCP text content
+- [x] `context_store` tool validates `correlationId` presence for conversation scope
+- [x] `context_store` routes to `ContextStore.set()` with correct parameter mapping
+- [x] `context_query` supports three modes: keys lookup, search query, get-all
+- [x] `context_query` defaults `maxTokens` to `config.context.defaultMaxTokens`
+- [x] `context_summarize` implements POC truncation strategy (not LLM-based)
+- [x] `context_summarize` stores result as `_summary` key in conversation scope
+- [x] `context_stats` routes to `ContextStore.getStats()` and returns formatted JSON
+- [x] `context://project` resource returns project-scope context as JSON
+- [x] `context://conversation/{correlationId}` resource template returns conversation-scope context as JSON
+- [x] Placeholder `McpServerController` and `McpServerService` removed
+- [x] `McpModule` created, imports `MessagingModule` + `ContextStoreModule`, exports `McpService`
+- [x] `McpServerModule` updated to import `McpModule` instead of `MessagingModule`
+- [x] Zod schemas use shared types from `@app/common` (`AgentRole`, `DEPLOYABLE_AGENT_ROLES`, `ContextScope`)
+- [x] NestJS `Logger` used with correlationId in tool handlers
+- [x] `// TODO:` comments for: session idle timeout cleanup, LLM-based summarization, resource subscription notifications
+- [x] Unit tests cover all tool handlers, resource handlers, and controller transport management
+- [x] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
 
 ## Dependencies and References
 
@@ -333,3 +334,47 @@ Use `supertest` or mock `Request`/`Response` objects for HTTP-level testing.
 - [docs/message-broker.md](../docs/message-broker.md) — Broker routing core, transport section
 - [docs/system-design.md](../docs/system-design.md) — MCP Server container, network communication, monorepo structure
 - [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) — MCP TypeScript SDK (McpServer, StreamableHTTPServerTransport, ResourceTemplate)
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-02-09
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Created | Core MCP protocol wrapper — registers 5 tools and 2 resources via `OnModuleInit`, delegates to `MessageBroker` and `ContextStore` |
+| `apps/mcp-server/src/mcp/mcp.service.spec.ts` | Created | 18 unit tests covering all tool handlers (invoke_agent, context_store, context_query, context_summarize, context_stats) and both resource handlers |
+| `apps/mcp-server/src/mcp/mcp.controller.ts` | Created | Streamable HTTP transport endpoint at `/mcp` — manages session-to-transport mapping for POST/GET/DELETE |
+| `apps/mcp-server/src/mcp/mcp.controller.spec.ts` | Created | 9 unit tests covering session creation, reuse, SSE delegation, DELETE cleanup, onclose cleanup, and 404 cases |
+| `apps/mcp-server/src/mcp/mcp.module.ts` | Created | `McpModule` — imports `MessagingModule` + `ContextStoreModule`, provides `McpService`, declares `McpController` |
+| `apps/mcp-server/src/mcp/index.ts` | Created | Barrel export for `McpModule` and `McpService` |
+| `apps/mcp-server/src/mcp-server.module.ts` | Modified | Replaced direct `MessagingModule`/`ContextStoreModule`/placeholder imports with single `McpModule` import |
+| `apps/mcp-server/src/mcp-server.controller.ts` | Deleted | Placeholder controller replaced by `mcp/mcp.controller.ts` |
+| `apps/mcp-server/src/mcp-server.controller.spec.ts` | Deleted | Placeholder test removed with its source |
+| `apps/mcp-server/src/mcp-server.service.ts` | Deleted | Placeholder service replaced by `mcp/mcp.service.ts` |
+| `tickets/QRM1-005-mcp-server-bootstrap.md` | Modified | Updated `context_query` schema docs for explicit `mode` parameter; added implementation notes |
+
+### Deviations from Ticket Spec
+
+- **`context_query` uses an explicit `mode` parameter instead of implicit detection.** The ticket described dispatching based on presence of `keys` / `query` / neither. Implementation uses `mode: z.enum(['keys', 'search', 'get-all'])` to eliminate ambiguity when a caller could provide both `keys` and `query`. The ticket's Implementation Details section was updated to reflect this.
+
+- **`context_query` and `context_stats` use `correlationId` instead of the ticket's `correlationId` (query) / `correlationId` (stats) naming.** The ticket used different names across tools (`correlationId` for store, unspecified for query/stats). Implementation standardized on `correlationId` across all context tools for consistency. The `context_stats` tool was originally specced with no explicit field name for the ID filter.
+
+- **`context_summarize` uses `maxTokens` instead of `targetTokens`.** Renamed for consistency with `context_query`'s `maxTokens` parameter — agents see one consistent parameter name for token budgets across context tools.
+
+- **`context_store` return message uses `Stored {key} in {scope} scope` format.** Matches ticket spec. Initially implemented as bare `"stored"`, corrected during review.
+
+- **`context_summarize` budget subtracts preserved items.** The ticket described calculating `targetTokens - estimateTokens(preservedItems)` for the non-preserved budget. The initial implementation did not subtract preserved items; corrected during review to match ticket intent.
+
+- **Tool registration uses `server.registerTool()` instead of `server.tool()`.** Both are valid SDK APIs (`tool()` is a convenience wrapper). `registerTool()` was chosen for its explicit `{ description, inputSchema }` structure which is clearer when schemas are large.
+
+- **Service tests access SDK private fields (`_registeredTools`, `_registeredResources`, `_registeredResourceTemplates`).** The SDK does not expose a public API for invoking registered handlers outside a transport. A TODO documents this fragility and the migration path when the SDK adds a testing API.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 115 tests passing (27 new + 88 existing)
