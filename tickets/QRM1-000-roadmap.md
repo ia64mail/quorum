@@ -48,16 +48,18 @@ Configurable logger replacing NestJS default `ConsoleLogger` with dual-transport
 
 - `LoggerBuilder` in `libs/common` — fluent factory that produces a NestJS `LoggerService`
   - `.withConsole()` — coloured, human-readable output (default NestJS style)
-  - `.withJsonFile(path)` — append-only JSON-lines file, one object per log entry
+  - `.withJsonDir(dir)` — append-only JSON-lines file, auto-named `{agentRole}-{startupTimestamp}.jsonl`
   - `.build()` → returns `LoggerService` ready for `NestFactory.create(Module, { logger })`
 - **JSON schema per line**: `{ timestamp, level, context, message, correlationId?, agentRole?, extra? }`
-  - `correlationId` ties log entries to an invocation chain across containers
-  - `agentRole` identifies the emitting container (`mcp-server`, `architect`, `developer`, …)
+  - `correlationId` ties log entries to an invocation chain across containers — passed via metadata object in log call (`this.logger.log('msg', { correlationId })`)
+  - `agentRole` identifies the emitting container — set once at logger creation from `AGENT_ROLE` env var, automatic on every line
   - `timestamp` is ISO-8601 for deterministic cross-container sort
-- Logging config factory (`logger.config.ts`) in `libs/common/src/config/` — env vars for log level, file path, enable/disable transports
-- Swap in all 3 `main.ts` bootstraps: `NestFactory.create(Module, { logger: builder.build() })`
+- Logging config factory (`logger.config.ts`) in `libs/common/src/config/` — env vars: `LOG_LEVEL`, `LOG_CONSOLE`, `LOG_JSON_DIR`, `AGENT_ROLE`
+- Docker volume mount: all containers write to shared `LOG_JSON_DIR`, each with unique auto-generated filename
+- Swap in all 3 `main.ts` bootstraps via `LoggerBuilder.fromEnv()`
 - Existing `new Logger(ClassName.name)` calls continue to work unchanged (they delegate to the app-level logger)
 - Log file rotation out of scope (container ephemeral storage or external log collector)
+- Package: `winston` (direct, not `nest-winston`)
 
 **Depends on:** QRM1-003
 
