@@ -64,14 +64,17 @@ Configurable logger replacing NestJS default `ConsoleLogger` with dual-transport
 **Depends on:** QRM1-003
 
 ### QRM1-007 — Agent-to-Server Connection
-Implement the agent-side MCP client that connects to the server and enables bidirectional communication.
+Bidirectional communication between agent containers and MCP server. Agent-side MCP client for outbound tool calls + HTTP invocation endpoint for inbound task delivery. Server-side `register_agent`/`unregister_agent` tools and concrete `HttpAgentConnection` (HTTP POST delivery).
 
-- Concrete `AgentConnection` implementation (Streamable HTTP transport)
-- Agent app creates MCP client, connects to server's `/mcp` endpoint on startup
-- Registration flow: agent announces its role to the server, server adds to `AgentRegistry`
-- Invocation handler: agent receives `invoke_agent` calls routed by the broker
-- Reconnection logic (basic retry on disconnect)
-- Graceful shutdown: unregister on `SIGTERM`
+- `HttpAgentConnection` extends `AgentConnection` — delivers invocations via HTTP POST to agent's `/invoke` endpoint
+- `register_agent` / `unregister_agent` MCP tools — agents self-register with role and callback URL
+- `McpClientService` — `StreamableHTTPClientTransport` + `Client` connecting to server's `/mcp` endpoint
+- `InvocationController` (`POST /invoke`) + `InvocationHandler` (stub: echo acknowledgment, QRM1-008 adds LLM)
+- `ConnectionModule` in agent app — wires client, handler, and controller
+- Connection retry with linear backoff (10 retries, 2s initial delay), `onclose` auto-reconnect
+- Graceful shutdown: `enableShutdownHooks()`, `unregister_agent` on SIGTERM, `transport.close()`
+- Agent config updated: `callbackUrl` from `AGENT_CALLBACK_URL` (default: `http://localhost:${PORT}`)
+- Placeholder `AgentController`/`AgentService` removed, replaced by `ConnectionModule`
 
 **Depends on:** QRM1-004, QRM1-005, QRM1-006
 
