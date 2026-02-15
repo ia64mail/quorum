@@ -84,6 +84,8 @@ export class McpService implements OnModuleInit {
           callerRole: z
             .enum(agentRoleValues)
             .describe('Role of the calling agent'),
+          // Cast: MCP SDK bundles its own Zod which expects mutable [string, ...string[]],
+          // while our DEPLOYABLE_AGENT_ROLES is readonly. Remove cast if SDK aligns with Zod v4.
           target: z
             .enum(DEPLOYABLE_AGENT_ROLES as unknown as [string, ...string[]])
             .describe('Target agent role to invoke'),

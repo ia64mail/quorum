@@ -11,6 +11,9 @@ import { AgentRole } from '@app/common';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
 import { InvocationHandler } from './invocation-handler.service';
 
+// Ideally, move this schema to libs/common next to InvokeRequest and derive
+// the type via z.infer, making the schema the single source of truth.
+// Deferred: touches every InvokeRequest consumer across the project.
 const invokeRequestSchema = z.object({
   correlationId: z.string(),
   parentRequestId: z.string().optional(),
@@ -21,6 +24,10 @@ const invokeRequestSchema = z.object({
   wait: z.boolean(),
   depth: z.number().int().min(0),
 });
+
+/** Compile-time check: schema output must stay in sync with InvokeRequest. */
+type _SchemaMatchesInvokeRequest =
+  z.infer<typeof invokeRequestSchema> extends InvokeRequest ? true : never;
 
 @Controller()
 export class InvocationController {

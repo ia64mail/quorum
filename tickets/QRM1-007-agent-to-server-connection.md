@@ -371,30 +371,30 @@ Mock `Client` and `StreamableHTTPClientTransport` from the SDK.
 
 ## Acceptance Criteria
 
-- [ ] `HttpAgentConnection` extends `AgentConnection` — delivers invocations via HTTP POST with timeout
-- [ ] `HttpAgentConnection.handle()` never throws — always returns `InvokeResponse`
-- [ ] `HttpAgentConnection.isConnected()` returns `true` (optimistic availability)
-- [ ] `register_agent` MCP tool creates `HttpAgentConnection` and registers in `AgentRegistry`
-- [ ] `register_agent` accepts `role` (deployable roles only) and `callbackUrl`
-- [ ] `unregister_agent` MCP tool removes agent from `AgentRegistry`
-- [ ] `McpModule` imports `RegistryModule` — `AgentRegistry` injectable in `McpService`
-- [ ] `McpClientService` connects via `StreamableHTTPClientTransport` to server's `/mcp` endpoint
-- [ ] `McpClientService.connectAndRegister()` called from `main.ts` after `app.listen()`
-- [ ] Connection retry: linear backoff, max 10 retries, initial delay 2s
-- [ ] `transport.onclose` triggers automatic reconnection and re-registration
-- [ ] `onApplicationShutdown` calls `unregister_agent` (best-effort) and closes transport
-- [ ] `app.enableShutdownHooks()` called in `main.ts`
-- [ ] `InvocationController` at `POST /invoke` — validates body with Zod, delegates to handler
-- [ ] `InvocationHandler` returns stub response: `[{role}] Acknowledged: "{action}"`
-- [ ] `InvocationHandler` logs: correlationId, caller, action, depth
-- [ ] `agent.config.ts` updated with `callbackUrl` from `AGENT_CALLBACK_URL` (default: `http://localhost:${PORT}`)
-- [ ] Placeholder `AgentController` and `AgentService` removed
-- [ ] `ConnectionModule` wires `McpClientService`, `InvocationHandler`, `InvocationController`
-- [ ] `AgentModule` imports `ConnectionModule`
-- [ ] `McpClientService` exposes `callTool()` for future module use (QRM1-008)
-- [ ] All new code uses structured logging via NestJS `Logger` with correlationId where available
-- [ ] Unit tests cover: HTTP delivery (success, timeout, errors), registration tools, MCP client lifecycle, invocation endpoint, config validation
-- [ ] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
+- [x] `HttpAgentConnection` extends `AgentConnection` — delivers invocations via HTTP POST with timeout
+- [x] `HttpAgentConnection.handle()` never throws — always returns `InvokeResponse`
+- [x] `HttpAgentConnection.isConnected()` returns `true` (optimistic availability)
+- [x] `register_agent` MCP tool creates `HttpAgentConnection` and registers in `AgentRegistry`
+- [x] `register_agent` accepts `role` (deployable roles only) and `callbackUrl`
+- [x] `unregister_agent` MCP tool removes agent from `AgentRegistry`
+- [x] `McpModule` imports `RegistryModule` — `AgentRegistry` injectable in `McpService`
+- [x] `McpClientService` connects via `StreamableHTTPClientTransport` to server's `/mcp` endpoint
+- [x] `McpClientService.connectAndRegister()` called from `main.ts` after `app.listen()`
+- [x] Connection retry: linear backoff, max 10 retries, initial delay 2s
+- [x] `transport.onclose` triggers automatic reconnection and re-registration
+- [x] `onApplicationShutdown` calls `unregister_agent` (best-effort) and closes transport
+- [x] `app.enableShutdownHooks()` called in `main.ts`
+- [x] `InvocationController` at `POST /invoke` — validates body with Zod, delegates to handler
+- [x] `InvocationHandler` returns stub response: `[{role}] Acknowledged: "{action}"`
+- [x] `InvocationHandler` logs: correlationId, caller, action, depth
+- [x] `agent.config.ts` updated with `callbackUrl` from `AGENT_CALLBACK_URL` (default: `http://localhost:${PORT}`)
+- [x] Placeholder `AgentController` and `AgentService` removed
+- [x] `ConnectionModule` wires `McpClientService`, `InvocationHandler`, `InvocationController`
+- [x] `AgentModule` imports `ConnectionModule`
+- [x] `McpClientService` exposes `callTool()` for future module use (QRM1-008)
+- [x] All new code uses structured logging via NestJS `Logger` with correlationId where available
+- [x] Unit tests cover: HTTP delivery (success, timeout, errors), registration tools, MCP client lifecycle, invocation endpoint, config validation
+- [x] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
 
 ## Dependencies and References
 
@@ -415,3 +415,55 @@ Mock `Client` and `StreamableHTTPClientTransport` from the SDK.
 - [docs/message-broker.md](../docs/message-broker.md) — Broker routing, `AgentConnection.handle()` contract, transport section
 - [docs/system-design.md](../docs/system-design.md) — Agent container architecture, Docker Compose config, network communication
 - [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) — `Client`, `StreamableHTTPClientTransport` APIs
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-02-15
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/agent/src/config/agent.config.ts` | Modified | Added `callbackUrl` field with `AGENT_CALLBACK_URL` env var, defaults to `http://localhost:${PORT}` |
+| `apps/agent/src/config/agent.config.spec.ts` | Modified | 3 new tests: explicit URL, default from PORT, invalid URL rejection |
+| `apps/agent/src/connection/connection.module.ts` | Created | Wires `McpClientService`, `InvocationHandler`, `InvocationController`; exports `McpClientService` |
+| `apps/agent/src/connection/index.ts` | Created | Barrel export for connection module |
+| `apps/agent/src/connection/mcp-client.service.ts` | Created | MCP SDK client — connect, register, reconnect with linear backoff, graceful shutdown |
+| `apps/agent/src/connection/mcp-client.service.spec.ts` | Created | 6 tests: connect+register, retry with backoff, max retries, callTool proxy, shutdown, reconnection |
+| `apps/agent/src/connection/invocation-handler.service.ts` | Created | Stub handler — acknowledges invocations with `[{role}] Acknowledged: "{action}"` |
+| `apps/agent/src/connection/invocation-handler.service.spec.ts` | Created | 2 tests: acknowledgment format, role-dependent response |
+| `apps/agent/src/connection/invocation.controller.ts` | Created | `POST /invoke` endpoint with Zod validation, delegates to handler |
+| `apps/agent/src/connection/invocation.controller.spec.ts` | Created | 4 tests: valid request, missing fields, bad enum, optional context passthrough |
+| `apps/agent/src/agent.module.ts` | Modified | Imports `ConnectionModule`, removed placeholder controller/service |
+| `apps/agent/src/main.ts` | Modified | Added `enableShutdownHooks()`, post-listen `connectAndRegister()` |
+| `apps/agent/src/agent.controller.ts` | Deleted | Placeholder Hello World controller |
+| `apps/agent/src/agent.service.ts` | Deleted | Placeholder service |
+| `apps/agent/src/agent.controller.spec.ts` | Deleted | Placeholder test |
+| `apps/mcp-server/src/registry/http-agent-connection.ts` | Created | Concrete `AgentConnection` — HTTP POST delivery with `AbortController` timeout |
+| `apps/mcp-server/src/registry/http-agent-connection.spec.ts` | Created | 7 tests: role, isConnected, success, HTTP error, network error, timeout, invalid response, URL construction |
+| `apps/mcp-server/src/registry/index.ts` | Modified | Added `HttpAgentConnection` barrel export |
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Modified | 2 new tools (`register_agent`, `unregister_agent`), injected `AgentRegistry`, added inline comment on SDK Zod cast |
+| `apps/mcp-server/src/mcp/mcp.service.spec.ts` | Modified | 4 new tests: register creates connection, re-registration overwrites, unregister removes, unregister for unknown role |
+| `apps/mcp-server/src/mcp/mcp.module.ts` | Modified | Added `RegistryModule` import |
+
+### Deviations from Ticket Spec
+
+- **`DEPLOYABLE_AGENT_ROLES` cast in MCP tool schemas.** The ticket spec shows `z.enum(DEPLOYABLE_AGENT_ROLES)` directly. In practice, the MCP SDK's `registerTool` uses its own bundled Zod which expects mutable `[string, ...string[]]`, while our `DEPLOYABLE_AGENT_ROLES` is `readonly`. Required `as unknown as [string, ...string[]]` cast. Added inline comment explaining the SDK/project Zod version mismatch and future simplification path.
+
+- **`invokeRequestSchema` Zod/TypeScript type safety.** The controller's Zod schema mirrors the `InvokeRequest` interface but isn't derived from it — schema and type could drift without a compile-time error. Added a compile-time guard type (`_SchemaMatchesInvokeRequest`) that breaks the build if the schema output diverges from `InvokeRequest`. Also added an inline comment noting the idiomatic fix (move schema to `libs/common` as single source of truth, derive type via `z.infer`) is deferred since it would touch every `InvokeRequest` consumer.
+
+### Review Notes
+
+- **Reconnection failure is silent.** If `handleReconnection()` exhausts all retries after a transport close, the error is logged but the agent remains running in a disconnected state. Acceptable for POC — Docker restart recovers. QRM1-011 should consider whether the container should exit on persistent disconnection to trigger orchestrator restart.
+
+- **No trailing-slash normalization on `callbackUrl`.** If configured as `http://host:3000/`, the URL becomes `http://host:3000//invoke`. Low risk since Docker Compose sets clean values and `z.string().url()` validates format, but a normalizing constructor would make it robust.
+
+- **Reconnection test uses `setImmediate`.** The `mcp-client.service.spec.ts` reconnection test relies on `setImmediate` to flush the async reconnection triggered by `onclose`. Works because mocks resolve synchronously, but could flake if intermediate async steps are added later.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 142 tests passing (27 new + 115 existing, 0 regressions)
