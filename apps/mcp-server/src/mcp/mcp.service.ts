@@ -14,6 +14,7 @@ import {
 } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { MessageBroker } from '../messaging';
+import { AgentRegistry, HttpAgentConnection } from '../registry';
 import { McpServerConfigService } from '../config';
 
 /**
@@ -44,6 +45,7 @@ export class McpService implements OnModuleInit {
   constructor(
     private readonly messageBroker: MessageBroker,
     private readonly contextStore: ContextStore,
+    private readonly registry: AgentRegistry,
     private readonly config: McpServerConfigService,
   ) {
     this.server = new McpServer({ name: 'quorum', version: '0.1.0' });
@@ -51,6 +53,8 @@ export class McpService implements OnModuleInit {
 
   onModuleInit(): void {
     this.registerInvokeAgentTool();
+    this.registerRegisterAgentTool();
+    this.registerUnregisterAgentTool();
     this.registerContextStoreTool();
     this.registerContextQueryTool();
     this.registerContextSummarizeTool();
@@ -130,6 +134,67 @@ export class McpService implements OnModuleInit {
 
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+        };
+      },
+    );
+  }
+
+  private registerRegisterAgentTool(): void {
+    this.server.registerTool(
+      'register_agent',
+      {
+        description:
+          'Register an agent with its callback URL for invocation delivery',
+        inputSchema: {
+          role: z
+            .enum(DEPLOYABLE_AGENT_ROLES as unknown as [string, ...string[]])
+            .describe('Agent role to register'),
+          callbackUrl: z
+            .string()
+            .url()
+            .describe('Base URL where the agent accepts invocations'),
+        },
+      },
+      async (args) => {
+        const connection = new HttpAgentConnection(
+          args.role as AgentRole,
+          args.callbackUrl,
+        );
+        this.registry.register(connection);
+        this.logger.log(`Agent ${args.role} registered at ${args.callbackUrl}`);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Agent ${args.role} registered at ${args.callbackUrl}`,
+            },
+          ],
+        };
+      },
+    );
+  }
+
+  private registerUnregisterAgentTool(): void {
+    this.server.registerTool(
+      'unregister_agent',
+      {
+        description: 'Unregister an agent from the registry',
+        inputSchema: {
+          role: z
+            .enum(DEPLOYABLE_AGENT_ROLES as unknown as [string, ...string[]])
+            .describe('Agent role to unregister'),
+        },
+      },
+      async (args) => {
+        this.registry.unregister(args.role as AgentRole);
+        this.logger.log(`Agent ${args.role} unregistered`);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Agent ${args.role} unregistered`,
+            },
+          ],
         };
       },
     );

@@ -3,6 +3,7 @@ import { AgentRole, ContextScope, ContextStore } from '@app/common';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { MessageBroker } from '../messaging';
+import { AgentRegistry } from '../registry';
 import { McpServerConfigService } from '../config';
 import { McpService } from './mcp.service';
 
@@ -98,6 +99,14 @@ const mockContextStore = {
   getStats: jest.fn(),
 };
 
+const mockRegistry = {
+  register: jest.fn(),
+  unregister: jest.fn(),
+  get: jest.fn(),
+  getAll: jest.fn(),
+  isAvailable: jest.fn(),
+};
+
 const mockConfig = {
   app: { name: 'mcp-server', port: 3000 },
   broker: { maxCallDepth: 5, defaultTimeoutMs: 300_000 },
@@ -119,6 +128,7 @@ describe('McpService', () => {
         McpService,
         { provide: MessageBroker, useValue: mockBroker },
         { provide: ContextStore, useValue: mockContextStore },
+        { provide: AgentRegistry, useValue: mockRegistry },
         { provide: McpServerConfigService, useValue: mockConfig },
       ],
     }).compile();
@@ -233,6 +243,65 @@ describe('McpService', () => {
 
       const call = mockBroker.invoke.mock.calls[0][0];
       expect(call.context).toEqual({ ticket: 'QRM1-005' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // register_agent tool
+  // -------------------------------------------------------------------------
+
+  describe('register_agent', () => {
+    it('should create HttpAgentConnection and register in registry', async () => {
+      const handler = getToolHandler(service, 'register_agent');
+      const result = await handler({
+        role: AgentRole.architect,
+        callbackUrl: 'http://architect:3002',
+      });
+
+      expect(mockRegistry.register).toHaveBeenCalledTimes(1);
+      expect(mockRegistry.register).toHaveBeenCalledWith(
+        expect.objectContaining({ role: AgentRole.architect }),
+      );
+      expect(textContent(result)).toBe(
+        'Agent architect registered at http://architect:3002',
+      );
+    });
+
+    it('should overwrite previous registration for same role', async () => {
+      const handler = getToolHandler(service, 'register_agent');
+
+      await handler({
+        role: AgentRole.developer,
+        callbackUrl: 'http://dev:3004',
+      });
+      await handler({
+        role: AgentRole.developer,
+        callbackUrl: 'http://dev-new:3004',
+      });
+
+      expect(mockRegistry.register).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // unregister_agent tool
+  // -------------------------------------------------------------------------
+
+  describe('unregister_agent', () => {
+    it('should remove agent from registry', async () => {
+      const handler = getToolHandler(service, 'unregister_agent');
+      const result = await handler({ role: AgentRole.architect });
+
+      expect(mockRegistry.unregister).toHaveBeenCalledWith(AgentRole.architect);
+      expect(textContent(result)).toBe('Agent architect unregistered');
+    });
+
+    it('should succeed silently for unregistered role', async () => {
+      const handler = getToolHandler(service, 'unregister_agent');
+      const result = await handler({ role: AgentRole.qa });
+
+      expect(mockRegistry.unregister).toHaveBeenCalledWith(AgentRole.qa);
+      expect(textContent(result)).toBe('Agent qa unregistered');
     });
   });
 
