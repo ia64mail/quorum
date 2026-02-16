@@ -8,6 +8,7 @@ import { McpClientService } from './mcp-client.service';
 
 const mockConnect = jest.fn();
 const mockCallTool = jest.fn();
+const mockListTools = jest.fn();
 const mockClose = jest.fn();
 
 let capturedOnclose: (() => void) | undefined;
@@ -16,6 +17,7 @@ jest.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: jest.fn().mockImplementation(() => ({
     connect: mockConnect,
     callTool: mockCallTool,
+    listTools: mockListTools,
   })),
 }));
 
@@ -77,10 +79,13 @@ describe('McpClientService', () => {
   });
 
   describe('connectAndRegister', () => {
-    it('should connect to MCP server and register agent', async () => {
+    it('should connect, register, and discover tools', async () => {
       mockConnect.mockResolvedValue(undefined);
       mockCallTool.mockResolvedValue({
         content: [{ type: 'text', text: 'ok' }],
+      });
+      mockListTools.mockResolvedValue({
+        tools: [{ name: 'invoke_agent', inputSchema: {} }],
       });
 
       await service.connectAndRegister();
@@ -93,6 +98,7 @@ describe('McpClientService', () => {
           callbackUrl: 'http://architect:3002',
         },
       });
+      expect(mockListTools).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -106,6 +112,7 @@ describe('McpClientService', () => {
       mockCallTool.mockResolvedValue({
         content: [{ type: 'text', text: 'ok' }],
       });
+      mockListTools.mockResolvedValue({ tools: [] });
 
       // Use a spy on setTimeout to avoid real delays
       jest.useFakeTimers();
@@ -146,6 +153,7 @@ describe('McpClientService', () => {
       mockCallTool.mockResolvedValue({
         content: [{ type: 'text', text: 'result' }],
       });
+      mockListTools.mockResolvedValue({ tools: [] });
 
       await service.connectAndRegister();
       await service.callTool('invoke_agent', { target: 'developer' });
@@ -163,6 +171,7 @@ describe('McpClientService', () => {
       mockCallTool.mockResolvedValue({
         content: [{ type: 'text', text: 'ok' }],
       });
+      mockListTools.mockResolvedValue({ tools: [] });
       mockClose.mockResolvedValue(undefined);
 
       await service.connectAndRegister();
@@ -181,6 +190,7 @@ describe('McpClientService', () => {
       mockCallTool
         .mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }] }) // register
         .mockRejectedValueOnce(new Error('server down')); // unregister
+      mockListTools.mockResolvedValue({ tools: [] });
       mockClose.mockResolvedValue(undefined);
 
       await service.connectAndRegister();
@@ -193,10 +203,13 @@ describe('McpClientService', () => {
   });
 
   describe('reconnection', () => {
-    it('should reconnect and re-register when transport closes', async () => {
+    it('should reconnect, re-register, and re-discover tools when transport closes', async () => {
       mockConnect.mockResolvedValue(undefined);
       mockCallTool.mockResolvedValue({
         content: [{ type: 'text', text: 'ok' }],
+      });
+      mockListTools.mockResolvedValue({
+        tools: [{ name: 'invoke_agent', inputSchema: {} }],
       });
 
       await service.connectAndRegister();
@@ -209,9 +222,70 @@ describe('McpClientService', () => {
       // Allow the async reconnection to proceed
       await new Promise((resolve) => setImmediate(resolve));
 
-      // Second connect + second register
+      // Second connect + second register + second discoverTools
       expect(mockConnect).toHaveBeenCalledTimes(2);
       expect(mockCallTool).toHaveBeenCalledTimes(2);
+      expect(mockListTools).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('tool discovery', () => {
+    it('should cache tools from listTools after registration', async () => {
+      mockConnect.mockResolvedValue(undefined);
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+      });
+      const tools = [
+        { name: 'invoke_agent', inputSchema: { type: 'object' } },
+        { name: 'context_store', inputSchema: { type: 'object' } },
+      ];
+      mockListTools.mockResolvedValue({ tools });
+
+      await service.connectAndRegister();
+
+      expect(service.getTools()).toEqual(tools);
+    });
+
+    it('should return empty array before connection', () => {
+      expect(service.getTools()).toEqual([]);
+    });
+
+    it('should proceed with empty tool list if discoverTools fails', async () => {
+      mockConnect.mockResolvedValue(undefined);
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+      });
+      mockListTools.mockRejectedValue(new Error('listTools failed'));
+
+      await service.connectAndRegister();
+
+      expect(service.getTools()).toEqual([]);
+    });
+
+    it('should refresh tools on reconnection', async () => {
+      mockConnect.mockResolvedValue(undefined);
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+      });
+      mockListTools
+        .mockResolvedValueOnce({
+          tools: [{ name: 'tool_a', inputSchema: {} }],
+        })
+        .mockResolvedValueOnce({
+          tools: [
+            { name: 'tool_a', inputSchema: {} },
+            { name: 'tool_b', inputSchema: {} },
+          ],
+        });
+
+      await service.connectAndRegister();
+      expect(service.getTools()).toHaveLength(1);
+
+      // Simulate reconnection
+      capturedOnclose!();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(service.getTools()).toHaveLength(2);
     });
   });
 });

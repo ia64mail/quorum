@@ -40,4 +40,37 @@ describe('anthropicConfig', () => {
     const result = anthropicConfig();
     expect(result.apiKey).toBe('sk-ant-my-secret-key');
   });
+
+  describe('maxTokens', () => {
+    beforeEach(() => {
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key';
+      delete process.env.ANTHROPIC_MAX_TOKENS;
+    });
+
+    it('should default to 4096 when ANTHROPIC_MAX_TOKENS is not set', () => {
+      const result = anthropicConfig();
+      expect(result.maxTokens).toBe(4096);
+    });
+
+    it('should parse ANTHROPIC_MAX_TOKENS from env var', () => {
+      process.env.ANTHROPIC_MAX_TOKENS = '8192';
+      const result = anthropicConfig();
+      expect(result.maxTokens).toBe(8192);
+    });
+
+    it('should reject non-numeric ANTHROPIC_MAX_TOKENS', () => {
+      process.env.ANTHROPIC_MAX_TOKENS = 'not-a-number';
+      expect(() => anthropicConfig()).toThrow();
+    });
+
+    it('should reject zero maxTokens', () => {
+      process.env.ANTHROPIC_MAX_TOKENS = '0';
+      expect(() => anthropicConfig()).toThrow();
+    });
+
+    it('should reject negative maxTokens', () => {
+      process.env.ANTHROPIC_MAX_TOKENS = '-1';
+      expect(() => anthropicConfig()).toThrow();
+    });
+  });
 });

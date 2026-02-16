@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { AgentConfigService } from '../config';
 
 const MAX_RETRIES = 10;
@@ -9,8 +10,8 @@ const INITIAL_DELAY_MS = 2000;
 /**
  * Manages the MCP client connection to the Quorum MCP server.
  *
- * Handles connecting, registration, reconnection with linear backoff,
- * and graceful shutdown (unregister + close).
+ * Handles connecting, registration, tool discovery, reconnection
+ * with linear backoff, and graceful shutdown (unregister + close).
  */
 @Injectable()
 export class McpClientService implements OnApplicationShutdown {
@@ -20,6 +21,7 @@ export class McpClientService implements OnApplicationShutdown {
   private transport!: StreamableHTTPClientTransport;
   private registered = false;
   private reconnecting = false;
+  private cachedTools: Tool[] = [];
 
   constructor(private readonly config: AgentConfigService) {}
 
@@ -30,6 +32,12 @@ export class McpClientService implements OnApplicationShutdown {
   async connectAndRegister(): Promise<void> {
     await this.connectWithRetry();
     await this.register();
+    await this.discoverTools();
+  }
+
+  /** Returns cached MCP tool definitions from last discovery. */
+  getTools(): Tool[] {
+    return this.cachedTools;
   }
 
   /** Expose `client.callTool()` for future use (QRM1-008). */
@@ -133,12 +141,30 @@ export class McpClientService implements OnApplicationShutdown {
     try {
       await this.connectWithRetry();
       await this.register();
+      await this.discoverTools();
     } catch (err) {
       this.logger.error(
         `Reconnection failed: ${err instanceof Error ? err.message : err}`,
       );
     } finally {
       this.reconnecting = false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tool Discovery
+  // ---------------------------------------------------------------------------
+
+  private async discoverTools(): Promise<void> {
+    try {
+      const result = await this.client.listTools();
+      this.cachedTools = result.tools;
+      this.logger.log(`Discovered ${this.cachedTools.length} MCP tools`);
+    } catch (err) {
+      this.logger.warn(
+        `Tool discovery failed, proceeding with empty tool list: ${err instanceof Error ? err.message : err}`,
+      );
+      this.cachedTools = [];
     }
   }
 
