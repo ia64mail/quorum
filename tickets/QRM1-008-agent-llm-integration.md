@@ -243,32 +243,32 @@ Mocks: `AnthropicService`, `McpClientService` (with `getTools()` and `callTool()
 
 ## Acceptance Criteria
 
-- [ ] `AnthropicService` wraps `@anthropic-ai/sdk` — creates client from `anthropicConfig.apiKey`
-- [ ] `AnthropicService.chat()` calls `messages.create()` with model and maxTokens from config
-- [ ] `anthropicConfig` updated with `maxTokens` from `ANTHROPIC_MAX_TOKENS` (default: 4096)
-- [ ] `McpClientService.discoverTools()` fetches tool list after registration
-- [ ] `McpClientService.getTools()` returns cached MCP tool definitions
-- [ ] Tool cache refreshed on reconnection
-- [ ] `discoverTools()` failure does not prevent agent operation
-- [ ] `mapMcpToolsToAnthropic()` converts MCP tools to Anthropic format (`inputSchema` → `input_schema`)
-- [ ] Infrastructure tools (`register_agent`, `unregister_agent`) filtered from LLM-facing tool list
-- [ ] `invoke_agent` schema stripped of `callerRole`, `correlationId`, `depth` (auto-injected at execution)
-- [ ] `formatToolResult()` extracts text content and `isError` flag from MCP `CallToolResult`
-- [ ] `InvocationHandler.handle()` implements agentic loop: build messages → chat → tool execution → loop
-- [ ] Tool calls executed via `McpClientService.callTool()` with augmented args
-- [ ] `invoke_agent` calls augmented: `callerRole` from config, `correlationId` from request, `depth` incremented
-- [ ] `context_*` calls default `correlationId` from request if not provided by LLM
-- [ ] Multiple tool calls in a single response executed in parallel
-- [ ] Loop bounded by `MAX_TOOL_ROUNDS` (10) — returns text or error on exhaustion
-- [ ] `handle()` never throws — API errors, tool errors caught and returned as `{ success: false }`
-- [ ] Individual tool failures produce `is_error` tool results, don't abort the loop
-- [ ] Placeholder system prompt includes role and caller (replaced by QRM1-009)
-- [ ] User message includes `request.action` and formatted `request.context` when present
-- [ ] Text extracted from final assistant response as `InvokeResponse.result`
-- [ ] `LlmModule` provides `AnthropicService`, imported by `ConnectionModule`
-- [ ] All new code uses structured logging with `correlationId` where available
-- [ ] Unit tests cover: chat delegation, tool mapping, agentic loop, error handling, parameter augmentation
-- [ ] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
+- [x] `AnthropicService` wraps `@anthropic-ai/sdk` — creates client from `anthropicConfig.apiKey`
+- [x] `AnthropicService.chat()` calls `messages.create()` with model and maxTokens from config
+- [x] `anthropicConfig` updated with `maxTokens` from `ANTHROPIC_MAX_TOKENS` (default: 4096)
+- [x] `McpClientService.discoverTools()` fetches tool list after registration
+- [x] `McpClientService.getTools()` returns cached MCP tool definitions
+- [x] Tool cache refreshed on reconnection
+- [x] `discoverTools()` failure does not prevent agent operation
+- [x] `mapMcpToolsToAnthropic()` converts MCP tools to Anthropic format (`inputSchema` → `input_schema`)
+- [x] Infrastructure tools (`register_agent`, `unregister_agent`) filtered from LLM-facing tool list
+- [x] `invoke_agent` schema stripped of `callerRole`, `correlationId`, `depth` (auto-injected at execution)
+- [x] `formatToolResult()` extracts text content and `isError` flag from MCP `CallToolResult`
+- [x] `InvocationHandler.handle()` implements agentic loop: build messages → chat → tool execution → loop
+- [x] Tool calls executed via `McpClientService.callTool()` with augmented args
+- [x] `invoke_agent` calls augmented: `callerRole` from config, `correlationId` from request, `depth` incremented
+- [x] `context_*` calls default `correlationId` from request if not provided by LLM
+- [x] Multiple tool calls in a single response executed in parallel
+- [x] Loop bounded by `MAX_TOOL_ROUNDS` (10) — returns text or error on exhaustion
+- [x] `handle()` never throws — API errors, tool errors caught and returned as `{ success: false }`
+- [x] Individual tool failures produce `is_error` tool results, don't abort the loop
+- [x] Placeholder system prompt includes role and caller (replaced by QRM1-009)
+- [x] User message includes `request.action` and formatted `request.context` when present
+- [x] Text extracted from final assistant response as `InvokeResponse.result`
+- [x] `LlmModule` provides `AnthropicService`, imported by `ConnectionModule`
+- [x] All new code uses structured logging with `correlationId` where available
+- [x] Unit tests cover: chat delegation, tool mapping, agentic loop, error handling, parameter augmentation
+- [x] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
 
 ## Dependencies and References
 
@@ -287,3 +287,47 @@ Mocks: `AnthropicService`, `McpClientService` (with `getTools()` and `callTool()
 - [@anthropic-ai/sdk v0.73.0](https://github.com/anthropics/anthropic-sdk-typescript) — `Anthropic`, `messages.create()`, tool-use response handling
 - [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) — `Client.listTools()`, `CallToolResult` types
 - [Anthropic Tool Use Guide](https://docs.anthropic.com/en/docs/build-with-claude/tool-use) — Agentic loop pattern, `tool_result` format
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-02-15
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `libs/common/src/config/anthropic.config.ts` | Modified | Added `maxTokens` field — `z.number().int().min(1)`, parsed from `ANTHROPIC_MAX_TOKENS` env var (default 4096) |
+| `libs/common/src/config/anthropic.config.spec.ts` | Modified | 5 new tests: maxTokens default, env override, non-numeric rejection, zero rejection, negative rejection |
+| `apps/agent/src/llm/anthropic.service.ts` | Created | Thin SDK wrapper — constructor creates `Anthropic` client from config apiKey, `chat()` delegates to `messages.create()` with model/maxTokens. Omits `tools` key when array is empty (Anthropic API rejects `tools: []`) |
+| `apps/agent/src/llm/anthropic.service.spec.ts` | Created | 4 tests: SDK instantiation with apiKey, chat params delegation, tools passthrough, empty tools omission |
+| `apps/agent/src/llm/tool-mapper.ts` | Created | Pure utility functions (no DI). `mapMcpToolsToAnthropic()` converts MCP→Anthropic format, filters infrastructure tools, strips auto-injected params from `invoke_agent`. `formatToolResult()` extracts text + isError from MCP `CallToolResult` |
+| `apps/agent/src/llm/tool-mapper.spec.ts` | Created | 12 tests: conversion, filtering, param stripping, custom exclude list, empty input, missing description, formatToolResult text extraction/isError/empty/non-text/missing content |
+| `apps/agent/src/llm/llm.module.ts` | Created | Provides `AnthropicService`, imports `AgentConfigModule` |
+| `apps/agent/src/llm/index.ts` | Created | Barrel export for `AnthropicService` and `LlmModule` |
+| `apps/agent/src/connection/invocation-handler.service.ts` | Modified | Replaced stub with full agentic loop. Injects `AnthropicService` + `McpClientService`. Implements `processWithLoop()` (up to `MAX_TOOL_ROUNDS=10`), `buildUserMessage()`, `extractText()`, `executeTool()`, `augmentArgs()` |
+| `apps/agent/src/connection/invocation-handler.service.spec.ts` | Rewritten | 15 tests across 6 describe blocks: single turn, tool loop, invoke_agent augmentation, context_* augmentation, max rounds, error handling, empty tools |
+| `apps/agent/src/connection/mcp-client.service.ts` | Modified | Added `cachedTools: Tool[]`, `discoverTools()` (called after register + on reconnection), `getTools()` (returns defensive copy). Discovery failure logs warning, proceeds with empty list |
+| `apps/agent/src/connection/mcp-client.service.spec.ts` | Modified | 4 new tests in `tool discovery` block + updated existing connect/reconnect tests to include `mockListTools` |
+| `apps/agent/src/connection/connection.module.ts` | Modified | Added `LlmModule` import |
+
+### Deviations from Ticket Spec
+
+- **`getTools()` returns a defensive copy.** The ticket describes `getTools()` as a "synchronous getter" returning `cachedTools`. Implementation returns `[...this.cachedTools]` instead of the direct reference. This prevents consumers from accidentally mutating the cache. Currently no consumer mutates the array (the mapper creates new arrays), but the shallow copy is cheap insurance against future bugs.
+
+- **`callTool()` return type cast in handler.** The MCP SDK's `callTool()` returns a loosely-typed result. The handler casts it via `as { content?: Array<{ type: string; text?: string }>; isError?: boolean }` before passing to `formatToolResult()`. This is pragmatic — the MCP SDK guarantees this shape per the `CallToolResult` type, but the runtime return type is `unknown`. An alternative would be to accept `unknown` in `formatToolResult()` and validate internally, but that would add defensive code for a protocol-guaranteed contract.
+
+### Review Notes
+
+- **System prompt uses simple `.replace()`.** The placeholder template substitutes `{role}` and `{caller}` with string `.replace()`, which only replaces the first occurrence. Currently safe because both placeholders appear exactly once. QRM1-009 replaces this entirely with injectable role-specific prompts, so no hardening needed.
+
+- **`AnthropicService.chat()` omits `tools` when empty.** The Anthropic API rejects `tools: []` with a validation error. The service conditionally spreads `{ tools }` only when the array has elements. This is a subtle SDK requirement not documented in the ticket but necessary for correct behavior — tested explicitly.
+
+- **`context_*` augmentation uses spread order for override semantics.** For `invoke_agent`, system values override LLM values (`{...args, callerRole, ...}`). For `context_*`, LLM values override the default (`{correlationId, ...args}`). The asymmetry is intentional and matches the ticket spec — `callerRole`/`depth` are never LLM choices, but `correlationId` on context tools is a default that the LLM can override.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 183 tests passing (41 new/rewritten + 142 existing, 0 regressions)

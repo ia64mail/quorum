@@ -428,7 +428,9 @@ describe('InvocationHandler', () => {
       const secondCall = chatCallAt(1);
       const toolResultMsg = secondCall.messages[2];
       expect(
-        (toolResultMsg.content as Array<{ type: string; [k: string]: unknown }>)[0],
+        (
+          toolResultMsg.content as Array<{ type: string; [k: string]: unknown }>
+        )[0],
       ).toEqual(
         expect.objectContaining({
           type: 'tool_result',
@@ -453,7 +455,9 @@ describe('InvocationHandler', () => {
       const secondCall = chatCallAt(1);
       const toolResultMsg = secondCall.messages[2];
       expect(
-        (toolResultMsg.content as Array<{ type: string; [k: string]: unknown }>)[0],
+        (
+          toolResultMsg.content as Array<{ type: string; [k: string]: unknown }>
+        )[0],
       ).toEqual(
         expect.objectContaining({
           type: 'tool_result',

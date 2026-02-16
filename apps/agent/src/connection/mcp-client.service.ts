@@ -35,9 +35,9 @@ export class McpClientService implements OnApplicationShutdown {
     await this.discoverTools();
   }
 
-  /** Returns cached MCP tool definitions from last discovery. */
+  /** Returns a copy of cached MCP tool definitions from last discovery. */
   getTools(): Tool[] {
-    return this.cachedTools;
+    return [...this.cachedTools];
   }
 
   /** Expose `client.callTool()` for future use (QRM1-008). */
