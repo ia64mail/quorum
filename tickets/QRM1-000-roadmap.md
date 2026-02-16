@@ -79,13 +79,17 @@ Bidirectional communication between agent containers and MCP server. Agent-side 
 **Depends on:** QRM1-004, QRM1-005, QRM1-006
 
 ### QRM1-008 — Agent LLM Integration
-Wire the Anthropic SDK into the agent's invocation handler so it can generate intelligent responses.
+Replace the `InvocationHandler` stub with a complete agentic processing loop powered by the Anthropic SDK.
 
-- Agent receives invocation → builds message array with system prompt + invocation context
-- Calls Anthropic `messages.create()` with tool definitions
-- Tool-use loop: if LLM returns tool calls (`invoke_agent`, `context_*`), execute via MCP client and feed results back
-- Final text response becomes the `InvokeResponse.result`
-- Error handling: API failures, token limits, malformed responses
+- `AnthropicService` in `apps/agent/src/llm/` — injectable wrapper around `@anthropic-ai/sdk`, config-driven `chat()` method
+- MCP tool discovery: `McpClientService.discoverTools()` via `listTools()`, cached after connection
+- Tool mapper: MCP → Anthropic tool format conversion, filters infrastructure tools (`register_agent`, `unregister_agent`), strips auto-injected params from `invoke_agent` schema
+- Agentic loop in `InvocationHandler`: build messages → `messages.create()` → execute tool calls via `McpClientService.callTool()` → feed results back → loop until final text response
+- Parameter augmentation: `callerRole`, `correlationId`, `depth` auto-injected for `invoke_agent`; `correlationId` defaulted for `context_*` tools
+- `anthropicConfig` updated with `maxTokens` (default 4096, from `ANTHROPIC_MAX_TOKENS`)
+- Placeholder system prompt (QRM1-009 replaces with role-specific prompts)
+- Error boundary: API failures and tool errors produce `{ success: false }`, never throw
+- `LlmModule` wiring, comprehensive unit tests
 
 **Depends on:** QRM1-007
 
