@@ -3,6 +3,7 @@ import { AgentRole } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { AgentConfigService } from '../config';
 import { AnthropicService } from '../llm';
+import { RolePromptService } from '../prompts';
 import { McpClientService } from './mcp-client.service';
 import { InvocationHandler } from './invocation-handler.service';
 
@@ -13,6 +14,7 @@ import { InvocationHandler } from './invocation-handler.service';
 const mockChat = jest.fn();
 const mockGetTools = jest.fn();
 const mockCallTool = jest.fn();
+const mockGetSystemPrompt = jest.fn();
 
 const mockConfig = {
   agent: {
@@ -105,6 +107,9 @@ describe('InvocationHandler', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockGetTools.mockReturnValue([]);
+    mockGetSystemPrompt.mockReturnValue(
+      'Mocked system prompt for architect from moderator',
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -114,6 +119,10 @@ describe('InvocationHandler', () => {
         {
           provide: McpClientService,
           useValue: { getTools: mockGetTools, callTool: mockCallTool },
+        },
+        {
+          provide: RolePromptService,
+          useValue: { getSystemPrompt: mockGetSystemPrompt },
         },
       ],
     }).compile();
@@ -133,23 +142,25 @@ describe('InvocationHandler', () => {
       });
     });
 
-    it('should build system prompt with role and caller', async () => {
+    it('should call RolePromptService.getSystemPrompt with request caller', async () => {
       mockChat.mockResolvedValue(textResponse('Done'));
 
       await handler.handle(baseRequest);
 
-      /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+      expect(mockGetSystemPrompt).toHaveBeenCalledWith(AgentRole.moderator);
+    });
+
+    it('should pass the resolved system prompt to AnthropicService.chat', async () => {
+      mockChat.mockResolvedValue(textResponse('Done'));
+      mockGetSystemPrompt.mockReturnValue('Custom resolved prompt');
+
+      await handler.handle(baseRequest);
+
       expect(mockChat).toHaveBeenCalledWith(
         expect.objectContaining({
-          system: expect.stringContaining('architect'),
+          system: 'Custom resolved prompt',
         }),
       );
-      expect(mockChat).toHaveBeenCalledWith(
-        expect.objectContaining({
-          system: expect.stringContaining('moderator'),
-        }),
-      );
-      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
     });
 
     it('should include action in user message', async () => {

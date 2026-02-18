@@ -4,13 +4,10 @@ import type { InvokeRequest, InvokeResponse } from '@app/common';
 import { AgentConfigService } from '../config';
 import { AnthropicService } from '../llm';
 import { mapMcpToolsToAnthropic, formatToolResult } from '../llm/tool-mapper';
+import { RolePromptService } from '../prompts';
 import { McpClientService } from './mcp-client.service';
 
 const MAX_TOOL_ROUNDS = 10;
-
-const SYSTEM_PROMPT_TEMPLATE = `You are a {role} agent in the Quorum multi-agent system.
-You received a task from the {caller} agent. Process it and respond with your result.
-Use the available tools when needed to complete the task.`;
 
 /**
  * Processes incoming invocations from other agents using an agentic tool loop.
@@ -27,6 +24,7 @@ export class InvocationHandler {
     private readonly config: AgentConfigService,
     private readonly anthropic: AnthropicService,
     private readonly mcpClient: McpClientService,
+    private readonly promptService: RolePromptService,
   ) {}
 
   async handle(request: InvokeRequest): Promise<InvokeResponse> {
@@ -51,10 +49,7 @@ export class InvocationHandler {
     request: InvokeRequest,
   ): Promise<InvokeResponse> {
     const tools = mapMcpToolsToAnthropic(this.mcpClient.getTools());
-    const system = SYSTEM_PROMPT_TEMPLATE.replace(
-      '{role}',
-      this.config.agent.role,
-    ).replace('{caller}', request.caller);
+    const system = this.promptService.getSystemPrompt(request.caller);
 
     const messages: MessageParam[] = [
       { role: 'user', content: this.buildUserMessage(request) },
