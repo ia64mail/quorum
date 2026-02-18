@@ -94,13 +94,15 @@ Replace the `InvocationHandler` stub with a complete agentic processing loop pow
 **Depends on:** QRM1-007
 
 ### QRM1-009 — Role Prompt System
-Define system prompts that instruct the LLM to behave as a specific agent role.
+Replace the placeholder system prompt with role-specific prompt templates that define each agent's collaboration behavior within Quorum.
 
-- Prompt templates for: moderator, architect, teamlead, developer
-- Each prompt defines: role identity, responsibilities, communication style, available tools, constraints
-- Prompt loading based on `AGENT_ROLE` env var
+- Prompt templates for: moderator, architect, teamlead, developer (generic fallback for qa, productowner)
+- Each template covers: identity, responsibilities, collaboration guidelines, context management, communication style, constraints
+- Prompt templates in `libs/common/src/prompts/` — shared across apps (terminal needs moderator prompt in QRM1-010)
+- `RolePromptService` in agent app — injectable, resolves template by `AGENT_ROLE`, substitutes `{{caller}}` at invocation time
+- `PromptsModule` wiring, `InvocationHandler` updated to use service instead of `SYSTEM_PROMPT_TEMPLATE` constant
 - Prompts are collaboration-focused (not task-focused) — they define *how* the agent communicates, not *what* it builds
-- Store prompts as injectable config (not hardcoded strings)
+- Domain-specific instructions deferred to `quorum.md` workspace config (out of QRM1 scope)
 
 **Depends on:** QRM1-008
 
