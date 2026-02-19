@@ -209,23 +209,65 @@ apps/agent/src/
 
 ## Acceptance Criteria
 
-- [ ] Prompt templates defined for moderator, architect, teamlead, developer roles
-- [ ] Each template covers: identity, responsibilities, collaboration guidelines, context management, communication style, constraints
-- [ ] Templates use `{{caller}}` placeholder for dynamic caller substitution
-- [ ] Generic fallback template for roles without specific templates (qa, productowner)
-- [ ] `getRolePromptTemplate(role)` in `libs/common/src/prompts/` returns the correct template or fallback
-- [ ] `RolePromptService` injectable in agent app — resolves template by `config.agent.role`
-- [ ] `RolePromptService.getSystemPrompt(caller)` returns hydrated prompt with `{{caller}}` substituted
-- [ ] `PromptsModule` provides `RolePromptService`, imported by `ConnectionModule`
-- [ ] `InvocationHandler` uses `RolePromptService` instead of `SYSTEM_PROMPT_TEMPLATE` constant
-- [ ] `SYSTEM_PROMPT_TEMPLATE` constant removed from handler
-- [ ] Prompts are collaboration-focused — no business logic, no domain-specific instructions
-- [ ] All prompts reference MCP tool usage (invoke_agent, context_store, context_query) with role-appropriate guidance
-- [ ] Prompts emphasize pull-based context model (query before assuming, store decisions for others)
-- [ ] `libs/common/src/index.ts` re-exports from `prompts/`
-- [ ] Unit tests: template existence and fallback, service resolution and substitution, handler integration
-- [ ] Existing tests unaffected (mock RolePromptService in handler tests)
-- [ ] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
+- [x] Prompt templates defined for moderator, architect, teamlead, developer roles
+- [x] Each template covers: identity, responsibilities, collaboration guidelines, context management, communication style, constraints
+- [x] Templates use `{{caller}}` placeholder for dynamic caller substitution
+- [x] Generic fallback template for roles without specific templates (qa, productowner)
+- [x] `getRolePromptTemplate(role)` in `libs/common/src/prompts/` returns the correct template or fallback
+- [x] `RolePromptService` injectable in agent app — resolves template by `config.agent.role`
+- [x] `RolePromptService.getSystemPrompt(caller)` returns hydrated prompt with `{{caller}}` substituted
+- [x] `PromptsModule` provides `RolePromptService`, imported by `ConnectionModule`
+- [x] `InvocationHandler` uses `RolePromptService` instead of `SYSTEM_PROMPT_TEMPLATE` constant
+- [x] `SYSTEM_PROMPT_TEMPLATE` constant removed from handler
+- [x] Prompts are collaboration-focused — no business logic, no domain-specific instructions
+- [x] All prompts reference MCP tool usage (invoke_agent, context_store, context_query) with role-appropriate guidance
+- [x] Prompts emphasize pull-based context model (query before assuming, store decisions for others)
+- [x] `libs/common/src/index.ts` re-exports from `prompts/`
+- [x] Unit tests: template existence and fallback, service resolution and substitution, handler integration
+- [x] Existing tests unaffected (mock RolePromptService in handler tests)
+- [x] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-02-17
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `libs/common/src/prompts/role-prompt-templates.ts` | Created | `SYSTEM_PREAMBLE` (~1,800 chars) shared across all roles — describes Quorum system, team roles, communication model (`invoke_agent`, `wait` semantics, depth limit), pull-based context model (`context_store`/`context_query`, scopes, correlationId). `ROLE_PROMPT_TEMPLATES: Partial<Record<AgentRole, string>>` with entries for moderator, architect, teamlead, developer. `GENERIC_PROMPT_TEMPLATE` fallback for undefined roles. `getRolePromptTemplate(role)` returns `SYSTEM_PREAMBLE + separator + role template` (or generic fallback) |
+| `libs/common/src/prompts/role-prompt-templates.spec.ts` | Created | 10 tests across 4 describe blocks: preamble content (Quorum description, communication model, context model, team roles), specific templates (role-specific for 4 roles, `{{caller}}` placeholder presence), generic fallback (used for qa/productowner, placeholder, non-empty), all templates non-empty |
+| `libs/common/src/prompts/index.ts` | Created | Barrel export for `getRolePromptTemplate`, `GENERIC_PROMPT_TEMPLATE`, `SYSTEM_PREAMBLE` |
+| `libs/common/src/index.ts` | Modified | Added `export * from './prompts'` re-export |
+| `apps/agent/src/prompts/role-prompt.service.ts` | Created | Thin injectable — injects `AgentConfigService`, `getSystemPrompt(caller)` calls `getRolePromptTemplate(config.agent.role)` then `replaceAll('{{caller}}', caller)` |
+| `apps/agent/src/prompts/role-prompt.service.spec.ts` | Created | 7 tests: `{{caller}}` substitution, role-specific for architect/teamlead/developer/moderator, generic fallback for qa, all-occurrences substitution |
+| `apps/agent/src/prompts/prompts.module.ts` | Created | Imports `AgentConfigModule`, provides+exports `RolePromptService` |
+| `apps/agent/src/prompts/index.ts` | Created | Barrel export for `RolePromptService` and `PromptsModule` |
+| `apps/agent/src/connection/invocation-handler.service.ts` | Modified | Removed `SYSTEM_PROMPT_TEMPLATE` constant. Injected `RolePromptService` in constructor. Replaced inline `.replace()` chain with `this.promptService.getSystemPrompt(request.caller)` |
+| `apps/agent/src/connection/invocation-handler.service.spec.ts` | Modified | Added `RolePromptService` mock (`mockGetSystemPrompt`). Replaced "should build system prompt with role and caller" test with two tests: one verifying `getSystemPrompt` is called with `request.caller`, one verifying the resolved prompt is passed to `AnthropicService.chat()`. Removed `eslint-disable` comments for `no-unsafe-assignment` (no longer needed without `expect.stringContaining`) |
+| `apps/agent/src/connection/connection.module.ts` | Modified | Added `PromptsModule` to imports |
+
+### Deviations from Ticket Spec
+
+- **`SYSTEM_PREAMBLE` exported.** The ticket describes `getRolePromptTemplate` as "the only public API" and says the template map is not exported. The implementation additionally exports `SYSTEM_PREAMBLE` and `GENERIC_PROMPT_TEMPLATE` from the barrel. Both are used in test assertions — verifying that specific roles get non-generic templates and that preamble content is correct. `SYSTEM_PREAMBLE` may also be useful for QRM1-010 (terminal app) if it needs to construct a moderator prompt differently. Exporting constants alongside the getter is harmless and improves testability.
+
+- **Preamble separated from role content by `---`.** The ticket describes templates as self-contained per-role strings prepended by shared guidance. The implementation concatenates `SYSTEM_PREAMBLE + '\n\n---\n\n' + roleTemplate`. The `---` Markdown horizontal rule gives LLMs a clear visual boundary between system-level context and role-specific instructions. Not specified in the ticket but improves prompt legibility.
+
+### Review Notes
+
+- **`replaceAll` used for `{{caller}}` substitution.** The service uses `replaceAll` rather than `replace`, which is correct — role templates contain `{{caller}}` in multiple locations (the opening line and within collaboration/context sections). A single `replace` would leave unsubstituted placeholders.
+
+- **Prompt size is reasonable.** Total hydrated prompt per role: ~3,000–3,600 characters (~900–1,100 tokens). Well within model limits and leaves room for future augmentation (quorum.md, per-invocation context injection).
+
+- **No input sanitization on `caller`.** The `caller` string is interpolated directly into the prompt template. Since it flows from `InvokeRequest.caller` (set by the MCP server from the agent registry, not user input) and is consumed only as LLM system prompt text, this is acceptable for the current trust boundary.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 219 tests passing (36 new + 183 existing, 0 regressions)
 
 ## Dependencies and References
 
