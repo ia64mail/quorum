@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { MessageParam, ContentBlock } from '@anthropic-ai/sdk/resources';
+import { mapMcpToolsToAnthropic, formatToolResult } from '@app/common';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
 import { AgentConfigService } from '../config';
 import { AnthropicService } from '../llm';
-import { mapMcpToolsToAnthropic, formatToolResult } from '../llm/tool-mapper';
 import { RolePromptService } from '../prompts';
 import { McpClientService } from './mcp-client.service';
 

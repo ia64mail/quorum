@@ -4,4 +4,5 @@ export * from './config';
 export * from './context-store';
 export * from './logger';
 export * from './messaging';
+export * from './llm';
 export * from './prompts';

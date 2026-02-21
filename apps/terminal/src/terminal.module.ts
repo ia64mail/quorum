@@ -1,11 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TerminalConfigModule } from './config';
-import { TerminalController } from './terminal.controller';
-import { TerminalService } from './terminal.service';
+import { ChatModule } from './chat';
 
 @Module({
-  imports: [TerminalConfigModule],
-  controllers: [TerminalController],
-  providers: [TerminalService],
+  imports: [TerminalConfigModule, ChatModule],
 })
 export class TerminalModule {}

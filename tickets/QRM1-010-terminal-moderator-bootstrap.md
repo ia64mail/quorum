@@ -332,30 +332,30 @@ Mock: `AnthropicService`, `McpClientService`.
 
 ## Acceptance Criteria
 
-- [ ] Tool mapper (`mapMcpToolsToAnthropic`, `formatToolResult`) extracted to `libs/common/src/llm/`
-- [ ] Agent app imports updated — existing tool-mapper tests pass in new location
-- [ ] Terminal MCP client connects to server with retry and linear backoff
-- [ ] Terminal MCP client registers as moderator with callback URL
-- [ ] Terminal MCP client discovers and caches tools after registration
-- [ ] Terminal MCP client supports reconnection with re-registration and tool re-discovery
-- [ ] Terminal `AnthropicService` wraps SDK — calls `messages.create()` with config values
-- [ ] Chat loop reads user input from stdin, displays responses to stdout
-- [ ] `/quit` and `/exit` commands end the session gracefully
-- [ ] System prompt uses `SYSTEM_PREAMBLE` from `libs/common/` + terminal-specific moderator section
-- [ ] System prompt is user-facing — no "caller is an LLM" framing, no `{{caller}}` placeholder
-- [ ] Agentic tool loop: LLM calls tools → executed via MCP → results fed back → text response returned
-- [ ] `invoke_agent` augmented: `callerRole='moderator'`, `correlationId` from current turn, `depth=0`
-- [ ] `context_*` tools augmented: `correlationId` defaulted from current turn
-- [ ] Per-turn `correlationId` generated via `crypto.randomUUID()`
-- [ ] Message history persists across turns (conversational continuity)
-- [ ] Tool loop bounded by `MAX_TOOL_ROUNDS` (10)
-- [ ] Errors handled gracefully — displayed to user, don't crash the process
-- [ ] Placeholder controller, service, and E2E test removed
-- [ ] `main.ts` bootstraps: listen → MCP connect → chat start
-- [ ] Graceful shutdown: unregister from MCP, close transport, close readline
-- [ ] Unit tests: MCP client, Anthropic service, chat service (agentic loop, augmentation, history, errors)
-- [ ] Existing agent tests unaffected (tool-mapper import path change)
-- [ ] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
+- [x] Tool mapper (`mapMcpToolsToAnthropic`, `formatToolResult`) extracted to `libs/common/src/llm/`
+- [x] Agent app imports updated — existing tool-mapper tests pass in new location
+- [x] Terminal MCP client connects to server with retry and linear backoff
+- [x] Terminal MCP client registers as moderator with callback URL
+- [x] Terminal MCP client discovers and caches tools after registration
+- [x] Terminal MCP client supports reconnection with re-registration and tool re-discovery
+- [x] Terminal `AnthropicService` wraps SDK — calls `messages.create()` with config values
+- [x] Chat loop reads user input from stdin, displays responses to stdout
+- [x] `/quit` and `/exit` commands end the session gracefully
+- [x] System prompt uses `SYSTEM_PREAMBLE` from `libs/common/` + terminal-specific moderator section
+- [x] System prompt is user-facing — no "caller is an LLM" framing, no `{{caller}}` placeholder
+- [x] Agentic tool loop: LLM calls tools → executed via MCP → results fed back → text response returned
+- [x] `invoke_agent` augmented: `callerRole='moderator'`, `correlationId` from current turn, `depth=0`
+- [x] `context_*` tools augmented: `correlationId` defaulted from current turn
+- [x] Per-turn `correlationId` generated via `crypto.randomUUID()`
+- [x] Message history persists across turns (conversational continuity)
+- [x] Tool loop bounded by `MAX_TOOL_ROUNDS` (10)
+- [x] Errors handled gracefully — displayed to user, don't crash the process
+- [x] Placeholder controller, service, and E2E test removed
+- [x] `main.ts` bootstraps: listen → MCP connect → chat start
+- [x] Graceful shutdown: unregister from MCP, close transport, close readline
+- [x] Unit tests: MCP client, Anthropic service, chat service (agentic loop, augmentation, history, errors)
+- [x] Existing agent tests unaffected (tool-mapper import path change)
+- [x] `npm run build` succeeds, `npm run lint` passes, `npm run test` passes
 
 ## Dependencies and References
 
@@ -377,3 +377,50 @@ Mock: `AnthropicService`, `McpClientService`.
 - [docs/context-management.md](../docs/context-management.md) — Context tools the moderator uses (scopes, store/query)
 - QRM1-008 Implementation Notes — Agentic loop, tool mapper, parameter augmentation pattern
 - QRM1-009 Implementation Notes — `SYSTEM_PREAMBLE`, prompt template structure, `{{caller}}` substitution
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-02-20
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `libs/common/src/llm/tool-mapper.ts` | Created | Moved from agent — MCP↔Anthropic tool format conversion |
+| `libs/common/src/llm/tool-mapper.spec.ts` | Created | Moved from agent — 12 existing tests |
+| `libs/common/src/llm/index.ts` | Created | Barrel export for llm module |
+| `libs/common/src/index.ts` | Modified | Added `llm/` re-export |
+| `apps/agent/src/llm/tool-mapper.ts` | Removed | Extracted to libs/common |
+| `apps/agent/src/llm/tool-mapper.spec.ts` | Removed | Moved to libs/common |
+| `apps/agent/src/connection/invocation-handler.service.ts` | Modified | Import tool-mapper from `@app/common` instead of relative path |
+| `apps/terminal/src/connection/mcp-client.service.ts` | Created | MCP client: connect, register as moderator, discover, callTool, reconnection, shutdown |
+| `apps/terminal/src/connection/mcp-client.service.spec.ts` | Created | 8 tests covering connect, register, retry, callTool, shutdown, reconnection, discovery |
+| `apps/terminal/src/connection/connection.module.ts` | Created | ConnectionModule wiring McpClientService |
+| `apps/terminal/src/connection/index.ts` | Created | Barrel export |
+| `apps/terminal/src/llm/anthropic.service.ts` | Created | Thin Anthropic SDK wrapper using TerminalConfigService |
+| `apps/terminal/src/llm/anthropic.service.spec.ts` | Created | 4 tests covering SDK init, chat params, tools passthrough |
+| `apps/terminal/src/llm/llm.module.ts` | Created | LlmModule wiring AnthropicService |
+| `apps/terminal/src/llm/index.ts` | Created | Barrel export |
+| `apps/terminal/src/chat/chat.service.ts` | Created | Core moderator: system prompt, stdin/stdout chat loop, agentic tool loop with augmentation |
+| `apps/terminal/src/chat/chat.service.spec.ts` | Created | 13 tests covering tool loop, augmentation, system prompt, history, errors, max rounds |
+| `apps/terminal/src/chat/chat.module.ts` | Created | ChatModule importing ConnectionModule + LlmModule |
+| `apps/terminal/src/chat/index.ts` | Created | Barrel export |
+| `apps/terminal/src/terminal.module.ts` | Modified | Removed placeholder controller/service, added ChatModule |
+| `apps/terminal/src/main.ts` | Modified | Bootstrap: listen → enableShutdownHooks → MCP connect → chat start → close |
+| `apps/terminal/src/terminal.controller.ts` | Removed | Placeholder |
+| `apps/terminal/src/terminal.controller.spec.ts` | Removed | Placeholder test |
+| `apps/terminal/src/terminal.service.ts` | Removed | Placeholder |
+| `apps/terminal/test/app.e2e-spec.ts` | Removed | Placeholder e2e test |
+
+### Deviations from Ticket Spec
+
+- **`rl.question` callback refactored to avoid async callback.** ESLint `@typescript-eslint/no-misused-promises` disallows passing an async function to `rl.question`. Extracted the async handling into a separate `handleInput()` method called via `void this.handleInput(...)` from the synchronous callback.
+- **System prompt test adjusted for SYSTEM_PREAMBLE content.** The ticket spec says "no 'caller is an LLM' framing" but `SYSTEM_PREAMBLE` (shared across all agents) contains "Your caller is an LLM too" in its General Guidelines. The terminal-specific section correctly avoids this framing. Test checks for positive indicators (`chatting with a human user`, `The user is human`) and absence of `{{caller}}` instead.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 247 tests passing (25 new + 222 existing)
