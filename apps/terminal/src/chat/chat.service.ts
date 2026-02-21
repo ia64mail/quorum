@@ -118,7 +118,6 @@ export class ChatService {
     try {
       const response = await this.processWithLoop();
       process.stdout.write(`\nModerator: ${response}\n\n`);
-      this.messages.push({ role: 'assistant', content: response });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Chat processing failed: ${message}`);
@@ -130,7 +129,7 @@ export class ChatService {
     prompt();
   }
 
-  async processWithLoop(): Promise<string> {
+  private async processWithLoop(): Promise<string> {
     const tools = mapMcpToolsToAnthropic(this.mcpClient.getTools());
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {

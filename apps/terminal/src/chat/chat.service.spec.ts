@@ -79,6 +79,13 @@ describe('ChatService', () => {
     service = module.get<ChatService>(ChatService);
   });
 
+  /** Access private processWithLoop() via reflection. */
+  function callProcessWithLoop(): Promise<string> {
+    return (
+      service as unknown as { processWithLoop(): Promise<string> }
+    ).processWithLoop();
+  }
+
   /** Simulate a user turn: push user message + set correlationId via reflection. */
   function simulateTurn(text: string) {
     const messages = (
@@ -97,7 +104,7 @@ describe('ChatService', () => {
       mockChat.mockResolvedValue(textResponse('Hello! How can I help?'));
       simulateTurn('Hello');
 
-      const result = await service.processWithLoop();
+      const result = await callProcessWithLoop();
 
       expect(result).toBe('Hello! How can I help?');
     });
@@ -120,7 +127,7 @@ describe('ChatService', () => {
       mockCallTool.mockResolvedValue(mcpToolResult('{"auth_pattern": "JWT"}'));
 
       simulateTurn('What auth pattern should we use?');
-      const result = await service.processWithLoop();
+      const result = await callProcessWithLoop();
 
       expect(result).toBe('Based on context, use JWT.');
       expect(mockCallTool).toHaveBeenCalledTimes(1);
@@ -150,7 +157,7 @@ describe('ChatService', () => {
         .mockResolvedValueOnce(mcpToolResult('stored'));
 
       simulateTurn('Do multiple things');
-      const result = await service.processWithLoop();
+      const result = await callProcessWithLoop();
 
       expect(result).toBe('Done');
       expect(mockCallTool).toHaveBeenCalledTimes(2);
@@ -176,7 +183,7 @@ describe('ChatService', () => {
       );
 
       simulateTurn('Design auth system');
-      await service.processWithLoop();
+      await callProcessWithLoop();
 
       expect(mockCallTool).toHaveBeenCalledWith('invoke_agent', {
         target: 'architect',
@@ -205,7 +212,7 @@ describe('ChatService', () => {
       mockCallTool.mockResolvedValue(mcpToolResult('stored'));
 
       simulateTurn('Store auth decision');
-      await service.processWithLoop();
+      await callProcessWithLoop();
 
       expect(mockCallTool).toHaveBeenCalledWith('context_store', {
         scope: 'project',
@@ -231,7 +238,7 @@ describe('ChatService', () => {
       mockCallTool.mockResolvedValue(mcpToolResult('data'));
 
       simulateTurn('Query custom context');
-      await service.processWithLoop();
+      await callProcessWithLoop();
 
       expect(mockCallTool).toHaveBeenCalledWith('context_query', {
         scope: 'conversation',
@@ -245,7 +252,7 @@ describe('ChatService', () => {
       mockChat.mockResolvedValue(textResponse('Done'));
       simulateTurn('Hello');
 
-      await service.processWithLoop();
+      await callProcessWithLoop();
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       const call = mockChat.mock.calls[0][0] as { system: string };
@@ -256,7 +263,7 @@ describe('ChatService', () => {
       mockChat.mockResolvedValue(textResponse('Done'));
       simulateTurn('Hello');
 
-      await service.processWithLoop();
+      await callProcessWithLoop();
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       const call = mockChat.mock.calls[0][0] as { system: string };
@@ -272,32 +279,40 @@ describe('ChatService', () => {
         .mockResolvedValueOnce(textResponse('First response'))
         .mockResolvedValueOnce(textResponse('Second response'));
 
-      // First turn
+      // First turn — processWithLoop pushes assistant content to messages
       simulateTurn('First message');
-      const result1 = await service.processWithLoop();
-      // Simulate adding assistant response as the chat loop would
-      const messages = (
-        service as unknown as {
-          messages: Array<{ role: string; content: string }>;
-        }
-      ).messages;
-      messages.push({ role: 'assistant', content: result1 });
+      await callProcessWithLoop();
 
       // Second turn
       simulateTurn('Second message');
-      await service.processWithLoop();
+      await callProcessWithLoop();
 
-      // Second chat call should have all prior messages
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-      const secondCall = mockChat.mock.calls[1][0] as {
-        messages: Array<{ role: string; content: unknown }>;
-      };
-      // user1, assistant1(from loop), assistant1(from manual push above was actually
-      // a dup — but processWithLoop already pushes assistant. Let's check the count.)
-      // processWithLoop pushes assistant content blocks, then we pushed string.
-      // The messages array should have: user1, assistant1(content blocks), assistant1(string), user2, assistant2(content blocks from 2nd call)
-      // But the key assertion: more than 2 messages existed when second call was made
-      expect(secondCall.messages.length).toBeGreaterThan(2);
+      // Verify final message history: user1, assistant1, user2, assistant2
+      const messages = (
+        service as unknown as {
+          messages: Array<{ role: string; content: unknown }>;
+        }
+      ).messages;
+      expect(messages).toHaveLength(4);
+      expect(messages[0]).toEqual({
+        role: 'user',
+        content: 'First message',
+      });
+      expect(messages[1]).toEqual({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'First response' }],
+      });
+      expect(messages[2]).toEqual({
+        role: 'user',
+        content: 'Second message',
+      });
+      expect(messages[3]).toEqual({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Second response' }],
+      });
+
+      // Second chat() call was made with 3 messages (before assistant2 was pushed)
+      expect(mockChat).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -306,7 +321,7 @@ describe('ChatService', () => {
       mockChat.mockRejectedValue(new Error('API rate limit exceeded'));
       simulateTurn('Hello');
 
-      await expect(service.processWithLoop()).rejects.toThrow(
+      await expect(callProcessWithLoop()).rejects.toThrow(
         'API rate limit exceeded',
       );
     });
@@ -323,7 +338,7 @@ describe('ChatService', () => {
       mockCallTool.mockRejectedValue(new Error('tool crashed'));
 
       simulateTurn('Do something');
-      const result = await service.processWithLoop();
+      const result = await callProcessWithLoop();
 
       expect(result).toBe('I handled the tool failure gracefully.');
     });
@@ -338,7 +353,7 @@ describe('ChatService', () => {
       mockCallTool.mockResolvedValue(mcpToolResult('Not found', true));
 
       simulateTurn('Do something');
-      const result = await service.processWithLoop();
+      const result = await callProcessWithLoop();
 
       expect(result).toBe('Noted the error.');
     });
@@ -366,7 +381,7 @@ describe('ChatService', () => {
       mockCallTool.mockResolvedValue(mcpToolResult('ok'));
 
       simulateTurn('Do many things');
-      const result = await service.processWithLoop();
+      const result = await callProcessWithLoop();
 
       expect(result).toContain('Partial progress');
       expect(result).toContain('maximum of 10 rounds');
@@ -379,7 +394,7 @@ describe('ChatService', () => {
       mockCallTool.mockResolvedValue(mcpToolResult('ok'));
 
       simulateTurn('Do many things');
-      const result = await service.processWithLoop();
+      const result = await callProcessWithLoop();
 
       expect(result).toContain('tool execution limit');
     });

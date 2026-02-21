@@ -419,6 +419,11 @@ Mock: `AnthropicService`, `McpClientService`.
 - **`rl.question` callback refactored to avoid async callback.** ESLint `@typescript-eslint/no-misused-promises` disallows passing an async function to `rl.question`. Extracted the async handling into a separate `handleInput()` method called via `void this.handleInput(...)` from the synchronous callback.
 - **System prompt test adjusted for SYSTEM_PREAMBLE content.** The ticket spec says "no 'caller is an LLM' framing" but `SYSTEM_PREAMBLE` (shared across all agents) contains "Your caller is an LLM too" in its General Guidelines. The terminal-specific section correctly avoids this framing. Test checks for positive indicators (`chatting with a human user`, `The user is human`) and absence of `{{caller}}` instead.
 
+### Post-Review Fixes
+
+- **Removed duplicate assistant message push.** `processWithLoop()` already appends the assistant's `ContentBlock[]` to `this.messages` inside the loop. `handleInput()` was also pushing a plain string version after the method returned, causing two assistant entries per turn — one with proper content blocks, one with a raw string. Removed the redundant push in `handleInput()`. Message history test rewritten to verify the exact 4-message sequence across two turns with no duplicates.
+- **`processWithLoop()` made private.** The method was public only for test access, but the intended public API is `start()`. Changed to `private`; tests access it via reflection through a `callProcessWithLoop()` helper, consistent with the existing pattern used for `messages` and `currentCorrelationId`.
+
 ### Verification
 
 - `npm run build` — compiles successfully
