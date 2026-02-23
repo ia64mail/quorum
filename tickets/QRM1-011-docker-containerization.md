@@ -245,26 +245,79 @@ apps/agent/Dockerfile                         # REMOVED
 
 ## Acceptance Criteria
 
-- [ ] Single `Dockerfile` at project root with `APP_NAME` build arg — builds all three apps
-- [ ] Per-app Dockerfiles removed (`apps/terminal/Dockerfile`, `apps/mcp-server/Dockerfile`, `apps/agent/Dockerfile`)
-- [ ] MCP server has `GET /health` endpoint returning `{ status: 'ok' }` with 200
-- [ ] `HealthModule` imported by `McpServerModule`
-- [ ] `docker-compose.yml` uses root `Dockerfile` with build args per service
-- [ ] `mcp-server` service has `healthcheck` configuration
-- [ ] Terminal and agent services use `depends_on` with `condition: service_healthy`
-- [ ] `ANTHROPIC_API_KEY` passed through from host `.env` to terminal and agent services
-- [ ] `PORT` set explicitly per service (mcp-server:3000, terminal:3001, agents:3002)
-- [ ] `AGENT_CALLBACK_URL` set per agent service using Docker hostname (`http://{service}:3002`)
-- [ ] Terminal reads `MCP_CALLBACK_URL` from config, defaults to `http://localhost:${PORT}`
-- [ ] Shared `quorum-logs` volume mounted at `/app/logs` in all containers
-- [ ] `LOG_JSON_DIR=/app/logs` set in environment for all services
-- [ ] `qa` and `productowner` services removed (QRM2 scope)
-- [ ] `ANTHROPIC_MODEL` and `ANTHROPIC_MAX_TOKENS` configurable via `.env` with sensible defaults
-- [ ] `.env.example` updated with logging and Docker Compose variables
-- [ ] `docker compose build` succeeds for all services
-- [ ] Unit tests: HealthController, terminal config callbackUrl, McpClientService registration
-- [ ] Existing tests unaffected — `npm run test` passes
-- [ ] `npm run build` succeeds, `npm run lint` passes
+- [x] Single `Dockerfile` at project root with `APP_NAME` build arg — builds all three apps
+- [x] Per-app Dockerfiles removed (`apps/terminal/Dockerfile`, `apps/mcp-server/Dockerfile`, `apps/agent/Dockerfile`)
+- [x] MCP server has `GET /health` endpoint returning `{ status: 'ok' }` with 200
+- [x] `HealthModule` imported by `McpServerModule`
+- [x] `docker-compose.yml` uses root `Dockerfile` with build args per service
+- [x] `mcp-server` service has `healthcheck` configuration
+- [x] Terminal and agent services use `depends_on` with `condition: service_healthy`
+- [x] `ANTHROPIC_API_KEY` passed through from host `.env` to terminal and agent services
+- [x] `PORT` set explicitly per service (mcp-server:3000, terminal:3001, agents:3002)
+- [x] `AGENT_CALLBACK_URL` set per agent service using Docker hostname (`http://{service}:3002`)
+- [x] Terminal reads `MCP_CALLBACK_URL` from config, defaults to `http://localhost:${PORT}`
+- [x] Shared `quorum-logs` volume mounted at `/app/logs` in all containers
+- [x] `LOG_JSON_DIR=/app/logs` set in environment for all services
+- [x] `qa` and `productowner` services removed (QRM2 scope)
+- [x] `ANTHROPIC_MODEL` and `ANTHROPIC_MAX_TOKENS` configurable via `.env` with sensible defaults
+- [x] `.env.example` updated with logging and Docker Compose variables
+- [x] `docker compose build` succeeds for all services
+- [x] Unit tests: HealthController, terminal config callbackUrl, McpClientService registration
+- [x] Existing tests unaffected — `npm run test` passes
+- [x] `npm run build` succeeds, `npm run lint` passes
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-02-22
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `Dockerfile` | Created (renamed from `apps/agent/Dockerfile`) | Global `ARG APP_NAME` (no default — forces explicit specification). Builder stage: `npm ci` + `npx nest build ${APP_NAME}`. Runtime stage: copies `dist/apps/${APP_NAME}` + `node_modules`, sets `NODE_ENV=production`. `ARG` re-declared in each stage (Docker multi-stage scoping requirement). No `EXPOSE` — port varies per app, compose handles mapping. No default `AGENT_ROLE` — set explicitly per service. Uses `npx nest build` instead of `npm run build` to make build-arg substitution explicit |
+| `apps/agent/Dockerfile` | Renamed | Became root `Dockerfile` (see above) |
+| `apps/mcp-server/Dockerfile` | Removed | Replaced by root `Dockerfile` |
+| `apps/terminal/Dockerfile` | Removed | Replaced by root `Dockerfile` |
+| `docker-compose.yml` | Modified | Removed `version` key (deprecated in Compose V2). Removed `qa` and `productowner` services (QRM2 scope). Added `x-shared-env` YAML anchor for `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_MAX_TOKENS`, `MCP_SERVER_URL`, `LOG_JSON_DIR`, `LOG_LEVEL`. All 5 services inherit via `<<: *shared-env`. Each service builds via root `Dockerfile` with `APP_NAME` build arg. `mcp-server`: `healthcheck` using Node.js `fetch()` against `/health` (no curl/wget in Alpine), `PORT=3000`. Terminal: `depends_on` with `condition: service_healthy`, `PORT=3001`, `MCP_CALLBACK_URL=http://terminal:3001`. Agents: `depends_on` with `service_healthy`, `PORT=3002`, per-service `AGENT_CALLBACK_URL` using Docker hostname. Named `quorum-logs` volume mounted at `/app/logs` in all services. Workspace volume on agent services only |
+| `apps/mcp-server/src/health/health.controller.ts` | Created | `@Controller('health')` with single `@Get()` returning `{ status: 'ok' }`. No `@nestjs/terminus` — plain controller suffices for readiness gating |
+| `apps/mcp-server/src/health/health.controller.spec.ts` | Created | 1 test: return value is `{ status: 'ok' }` |
+| `apps/mcp-server/src/health/health.module.ts` | Created | `HealthModule` with `HealthController` |
+| `apps/mcp-server/src/health/index.ts` | Created | Barrel export for `HealthModule` and `HealthController` |
+| `apps/mcp-server/src/mcp-server.module.ts` | Modified | Added `HealthModule` to imports |
+| `apps/terminal/src/config/terminal.config.ts` | Created | `registerAs('terminal')` config factory with Zod schema. `callbackUrl`: reads `MCP_CALLBACK_URL` env var, falls back to `http://localhost:${PORT \|\| '3000'}`. Validates with `z.string().url()` |
+| `apps/terminal/src/config/terminal-config.module.ts` | Modified | Added `terminalConfig` to `ConfigModule.forRoot({ load: [...] })` |
+| `apps/terminal/src/config/terminal-config.service.ts` | Modified | Added `@Inject(terminalConfig.KEY) public readonly terminal` field |
+| `apps/terminal/src/config/terminal-config.service.spec.ts` | Modified | 3 new tests: `terminal` namespace populated, `callbackUrl` defaults to `http://localhost:${PORT}`, `callbackUrl` reads from `MCP_CALLBACK_URL`, invalid URL rejected by Zod |
+| `apps/terminal/src/connection/mcp-client.service.ts` | Modified | `register()` reads `this.config.terminal.callbackUrl` instead of hardcoded `http://localhost:${port}` |
+| `apps/terminal/src/connection/mcp-client.service.spec.ts` | Modified | Added `terminal: { callbackUrl: 'http://terminal:3001' }` to mock config. Registration assertion updated from `http://localhost:3001` to `http://terminal:3001` |
+| `.env.example` | Modified | Added `ANTHROPIC_MAX_TOKENS`, logging section (`LOG_LEVEL`, `LOG_JSON_DIR`, `LOG_CONSOLE`), Docker Compose section with guidance comments. Removed `DEVELOPER_COUNT` (no longer referenced by compose) |
+| `docs/system-design.md` | Modified | Updated "NestJS Monorepo Structure" — removed per-app Dockerfiles, added root `Dockerfile`, updated directory trees to reflect actual module structure. Updated "Docker Compose Configuration" — shows `x-shared-env` anchor, unified Dockerfile with build args, `healthcheck`, `service_healthy` ordering, QRM1 scope note. Updated "Network Communication" — agents all on port 3002 with Docker hostnames, bidirectional arrows showing MCP server POST /invoke delivery |
+
+### Deviations from Ticket Spec
+
+- **`mcp-server` uses `x-shared-env` anchor.** The ticket's design context shows `x-shared-env` as "environment variables common to terminal and agents" with the MCP server setting `LOG_JSON_DIR` and `LOG_LEVEL` separately. The implementation gives `mcp-server` the full `<<: *shared-env` merge. Rationale: the MCP server will need `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` when LLM-powered context summarization is added (future enhancement noted in `docs/context-store.md`). Passing unused env vars has no side effects, and it eliminates the env duplication asymmetry.
+
+- **`npx nest build` instead of `npm run build`.** The ticket notes this in its design but the original Dockerfiles used `npm run build agent`. Changed to `npx nest build ${APP_NAME}` because `npm run build` requires `--` to forward the app name argument, and the behavior varies across npm versions. `npx nest build` accepts the app name as a direct positional argument, making the build-arg substitution explicit and reliable.
+
+- **No `EXPOSE` in Dockerfile.** The ticket design context mentions `EXPOSE` as a build arg ("purely documentary, but useful for `docker compose ps` output"). The implementation omits it entirely — each app's port is set via `PORT` env var in compose, and `EXPOSE` has no functional effect. Omitting it avoids the complexity of a second build arg for a purely documentary directive.
+
+### Post-Review Fixes
+
+- **`mcp-server` switched to `x-shared-env`.** Original commit had `mcp-server` with manually duplicated `LOG_JSON_DIR` and `LOG_LEVEL`. Changed to `<<: *shared-env` merge for forward-compatibility with planned MCP server LLM integration.
+
+- **Removed unused `DEVELOPER_COUNT` from `.env.example`.** The old compose used `deploy.replicas: ${DEVELOPER_COUNT:-1}` but the new compose doesn't reference it. Removed to avoid confusion.
+
+- **Added missing Zod rejection test.** The ticket spec's testing strategy required "Invalid URL rejected by Zod validation" but the original commit omitted it. Added test confirming `z.string().url()` rejects `'not-a-url'`.
+
+- **Updated `docs/system-design.md`.** Three sections were stale after the Docker overhaul: (1) "NestJS Monorepo Structure" still showed per-app Dockerfiles, (2) "Docker Compose Configuration" showed the old `version: '3.8'` structure with `qa`/`productowner`, (3) "Network Communication" diagram showed unique ports per agent (3002–3006) instead of the actual shared port 3002 with Docker hostname disambiguation. All three updated to match the implementation.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 251 tests passing (4 new + 247 existing, 0 regressions)
 
 ## Dependencies and References
 

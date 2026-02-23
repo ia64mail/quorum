@@ -264,115 +264,95 @@ This transforms context from "push everything" to "store decisions, query as nee
 quorum/
 ├── package.json                 # Root workspace config
 ├── nest-cli.json                # NestJS monorepo config
+├── Dockerfile                   # Unified multi-stage build (APP_NAME build arg)
 ├── docker-compose.yml           # Container orchestration
 │
 ├── apps/
 │   ├── terminal/                # Terminal App
-│   │   ├── Dockerfile
 │   │   ├── src/
 │   │   │   ├── main.ts
 │   │   │   ├── app.module.ts
-│   │   │   ├── ui/              # Console UI components
-│   │   │   └── moderator/       # Moderator LLM integration
+│   │   │   ├── chat/            # Interactive chat loop
+│   │   │   ├── config/          # Terminal-specific config (callbackUrl)
+│   │   │   ├── connection/      # MCP client, registration
+│   │   │   └── llm/             # Anthropic service
 │   │   └── tsconfig.app.json
 │   │
 │   ├── mcp-server/              # MCP Server
-│   │   ├── Dockerfile
 │   │   ├── src/
 │   │   │   ├── main.ts
-│   │   │   ├── app.module.ts
+│   │   │   ├── mcp-server.module.ts
+│   │   │   ├── config/          # Server-specific config
+│   │   │   ├── health/          # GET /health endpoint
+│   │   │   ├── mcp/             # MCP protocol (tools, resources)
 │   │   │   ├── registry/        # Agent registry
-│   │   │   └── messaging/       # Message routing
+│   │   │   ├── messaging/       # Message broker
+│   │   │   └── context-store/   # In-memory context store
 │   │   └── tsconfig.app.json
 │   │
 │   └── agent/                   # Agent App (single image, multi-role)
-│       ├── Dockerfile
 │       ├── src/
 │       │   ├── main.ts
-│       │   ├── app.module.ts
-│       │   ├── roles/           # Role-specific configurations
-│       │   └── claude/          # Claude Code CLI integration
+│       │   ├── agent.module.ts
+│       │   ├── config/          # Agent-specific config (role, callbackUrl)
+│       │   ├── connection/      # MCP client, invocation handler
+│       │   ├── llm/             # Anthropic service
+│       │   └── prompts/         # Role prompt system
 │       └── tsconfig.app.json
 │
 └── libs/
-    ├── common/                  # Shared types, utilities
-    ├── mcp-client/              # MCP client library
-    └── mcp-protocol/            # MCP protocol definitions
+    └── common/                  # Shared types, config, prompts, LLM utilities
 ```
 
 ## Docker Compose Configuration
 
+All apps share a single `Dockerfile` at the project root, parameterized by `APP_NAME` build arg. A `x-shared-env` YAML anchor provides common environment variables (Anthropic API, MCP server URL, logging) inherited by all services.
+
 ```yaml
-# Conceptual docker-compose.yml structure
-version: '3.8'
+x-shared-env: &shared-env
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
+  ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-4096}
+  MCP_SERVER_URL: http://mcp-server:3000
+  LOG_JSON_DIR: /app/logs
+  LOG_LEVEL: ${LOG_LEVEL:-log}
 
 services:
-  terminal:
-    build: ./apps/terminal
-    stdin_open: true
-    tty: true
-    depends_on:
-      - mcp-server
-    environment:
-      - MCP_SERVER_URL=http://mcp-server:3000
-
   mcp-server:
-    build: ./apps/mcp-server
-    ports:
-      - "3000:3000"
-
-  architect:
-    build: ./apps/agent
+    build:
+      context: .
+      args: { APP_NAME: mcp-server }
     environment:
-      - AGENT_ROLE=architect
-      - MCP_SERVER_URL=http://mcp-server:3000
-    volumes:
-      - ${WORKSPACE_PATH}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
+      <<: *shared-env
+      PORT: 3000
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health')...\""]
+    volumes: [quorum-logs:/app/logs]
 
-  teamlead:
-    build: ./apps/agent
-    environment:
-      - AGENT_ROLE=teamlead
-      - MCP_SERVER_URL=http://mcp-server:3000
-    volumes:
-      - ${WORKSPACE_PATH}:/mnt/quorum/workspace
+  terminal:
+    build:
+      context: .
+      args: { APP_NAME: terminal }
     depends_on:
-      - mcp-server
+      mcp-server: { condition: service_healthy }
+    environment:
+      <<: *shared-env
+      PORT: 3001
+      MCP_CALLBACK_URL: http://terminal:3001
+    volumes: [quorum-logs:/app/logs]
 
-  developer:
-    build: ./apps/agent
-    environment:
-      - AGENT_ROLE=developer
-      - MCP_SERVER_URL=http://mcp-server:3000
-    volumes:
-      - ${WORKSPACE_PATH}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
-    deploy:
-      replicas: ${DEVELOPER_COUNT:-1}
+  architect:  # APP_NAME: agent, AGENT_ROLE: architect
+  teamlead:   # APP_NAME: agent, AGENT_ROLE: teamlead
+  developer:  # APP_NAME: agent, AGENT_ROLE: developer
+    # Each: depends_on mcp-server (service_healthy), shared-env,
+    #        PORT: 3002, AGENT_CALLBACK_URL: http://{service}:3002,
+    #        workspace + log volumes
 
-  qa:
-    build: ./apps/agent
-    environment:
-      - AGENT_ROLE=qa
-      - MCP_SERVER_URL=http://mcp-server:3000
-    volumes:
-      - ${WORKSPACE_PATH}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
-
-  productowner:
-    build: ./apps/agent
-    environment:
-      - AGENT_ROLE=productowner
-      - MCP_SERVER_URL=http://mcp-server:3000
-    volumes:
-      - ${WORKSPACE_PATH}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
+volumes:
+  quorum-logs:
 ```
+
+QRM1 scope includes 5 services: mcp-server, terminal, architect, teamlead, developer. Additional roles (qa, productowner) will be added in QRM2.
 
 ## Key Design Decisions
 
@@ -388,24 +368,25 @@ services:
 
 ## Network Communication
 
+Each agent container runs on port 3002 in its own network namespace. Docker hostnames (`architect`, `teamlead`, `developer`) disambiguate them on `quorum-net`. The MCP server uses each agent's `AGENT_CALLBACK_URL` (e.g., `http://architect:3002`) to deliver invocations.
+
 ```mermaid
 graph LR
     subgraph "Docker Network: quorum-net"
         T[terminal:3001]
         M[mcp-server:3000]
         A1[architect:3002]
-        A2[teamlead:3003]
-        A3[developer:3004]
-        A4[qa:3005]
-        A5[productowner:3006]
+        A2[teamlead:3002]
+        A3[developer:3002]
     end
 
-    T -->|HTTP/WebSocket| M
-    A1 -->|HTTP/WebSocket| M
-    A2 -->|HTTP/WebSocket| M
-    A3 -->|HTTP/WebSocket| M
-    A4 -->|HTTP/WebSocket| M
-    A5 -->|HTTP/WebSocket| M
+    T -->|Streamable HTTP| M
+    A1 -->|Streamable HTTP| M
+    A2 -->|Streamable HTTP| M
+    A3 -->|Streamable HTTP| M
+    M -->|POST /invoke| A1
+    M -->|POST /invoke| A2
+    M -->|POST /invoke| A3
 ```
 
 ## Future Considerations

@@ -16,9 +16,8 @@ services:
     ports:
       - "3000:3000"
     environment:
+      <<: *shared-env
       PORT: 3000
-      LOG_JSON_DIR: /app/logs
-      LOG_LEVEL: ${LOG_LEVEL:-log}
     volumes:
       - quorum-logs:/app/logs
     healthcheck:

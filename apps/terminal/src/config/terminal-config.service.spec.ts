@@ -75,6 +75,16 @@ describe('TerminalConfigService', () => {
     expect(service.terminal.callbackUrl).toBe('http://localhost:3001');
   });
 
+  it('should reject invalid callbackUrl', async () => {
+    process.env.MCP_CALLBACK_URL = 'not-a-url';
+
+    await expect(
+      Test.createTestingModule({
+        imports: [TerminalConfigModule],
+      }).compile(),
+    ).rejects.toThrow();
+  });
+
   it('should read callbackUrl from MCP_CALLBACK_URL env var', async () => {
     process.env.MCP_CALLBACK_URL = 'http://terminal:3001';
 
