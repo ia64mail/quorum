@@ -118,14 +118,17 @@ The terminal app functions as the moderator — the user-facing entry point to t
 **Depends on:** QRM1-007, QRM1-009
 
 ### QRM1-011 — Docker Containerization
-Package all apps into containers and orchestrate with Docker Compose.
+Package all apps into production-ready containers and orchestrate with Docker Compose. Consolidate per-app Dockerfiles into a single parameterized `Dockerfile` at project root. Add health endpoint to MCP server for readiness gating. Scope compose services to QRM1's four agents.
 
-- Multi-stage Dockerfile (build + runtime) shared across apps
-- Update `docker-compose.yml`: build contexts, health checks, startup ordering
-- MCP server starts first (`healthcheck`), agents wait with `depends_on: condition: service_healthy`
-- Environment variable pass-through: `ANTHROPIC_API_KEY`, `AGENT_ROLE`, `MCP_SERVER_URL`
+- Single `Dockerfile` at project root with `APP_NAME` build arg, replacing three per-app Dockerfiles
+- `GET /health` endpoint on MCP server (`HealthController` + `HealthModule`)
+- `docker-compose.yml` overhaul: healthcheck on mcp-server, `depends_on: condition: service_healthy`, YAML anchors for shared env
+- Environment variable pass-through: `ANTHROPIC_API_KEY`, `AGENT_ROLE`, `MCP_SERVER_URL`, `PORT`, `AGENT_CALLBACK_URL`, `LOG_JSON_DIR`, `LOG_LEVEL`
+- `AGENT_CALLBACK_URL` per agent using Docker hostnames (`http://{service}:3002`)
+- Terminal `MCP_CALLBACK_URL` config field (overrides hardcoded `localhost` for Docker)
+- Named `quorum-logs` volume mounted at `/app/logs` across all containers
+- Remove `qa` and `productowner` services (QRM2 scope)
 - Network: all containers on `quorum-net`, agents resolve `mcp-server` by hostname
-- Shared log volume for JSON log files across all containers
 
 **Depends on:** QRM1-010
 
