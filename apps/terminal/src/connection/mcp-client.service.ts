@@ -92,17 +92,16 @@ export class McpClientService implements OnApplicationShutdown {
   // ---------------------------------------------------------------------------
 
   private async register(): Promise<void> {
+    const callbackUrl = this.config.terminal.callbackUrl;
     await this.client.callTool({
       name: 'register_agent',
       arguments: {
         role: 'moderator',
-        callbackUrl: `http://localhost:${this.config.app.port}`,
+        callbackUrl,
       },
     });
     this.registered = true;
-    this.logger.log(
-      `Registered as moderator at http://localhost:${this.config.app.port}`,
-    );
+    this.logger.log(`Registered as moderator at ${callbackUrl}`);
   }
 
   private async unregister(): Promise<void> {

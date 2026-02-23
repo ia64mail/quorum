@@ -27,6 +27,7 @@ describe('TerminalConfigService', () => {
     expect(service.app).toBeDefined();
     expect(service.anthropic).toBeDefined();
     expect(service.mcp).toBeDefined();
+    expect(service.terminal).toBeDefined();
   });
 
   it('should have non-nullable app properties', async () => {
@@ -59,5 +60,30 @@ describe('TerminalConfigService', () => {
     const service = module.get<TerminalConfigService>(TerminalConfigService);
 
     expect(typeof service.mcp.serverUrl).toBe('string');
+  });
+
+  it('should default callbackUrl to http://localhost:${PORT}', async () => {
+    process.env.PORT = '3001';
+    delete process.env.MCP_CALLBACK_URL;
+
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [TerminalConfigModule],
+    }).compile();
+
+    const service = module.get<TerminalConfigService>(TerminalConfigService);
+
+    expect(service.terminal.callbackUrl).toBe('http://localhost:3001');
+  });
+
+  it('should read callbackUrl from MCP_CALLBACK_URL env var', async () => {
+    process.env.MCP_CALLBACK_URL = 'http://terminal:3001';
+
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [TerminalConfigModule],
+    }).compile();
+
+    const service = module.get<TerminalConfigService>(TerminalConfigService);
+
+    expect(service.terminal.callbackUrl).toBe('http://terminal:3001');
   });
 });

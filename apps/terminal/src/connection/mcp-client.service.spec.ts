@@ -53,6 +53,7 @@ const mockConfig = {
     model: 'claude-sonnet-4-5-20250929',
     maxTokens: 4096,
   },
+  terminal: { callbackUrl: 'http://terminal:3001' },
 };
 
 // ---------------------------------------------------------------------------
@@ -93,7 +94,7 @@ describe('McpClientService', () => {
         name: 'register_agent',
         arguments: {
           role: 'moderator',
-          callbackUrl: 'http://localhost:3001',
+          callbackUrl: 'http://terminal:3001',
         },
       });
       expect(mockListTools).toHaveBeenCalledTimes(1);

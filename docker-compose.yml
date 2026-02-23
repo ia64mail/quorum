@@ -1,97 +1,117 @@
-version: '3.8'
+x-shared-env: &shared-env
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
+  ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-4096}
+  MCP_SERVER_URL: http://mcp-server:3000
+  LOG_JSON_DIR: /app/logs
+  LOG_LEVEL: ${LOG_LEVEL:-log}
 
 services:
-  terminal:
-    build:
-      context: .
-      dockerfile: apps/terminal/Dockerfile
-    stdin_open: true
-    tty: true
-    depends_on:
-      - mcp-server
-    environment:
-      - MCP_SERVER_URL=http://mcp-server:3000
-    networks:
-      - quorum-net
-
   mcp-server:
     build:
       context: .
-      dockerfile: apps/mcp-server/Dockerfile
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: mcp-server
     ports:
       - "3000:3000"
+    environment:
+      PORT: 3000
+      LOG_JSON_DIR: /app/logs
+      LOG_LEVEL: ${LOG_LEVEL:-log}
+    volumes:
+      - quorum-logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - quorum-net
+
+  terminal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: terminal
+    stdin_open: true
+    tty: true
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    environment:
+      <<: *shared-env
+      PORT: 3001
+      MCP_CALLBACK_URL: http://terminal:3001
+    volumes:
+      - quorum-logs:/app/logs
     networks:
       - quorum-net
 
   architect:
     build:
       context: .
-      dockerfile: apps/agent/Dockerfile
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: agent
+    depends_on:
+      mcp-server:
+        condition: service_healthy
     environment:
-      - AGENT_ROLE=architect
-      - MCP_SERVER_URL=http://mcp-server:3000
+      <<: *shared-env
+      PORT: 3002
+      AGENT_ROLE: architect
+      AGENT_CALLBACK_URL: http://architect:3002
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
+      - quorum-logs:/app/logs
     networks:
       - quorum-net
 
   teamlead:
     build:
       context: .
-      dockerfile: apps/agent/Dockerfile
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: agent
+    depends_on:
+      mcp-server:
+        condition: service_healthy
     environment:
-      - AGENT_ROLE=teamlead
-      - MCP_SERVER_URL=http://mcp-server:3000
+      <<: *shared-env
+      PORT: 3002
+      AGENT_ROLE: teamlead
+      AGENT_CALLBACK_URL: http://teamlead:3002
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
+      - quorum-logs:/app/logs
     networks:
       - quorum-net
 
   developer:
     build:
       context: .
-      dockerfile: apps/agent/Dockerfile
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: agent
+    depends_on:
+      mcp-server:
+        condition: service_healthy
     environment:
-      - AGENT_ROLE=developer
-      - MCP_SERVER_URL=http://mcp-server:3000
+      <<: *shared-env
+      PORT: 3002
+      AGENT_ROLE: developer
+      AGENT_CALLBACK_URL: http://developer:3002
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
+      - quorum-logs:/app/logs
     networks:
       - quorum-net
 
-  qa:
-    build:
-      context: .
-      dockerfile: apps/agent/Dockerfile
-    environment:
-      - AGENT_ROLE=qa
-      - MCP_SERVER_URL=http://mcp-server:3000
-    volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
-    networks:
-      - quorum-net
-
-  productowner:
-    build:
-      context: .
-      dockerfile: apps/agent/Dockerfile
-    environment:
-      - AGENT_ROLE=productowner
-      - MCP_SERVER_URL=http://mcp-server:3000
-    volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
-    depends_on:
-      - mcp-server
-    networks:
-      - quorum-net
+volumes:
+  quorum-logs:
 
 networks:
   quorum-net:
