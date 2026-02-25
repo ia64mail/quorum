@@ -18,6 +18,7 @@ services:
     environment:
       <<: *shared-env
       PORT: 3000
+      ENABLE_TEST_ENDPOINTS: "true"
     volumes:
       - quorum-logs:/app/logs
     healthcheck:
