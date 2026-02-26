@@ -260,3 +260,32 @@ docker compose down -v
 | 6. Depth Limit | Deterministic | `Max call depth (5) exceeded` |
 | 7. Circular Call | Live LLM | Circular call rejected (non-deterministic) |
 | 8. Log Correlation | Deterministic | Correlation IDs in cross-service logs |
+
+---
+
+## Run 1 — 2026-02-25
+
+### Pre-run fixes applied
+
+1. **`McpServerConfigModule` not global** — `McpServerConfigService` was only exported from `McpServerConfigModule`, not marked `@Global()`. Modules like `MessagingModule` and `McpModule` that inject it via `MessageBroker` / `McpService` failed with NestJS dependency resolution errors. Fixed by adding `@Global()` decorator to `McpServerConfigModule`.
+
+### Results
+
+| Scenario | Result | Notes |
+|----------|--------|-------|
+| 1. Service Health | **PASS** | `{"status":"ok"}` |
+| 2. Agent Registration | **BLOCKED** | `{"agents":[]}` — 0 agents registered |
+| 3–8 | **NOT RUN** | Blocked by Scenario 2 failure |
+
+### Blocking bug
+
+All 4 agents fail to connect to the MCP server with:
+
+```
+Error: Already connected to a transport. Call close() before connecting to a new
+transport, or use a separate Protocol instance per connection.
+```
+
+`McpService` uses a single `McpServer` instance for all sessions. The MCP SDK enforces one transport per `McpServer`. The first agent connection succeeds but all subsequent ones are rejected with HTTP 500.
+
+**Tracked in:** [QRM1-BUG-001](QRM1-BUG-001-mcp-server-single-transport.md)

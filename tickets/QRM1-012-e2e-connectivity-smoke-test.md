@@ -62,7 +62,7 @@ Scenarios split into deterministic (crafted HTTP, no LLM) and live LLM (require 
 |----------|-------------|
 | `GET /registry` endpoint on MCP server | Auth/access control on endpoints |
 | `POST /test/invoke` gated test endpoint | Automated CI integration test suite |
-| Smoke test runbook (`docs/smoke-test-runbook.md`) | Scripted test harness or test framework |
+| Smoke test runbook (`tickets/QRM1-013-smoke-test-runbook.md`) | Scripted test harness or test framework |
 | `ENABLE_TEST_ENDPOINTS` env var gating | Production deployment hardening |
 | Unit tests for new controllers | Load testing or performance benchmarks |
 | Docker Compose env var addition | Additional Docker Compose service changes |
@@ -83,7 +83,7 @@ New module directory with `TestController`, `TestModule`, and barrel export. `Te
 
 Added `ENABLE_TEST_ENDPOINTS: "true"` to the mcp-server service environment block. No other compose changes.
 
-### 4. Smoke Test Runbook — `docs/smoke-test-runbook.md`
+### 4. Smoke Test Runbook — `tickets/QRM1-013-smoke-test-runbook.md`
 
 Eight sequential verification scenarios covering health, registration, invocation, context store relay, three broker safeguards, and log correlation. Includes prerequisites, expected outputs, and a result summary table.
 
@@ -96,7 +96,7 @@ Eight sequential verification scenarios covering health, registration, invocatio
 - [ ] `TestController` has unit tests
 - [ ] `TestModule` only loaded when `ENABLE_TEST_ENDPOINTS=true`
 - [ ] `docker-compose.yml` sets `ENABLE_TEST_ENDPOINTS=true` for mcp-server
-- [ ] `docs/smoke-test-runbook.md` covers all 8 scenarios
+- [ ] `tickets/QRM1-013-smoke-test-runbook.md` covers all 8 scenarios
 - [ ] `npm run build` succeeds
 - [ ] `npm run lint` passes
 - [ ] `npm run test` passes (all existing + new tests)
@@ -121,7 +121,7 @@ Eight sequential verification scenarios covering health, registration, invocatio
 | `apps/mcp-server/src/testing/index.ts` | Created | Barrel export for `TestController` and `TestModule` |
 | `apps/mcp-server/src/mcp-server.module.ts` | Modified | Conditional `TestModule` import when `ENABLE_TEST_ENDPOINTS=true` |
 | `docker-compose.yml` | Modified | Added `ENABLE_TEST_ENDPOINTS: "true"` to mcp-server environment |
-| `docs/smoke-test-runbook.md` | Created | 8 scenarios: health, registration, single-hop invocation, context store relay, unavailable role, depth limit, circular call, log correlation |
+| `tickets/QRM1-013-smoke-test-runbook.md` | Created | 8 scenarios: health, registration, single-hop invocation, context store relay, unavailable role, depth limit, circular call, log correlation |
 
 ## Dependencies and References
 
@@ -135,6 +135,6 @@ Eight sequential verification scenarios covering health, registration, invocatio
 - QRM1 milestone completion — this ticket provides the final verification
 
 ### References
-- [docs/smoke-test-runbook.md](../docs/smoke-test-runbook.md) — The runbook produced by this ticket
+- [tickets/QRM1-013-smoke-test-runbook.md](QRM1-013-smoke-test-runbook.md) — The runbook produced by this ticket
 - [docs/system-design.md](../docs/system-design.md) — Overall architecture, container topology
 - [docs/message-broker.md](../docs/message-broker.md) — Broker safeguards (depth, circular, availability, timeout)
