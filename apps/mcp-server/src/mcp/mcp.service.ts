@@ -52,31 +52,38 @@ export class McpService implements OnModuleInit {
   }
 
   onModuleInit(): void {
-    this.registerInvokeAgentTool();
-    this.registerRegisterAgentTool();
-    this.registerUnregisterAgentTool();
-    this.registerContextStoreTool();
-    this.registerContextQueryTool();
-    this.registerContextSummarizeTool();
-    this.registerContextStatsTool();
-    this.registerProjectResource();
-    this.registerConversationResource();
+    this.registerTools(this.server);
     this.logger.log('MCP tools and resources registered');
   }
 
-  /** Attach the MCP server to a transport (one per client session). */
+  /** Attach a **new** MCP server instance to a transport (one per client session). */
   async connect(transport: Transport): Promise<void> {
-    await this.server.connect(transport);
+    const session = new McpServer({ name: 'quorum', version: '0.1.0' });
+    this.registerTools(session);
+    await session.connect(transport);
+  }
+
+  /** Register all tools and resources on the given server instance. */
+  private registerTools(server: McpServer): void {
+    this.registerInvokeAgentTool(server);
+    this.registerRegisterAgentTool(server);
+    this.registerUnregisterAgentTool(server);
+    this.registerContextStoreTool(server);
+    this.registerContextQueryTool(server);
+    this.registerContextSummarizeTool(server);
+    this.registerContextStatsTool(server);
+    this.registerProjectResource(server);
+    this.registerConversationResource(server);
   }
 
   // ---------------------------------------------------------------------------
   // Tools
   // ---------------------------------------------------------------------------
 
-  private registerInvokeAgentTool(): void {
+  private registerInvokeAgentTool(server: McpServer): void {
     const agentRoleValues = Object.values(AgentRole) as [string, ...string[]];
 
-    this.server.registerTool(
+    server.registerTool(
       'invoke_agent',
       {
         description: 'Invoke another agent through the message broker',
@@ -141,8 +148,8 @@ export class McpService implements OnModuleInit {
     );
   }
 
-  private registerRegisterAgentTool(): void {
-    this.server.registerTool(
+  private registerRegisterAgentTool(server: McpServer): void {
+    server.registerTool(
       'register_agent',
       {
         description:
@@ -176,8 +183,8 @@ export class McpService implements OnModuleInit {
     );
   }
 
-  private registerUnregisterAgentTool(): void {
-    this.server.registerTool(
+  private registerUnregisterAgentTool(server: McpServer): void {
+    server.registerTool(
       'unregister_agent',
       {
         description: 'Unregister an agent from the registry',
@@ -202,11 +209,11 @@ export class McpService implements OnModuleInit {
     );
   }
 
-  private registerContextStoreTool(): void {
+  private registerContextStoreTool(server: McpServer): void {
     const scopeValues = Object.values(ContextScope) as [string, ...string[]];
     const agentRoleValues = Object.values(AgentRole) as [string, ...string[]];
 
-    this.server.registerTool(
+    server.registerTool(
       'context_store',
       {
         description: 'Store a context item in the shared context store',
@@ -267,10 +274,10 @@ export class McpService implements OnModuleInit {
     );
   }
 
-  private registerContextQueryTool(): void {
+  private registerContextQueryTool(server: McpServer): void {
     const scopeValues = Object.values(ContextScope) as [string, ...string[]];
 
-    this.server.registerTool(
+    server.registerTool(
       'context_query',
       {
         description: 'Query the context store by keys, search, or get-all',
@@ -333,8 +340,8 @@ export class McpService implements OnModuleInit {
     );
   }
 
-  private registerContextSummarizeTool(): void {
-    this.server.registerTool(
+  private registerContextSummarizeTool(server: McpServer): void {
+    server.registerTool(
       'context_summarize',
       {
         description: 'Summarize conversation context by truncation (POC)',
@@ -420,10 +427,10 @@ export class McpService implements OnModuleInit {
     );
   }
 
-  private registerContextStatsTool(): void {
+  private registerContextStatsTool(server: McpServer): void {
     const scopeValues = Object.values(ContextScope) as [string, ...string[]];
 
-    this.server.registerTool(
+    server.registerTool(
       'context_stats',
       {
         description: 'Get aggregate statistics for stored context',
@@ -459,8 +466,8 @@ export class McpService implements OnModuleInit {
   // TODO: Wire ContextStore change events (@OnEvent('context.change')) to MCP
   // notifications/resources/updated so subscribed clients get real-time updates.
 
-  private registerProjectResource(): void {
-    this.server.registerResource(
+  private registerProjectResource(server: McpServer): void {
+    server.registerResource(
       'project-context',
       'context://project',
       { description: 'All project-scoped context items' },
@@ -479,13 +486,13 @@ export class McpService implements OnModuleInit {
     );
   }
 
-  private registerConversationResource(): void {
+  private registerConversationResource(server: McpServer): void {
     const template = new ResourceTemplate(
       'context://conversation/{correlationId}',
       { list: undefined },
     );
 
-    this.server.registerResource(
+    server.registerResource(
       'conversation-context',
       template,
       { description: 'All context items for a conversation' },

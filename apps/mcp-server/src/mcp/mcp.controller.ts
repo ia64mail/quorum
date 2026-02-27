@@ -53,6 +53,10 @@ export class McpController {
 
     await this.mcpService.connect(transport);
 
+    // handleRequest processes the initialize message and generates the session ID
+    await transport.handleRequest(req, res, req.body);
+
+    // Session ID is only available after handleRequest has processed the initialize request
     const newSessionId = transport.sessionId;
     if (newSessionId) {
       this.sessions.set(newSessionId, transport);
@@ -66,8 +70,6 @@ export class McpController {
         this.logger.log(`Session closed: ${newSessionId}`);
       }
     };
-
-    await transport.handleRequest(req, res, req.body);
 
     // TODO: idle timeout cleanup for sessions
   }

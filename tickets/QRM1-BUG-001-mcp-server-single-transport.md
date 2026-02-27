@@ -52,15 +52,42 @@ connect(transport):
 |------|--------|
 | `apps/mcp-server/src/mcp/mcp.service.ts` | Extract `registerTools(server)`, change all `registerXxx()` methods to accept a server param, create per-session server in `connect()` |
 
-No changes needed to `McpController` — its per-session transport management is already correct.
+### Fix session registration ordering in `McpController`
+
+Discovered during implementation: `McpController.handlePost()` read `transport.sessionId` **before** calling `transport.handleRequest()`. The `StreamableHTTPServerTransport` only generates its session ID during `handleRequest` (when processing the `initialize` message), so `transport.sessionId` was always `undefined` at the point it was read. The session was never stored in the `sessions` map, causing all subsequent requests with an `mcp-session-id` header to 404 with "Session not found".
+
+Fix: move `transport.handleRequest()` **before** reading `transport.sessionId` and registering the session in the map.
+
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/mcp/mcp.controller.ts` | Move `handleRequest()` before session ID read and map registration |
 
 ## Acceptance Criteria
 
-- [ ] `McpService.connect()` creates a new `McpServer` per session instead of reusing the singleton
-- [ ] Tool/resource registration is extracted into a reusable `registerTools(server)` method
-- [ ] Existing `service.server` field preserved for test compatibility
-- [ ] `npm run test` passes (all 258 existing tests)
-- [ ] `docker compose up` succeeds with all 4 agents registering (verified via `GET /registry`)
+- [x] `McpService.connect()` creates a new `McpServer` per session instead of reusing the singleton
+- [x] Tool/resource registration is extracted into a reusable `registerTools(server)` method
+- [x] Existing `service.server` field preserved for test compatibility
+- [x] `McpController` session registration happens after `handleRequest` so session ID is available
+- [x] `npm run test` passes (all 258 existing tests)
+- [x] `docker compose up` succeeds with all 4 agents registering (verified via `GET /registry`)
+
+## Implementation Notes
+
+Completed in two changes:
+
+**1. `apps/mcp-server/src/mcp/mcp.service.ts`** — Per-session `McpServer` factory
+
+- Extracted `registerTools(server: McpServer)` private method that orchestrates all tool/resource registration.
+- All nine `registerXxx()` methods now accept a `server` parameter instead of using `this.server`.
+- `connect()` creates a fresh `McpServer` instance, calls `registerTools()` on it, then connects the transport.
+- `onModuleInit()` still calls `registerTools(this.server)` so tests that access `service.server._registeredTools` continue to work.
+- Shared NestJS services (`MessageBroker`, `ContextStore`, `AgentRegistry`, `McpServerConfigService`) remain singletons — per-session servers do not fragment state.
+
+**2. `apps/mcp-server/src/mcp/mcp.controller.ts`** — Session registration ordering
+
+- Moved `transport.handleRequest(req, res, req.body)` before reading `transport.sessionId`.
+- The `StreamableHTTPServerTransport` generates its session ID inside `handleRequest` when processing the `initialize` JSON-RPC message. Reading it beforehand always returned `undefined`.
+- Without this fix, the session was never stored in the `sessions` map, so every follow-up request with `mcp-session-id` header returned 404 "Session not found".
 
 ## Dependencies and References
 
