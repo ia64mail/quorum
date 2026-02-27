@@ -289,3 +289,34 @@ transport, or use a separate Protocol instance per connection.
 `McpService` uses a single `McpServer` instance for all sessions. The MCP SDK enforces one transport per `McpServer`. The first agent connection succeeds but all subsequent ones are rejected with HTTP 500.
 
 **Tracked in:** [QRM1-BUG-001](QRM1-BUG-001-mcp-server-single-transport.md)
+
+---
+
+## Run 2 — 2026-02-27
+
+### Pre-run fixes applied
+
+1. **QRM1-BUG-001 resolved** — `McpService` now creates per-session `McpServer` instances. `McpController` session registration ordering fixed so session ID is available after `handleRequest()`.
+
+### Results
+
+| Scenario | Result | Notes |
+|----------|--------|-------|
+| 1. Service Health | **PASS** | `{"status":"ok"}` |
+| 2. Agent Registration | **FAIL** | 3/4 agents — moderator missing |
+| 3. Single-Hop Invocation | **PASS** | `success: true`, response: `SMOKE_TEST_OK` |
+| 4. Context Store Relay | **PASS** | Architect stored `QRM1-SMOKE-PASS`, developer retrieved it |
+| 5. Unavailable Role | **PASS** | `Agent qa not registered` |
+| 6. Depth Limit | **PASS** | `Max call depth (5) exceeded` |
+| 7. Circular Call | **INCONCLUSIVE** | LLM replied directly instead of self-invoking |
+| 8. Log Correlation | **PARTIAL** | Correlation IDs found in `MessageBroker` logs (scenarios 5-6) but not in `InvocationHandler` logs (scenarios 3-4) |
+
+### Bugs found
+
+**BUG-002: Moderator registration silently rejected.** The `register_agent` tool validates `role` against `DEPLOYABLE_AGENT_ROLES` which excludes `moderator`. The terminal's `McpClientService.register()` doesn't check the return value, so it logs success despite the server rejecting the request.
+
+**Tracked in:** [QRM1-BUG-002](QRM1-BUG-002-moderator-registration-rejected.md)
+
+**BUG-003: InvocationHandler doesn't log correlationId.** The handler logs `action`, `caller`, and `depth` but omits `correlationId`. Direct invocations (scenarios 3-4) have no correlation ID in any logs. Only broker-routed requests (scenarios 5-6) show correlation IDs via `MessageBroker`.
+
+**Tracked in:** [QRM1-BUG-003](QRM1-BUG-003-invocation-handler-missing-correlation-id.md)
