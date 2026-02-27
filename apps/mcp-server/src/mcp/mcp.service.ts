@@ -149,15 +149,15 @@ export class McpService implements OnModuleInit {
   }
 
   private registerRegisterAgentTool(server: McpServer): void {
+    const agentRoleValues = Object.values(AgentRole) as [string, ...string[]];
+
     server.registerTool(
       'register_agent',
       {
         description:
           'Register an agent with its callback URL for invocation delivery',
         inputSchema: {
-          role: z
-            .enum(DEPLOYABLE_AGENT_ROLES as unknown as [string, ...string[]])
-            .describe('Agent role to register'),
+          role: z.enum(agentRoleValues).describe('Agent role to register'),
           callbackUrl: z
             .string()
             .url()
@@ -184,14 +184,14 @@ export class McpService implements OnModuleInit {
   }
 
   private registerUnregisterAgentTool(server: McpServer): void {
+    const agentRoleValues = Object.values(AgentRole) as [string, ...string[]];
+
     server.registerTool(
       'unregister_agent',
       {
         description: 'Unregister an agent from the registry',
         inputSchema: {
-          role: z
-            .enum(DEPLOYABLE_AGENT_ROLES as unknown as [string, ...string[]])
-            .describe('Agent role to unregister'),
+          role: z.enum(agentRoleValues).describe('Agent role to unregister'),
         },
       },
       async (args) => {

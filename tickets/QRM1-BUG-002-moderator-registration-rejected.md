@@ -38,36 +38,53 @@ The `context_store` and `context_query` tools already use `Object.values(AgentRo
 
 ### Fix 1: Use full `AgentRole` enum in register/unregister tools
 
-In `apps/mcp-server/src/mcp/mcp.service.ts`, change both `registerRegisterAgentTool()` and `registerUnregisterAgentTool()` to validate against all `AgentRole` values instead of `DEPLOYABLE_AGENT_ROLES`:
+In `apps/mcp-server/src/mcp/mcp.service.ts`, changed both `registerRegisterAgentTool()` and `registerUnregisterAgentTool()` to validate against all `AgentRole` values instead of `DEPLOYABLE_AGENT_ROLES`:
 
 ```typescript
-role: z.enum(Object.values(AgentRole) as [string, ...string[]])
+const agentRoleValues = Object.values(AgentRole) as [string, ...string[]];
+// ...
+role: z.enum(agentRoleValues).describe('Agent role to register'),
 ```
 
-This matches the pattern already used by `context_store` and `context_query` in the same file.
+This matches the pattern already used by `context_store` and `context_query` in the same file. `DEPLOYABLE_AGENT_ROLES` is still used in `invoke_agent`'s `target` field, which is correct — only deployable agents are valid invocation targets.
 
-### Fix 2: Check `callTool` return value in terminal registration
+### Fix 2: Check `callTool` return value in terminal and agent registration
 
-In `apps/terminal/src/connection/mcp-client.service.ts`, inspect the result of `callTool` for `isError: true` and throw/log appropriately instead of unconditionally setting `this.registered = true`.
+In both `apps/terminal/src/connection/mcp-client.service.ts` and `apps/agent/src/connection/mcp-client.service.ts`:
 
-The agent app (`apps/agent/src/connection/mcp-client.service.ts`) has the same silent-failure pattern and should receive the same fix for robustness.
+- `register()` now inspects `result.isError` and throws with the serialized error content instead of unconditionally setting `this.registered = true`:
 
-### Files to modify
+  ```typescript
+  const result = await this.client.callTool({ name: 'register_agent', arguments: { ... } });
+  if (result.isError) {
+    throw new Error(`register_agent failed: ${JSON.stringify(result.content)}`);
+  }
+  ```
+
+- `unregister()` now checks `result.isError` and logs a warning (non-fatal, since the server may be shutting down concurrently).
+
+Used `JSON.stringify(result.content)` for error text extraction instead of chaining `.filter().map().join()` on the content array, to avoid `@typescript-eslint/no-unsafe-*` lint violations from the loosely-typed MCP SDK `CallToolResult`.
+
+### Files modified
 
 | File | Change |
 |------|--------|
-| `apps/mcp-server/src/mcp/mcp.service.ts` | Replace `DEPLOYABLE_AGENT_ROLES` with `Object.values(AgentRole)` in `register_agent` and `unregister_agent` Zod schemas |
-| `apps/terminal/src/connection/mcp-client.service.ts` | Check `callTool` result for errors in `register()` and `unregister()` |
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Replaced `DEPLOYABLE_AGENT_ROLES` with `Object.values(AgentRole)` in `register_agent` and `unregister_agent` Zod schemas |
+| `apps/terminal/src/connection/mcp-client.service.ts` | Check `callTool` result for `isError` in `register()` and `unregister()` |
 | `apps/agent/src/connection/mcp-client.service.ts` | Same `callTool` result check for consistency |
 
 ## Acceptance Criteria
 
-- [ ] `register_agent` accepts `role: 'moderator'` and registers it in `AgentRegistry`
-- [ ] `unregister_agent` accepts `role: 'moderator'`
-- [ ] Terminal `register()` throws or logs an error when `callTool` returns `isError: true`
-- [ ] Agent `register()` throws or logs an error when `callTool` returns `isError: true`
-- [ ] `npm run test` passes
-- [ ] `GET /registry` shows 4 agents (including moderator) after `docker compose up`
+- [x] `register_agent` accepts `role: 'moderator'` and registers it in `AgentRegistry`
+- [x] `unregister_agent` accepts `role: 'moderator'`
+- [x] Terminal `register()` throws or logs an error when `callTool` returns `isError: true`
+- [x] Agent `register()` throws or logs an error when `callTool` returns `isError: true`
+- [x] `npm run test` passes (258 tests, 29 suites)
+- [x] `GET /registry` shows 4 agents (including moderator) after `docker compose up`
+
+## Resolution
+
+**Fixed** — deployed and verified 2026-02-26. `GET /registry` confirms 4 agents: moderator, teamlead, architect, developer.
 
 ## Dependencies and References
 

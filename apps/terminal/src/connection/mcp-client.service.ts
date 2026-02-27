@@ -93,13 +93,18 @@ export class McpClientService implements OnApplicationShutdown {
 
   private async register(): Promise<void> {
     const callbackUrl = this.config.terminal.callbackUrl;
-    await this.client.callTool({
+    const result = await this.client.callTool({
       name: 'register_agent',
       arguments: {
         role: 'moderator',
         callbackUrl,
       },
     });
+    if (result.isError) {
+      throw new Error(
+        `register_agent failed: ${JSON.stringify(result.content)}`,
+      );
+    }
     this.registered = true;
     this.logger.log(`Registered as moderator at ${callbackUrl}`);
   }
@@ -107,10 +112,13 @@ export class McpClientService implements OnApplicationShutdown {
   private async unregister(): Promise<void> {
     if (!this.registered) return;
     try {
-      await this.client.callTool({
+      const result = await this.client.callTool({
         name: 'unregister_agent',
         arguments: { role: 'moderator' },
       });
+      if (result.isError) {
+        this.logger.warn('unregister_agent returned error');
+      }
       this.registered = false;
       this.logger.log('Unregistered moderator');
     } catch {

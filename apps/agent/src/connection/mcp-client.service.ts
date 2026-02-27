@@ -104,13 +104,18 @@ export class McpClientService implements OnApplicationShutdown {
   // ---------------------------------------------------------------------------
 
   private async register(): Promise<void> {
-    await this.client.callTool({
+    const result = await this.client.callTool({
       name: 'register_agent',
       arguments: {
         role: this.config.agent.role,
         callbackUrl: this.config.agent.callbackUrl,
       },
     });
+    if (result.isError) {
+      throw new Error(
+        `register_agent failed: ${JSON.stringify(result.content)}`,
+      );
+    }
     this.registered = true;
     this.logger.log(
       `Registered as ${this.config.agent.role} at ${this.config.agent.callbackUrl}`,
@@ -120,10 +125,13 @@ export class McpClientService implements OnApplicationShutdown {
   private async unregister(): Promise<void> {
     if (!this.registered) return;
     try {
-      await this.client.callTool({
+      const result = await this.client.callTool({
         name: 'unregister_agent',
         arguments: { role: this.config.agent.role },
       });
+      if (result.isError) {
+        this.logger.warn('unregister_agent returned error');
+      }
       this.registered = false;
       this.logger.log(`Unregistered ${this.config.agent.role}`);
     } catch {
