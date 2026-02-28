@@ -2,16 +2,19 @@
 
 ## Goal
 
-Replace the raw Anthropic SDK tool loop in agents with the **Claude Code Agent SDK** as the agent runtime. Each agent's `InvocationHandler` becomes a Claude Code session with role-scoped permissions — giving agents real filesystem access, code editing, bash execution, and git operations against a shared workspace, while retaining the existing MCP-based orchestration layer for inter-agent communication.
+Replace the raw Anthropic SDK tool loop in agents with the **Claude Code Agent SDK** (`@anthropic-ai/claude-agent-sdk`) as the agent runtime. Each agent's `InvocationHandler` becomes a Claude Code session with role-scoped permissions — giving agents real filesystem access, code editing, bash execution, and git operations against a shared workspace, while retaining the existing MCP-based orchestration layer for inter-agent communication.
 
-QRM1 proved the communication infrastructure works. QRM2 makes agents **capable of real work** — they stop being brains in jars and start reading, writing, and testing actual code.
+Additionally, harden agent containers so they protect the host machine: non-root execution, dropped capabilities, read-only root filesystem, and no privilege escalation paths. Claude Code runs without superuser privileges, using only pre-installed tools.
+
+QRM1 proved the communication infrastructure works. QRM2 makes agents **capable of real work** — they stop being brains in jars and start reading, writing, and testing actual code, inside locked-down containers.
 
 ## Success Criteria
 
-- Agents use `@anthropic-ai/claude-code` SDK as their processing engine instead of direct `@anthropic-ai/sdk` `messages.create()` calls
-- Each agent receives role-appropriate tool permissions (developer gets `Write`/`Edit`/`Bash`; architect gets `Read`/`Glob`/`Grep` only; teamlead gets read + limited write for ticket files)
-- MCP tools (`invoke_agent`, `context_store`, `context_query`) are injected as custom tools into the Claude Code session so agents retain orchestration capabilities
+- Agents use `@anthropic-ai/claude-agent-sdk` `query()` as their processing engine instead of direct `@anthropic-ai/sdk` `messages.create()` calls
+- **Every agent** (developer, architect, teamlead, qa) receives Claude Code with role-appropriate tool permissions — even read-heavy roles like architect benefit from CC's code intelligence
+- MCP tools (`invoke_agent`, `context_store`, `context_query`, `context_summarize`, `context_stats`) are injected as custom tools into the Claude Code session via `createSdkMcpServer()` so agents retain orchestration capabilities
 - Agents operate on a shared workspace volume (`/mnt/quorum/workspace`) mounted from the host
+- Agent containers run as non-root user with dropped capabilities, read-only rootfs, and `no-new-privileges` — Claude Code cannot escalate privileges or access the host beyond designated volumes
 - A moderator-initiated task produces observable code changes in the workspace (file created/modified, tests run)
 
 ## Scope Exclusions
@@ -21,17 +24,62 @@ QRM1 proved the communication infrastructure works. QRM2 makes agents **capable 
 - Production context store (InMemoryStore remains sufficient)
 - CI/CD pipeline integration
 - Multi-repo or multi-workspace support
-- Agent sandboxing beyond Claude Code's built-in permission model
 
 ---
 
 ## Milestone Scope
 
-Ticket breakdown to be elaborated in future sessions. Expected areas:
+### QRM2-001 — Docker Agent Image: Toolchain & Hardening
+Rebuild the agent container image with all tools Claude Code needs (git, ripgrep, bash, curl) and harden against host exposure: non-root user, dropped capabilities, read-only rootfs, tmpfs mounts, network restrictions.
 
-- **SDK integration layer** — wrap `@anthropic-ai/claude-code` in a NestJS-compatible service that replaces `AnthropicService` + tool loop in `InvocationHandler`
-- **Permission profiles** — per-role tool allowlists and `allowedCommands` configuration
-- **Custom tool bridge** — adapter that exposes MCP tools (`invoke_agent`, `context_*`) as Claude Code custom tools so the SDK session can call them
-- **Workspace configuration** — shared volume setup, working directory management, concurrent access considerations
-- **Prompt adaptation** — update role prompt templates to account for Claude Code's built-in capabilities (agents no longer need instructions about tools they can't use)
-- **Terminal moderator** — evaluate whether the terminal's `ChatService` also migrates to Claude Code SDK or remains as-is (it already works and doesn't need filesystem access)
+**Depends on:** —
+
+### QRM2-002 — Claude Code SDK Service Layer
+Install `@anthropic-ai/claude-agent-sdk` and create a NestJS-compatible `ClaudeCodeService` wrapping the SDK's `query()` function. Replaces `AnthropicService` as the agent's LLM engine, handling streaming output, working directory configuration, and permission mode setup.
+
+**Depends on:** —
+
+### QRM2-003 — MCP Orchestration Tool Bridge
+Adapter layer that exposes MCP orchestration tools (`invoke_agent`, `context_store`, `context_query`, `context_summarize`, `context_stats`) as Claude Code custom tools using `createSdkMcpServer()`. Each tool proxies to `McpClientService.callTool()` with auto-augmented parameters (correlationId, callerRole, depth).
+
+**Depends on:** QRM2-002
+
+### QRM2-004 — Role Permission Profiles
+Per-role configuration defining which Claude Code built-in tools each agent can use and which bash commands are denied. Profiles control `allowedTools` lists and hook-based command filtering to enforce the principle of least privilege.
+
+**Depends on:** QRM2-002
+
+### QRM2-005 — InvocationHandler Migration
+Replace the manual 10-round Anthropic SDK tool loop in `InvocationHandler` with a single `ClaudeCodeService.execute()` call, integrating the tool bridge and permission profiles. The agentic loop moves inside Claude Code — the handler becomes a thin orchestration layer.
+
+**Depends on:** QRM2-002, QRM2-003, QRM2-004
+
+### QRM2-006 — Prompt Adaptation
+Update role prompt templates to reflect Claude Code capabilities. Agents now have filesystem tools — prompts must describe workspace conventions, available capabilities, and collaboration patterns in the context of code-capable agents.
+
+**Depends on:** QRM2-005
+
+### QRM2-007 — Terminal Moderator Evaluation
+Evaluate whether the terminal's `ChatService` should migrate to Claude Code SDK or remain on the raw Anthropic SDK. The terminal is user-facing and doesn't need filesystem access — migration may add overhead without proportional value.
+
+**Depends on:** QRM2-005
+
+### QRM2-008 — E2E Integration Smoke Test
+End-to-end validation in Docker: moderator-initiated task produces observable code changes in the workspace. Verifies container security posture, MCP orchestration, log tracing, and CC tool execution across roles.
+
+**Depends on:** QRM2-001, QRM2-005, QRM2-006
+
+---
+
+## Dependency Graph
+
+```
+QRM2-001 (Docker) ───────────────────────────────────────────┐
+                                                              ├→ QRM2-008 (E2E)
+QRM2-002 (SDK) ──→ QRM2-003 (Bridge) ──┐                     │
+               ──→ QRM2-004 (Perms)  ──┼→ QRM2-005 (Handler) ┤
+                                                ├→ QRM2-006 (Prompts) ──┘
+                                                └→ QRM2-007 (Terminal Eval)
+```
+
+**Parallel tracks:** QRM2-001 (infrastructure) and QRM2-002 (code) can start simultaneously. QRM2-003 and QRM2-004 can also run in parallel once QRM2-002 lands.
