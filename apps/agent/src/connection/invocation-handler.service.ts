@@ -29,18 +29,17 @@ export class InvocationHandler {
 
   async handle(request: InvokeRequest): Promise<InvokeResponse> {
     this.logger.log(
-      `Invocation received: action="${request.action}" ` +
-        `caller=${request.caller} depth=${request.depth}`,
-      { correlationId: request.correlationId },
+      `Invocation received: correlationId=${request.correlationId} ` +
+        `action="${request.action}" caller=${request.caller} depth=${request.depth}`,
     );
 
     try {
       return await this.processWithLoop(request);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`LLM processing failed: ${message}`, {
-        correlationId: request.correlationId,
-      });
+      this.logger.error(
+        `LLM processing failed: correlationId=${request.correlationId} ${message}`,
+      );
       return { success: false, error: `LLM processing failed: ${message}` };
     }
   }
@@ -139,9 +138,9 @@ export class InvocationHandler {
         request,
       );
 
-      this.logger.log(`Calling tool: ${block.name}`, {
-        correlationId: request.correlationId,
-      });
+      this.logger.log(
+        `Calling tool: ${block.name} correlationId=${request.correlationId}`,
+      );
 
       const mcpResult = (await this.mcpClient.callTool(block.name, args)) as {
         content?: Array<{ type: string; text?: string }>;
@@ -157,9 +156,9 @@ export class InvocationHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Tool ${block.name} failed: ${message}`, {
-        correlationId: request.correlationId,
-      });
+      this.logger.warn(
+        `Tool ${block.name} failed: correlationId=${request.correlationId} ${message}`,
+      );
       return {
         type: 'tool_result',
         tool_use_id: block.id,

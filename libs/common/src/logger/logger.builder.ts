@@ -57,12 +57,14 @@ function startupTimestamp(): string {
  * [Nest] 12345  - 02/11/2026, 2:32:01 PM     LOG [MessageBroker] Invoke: ...
  */
 function nestConsoleFormat(): winston.Logform.Format {
+  const colorizer = winston.format.colorize();
+
   return winston.format.combine(
     winston.format.timestamp(),
-    winston.format.colorize({ level: true }),
     winston.format.printf((info) => {
       const nestLevel = (info['nestLevel'] as string) || 'log';
       const label = NEST_LEVEL_LABELS[nestLevel] ?? 'LOG';
+      const winstonLevel = NEST_LEVEL_TO_WINSTON[nestLevel] ?? 'info';
       const ctx = typeof info['context'] === 'string' ? info['context'] : '';
       const context = ctx ? `[${ctx}] ` : '';
       const pid = process.pid;
@@ -76,10 +78,11 @@ function nestConsoleFormat(): winston.Logform.Format {
         hour12: true,
       });
 
-      // Pad the level label to 7 chars for alignment
+      // Pad before colorizing — ANSI codes add invisible chars that break padding
       const paddedLabel = label.padStart(7, ' ');
+      const coloredLabel = colorizer.colorize(winstonLevel, paddedLabel);
 
-      return `[Nest] ${pid}  - ${ts} ${paddedLabel} ${context}${String(info.message)}`;
+      return `[Nest] ${pid}  - ${ts} ${coloredLabel} ${context}${String(info.message)}`;
     }),
   );
 }

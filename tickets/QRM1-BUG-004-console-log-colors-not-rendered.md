@@ -34,42 +34,33 @@ Options:
 
 Option 1 is preferred — it uses the existing Winston color registry and `LEVEL_COLORS` map without duplication.
 
-### Sketch
+### Implementation (Option 1 applied)
 
-```typescript
-function nestConsoleFormat(): winston.Logform.Format {
-  const colorizer = winston.format.colorize();
+Implemented Option 1 — using `colorizer.colorize(winstonLevel, text)` to wrap the NestJS label with the ANSI codes registered for the corresponding Winston level.
 
-  return winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.printf((info) => {
-      const nestLevel = (info['nestLevel'] as string) || 'log';
-      const label = NEST_LEVEL_LABELS[nestLevel] ?? 'LOG';
-      const winstonLevel = NEST_LEVEL_TO_WINSTON[nestLevel] ?? 'info';
-      const coloredLabel = colorizer.colorize(winstonLevel, label);
-      // ...
-      return `[Nest] ${pid}  - ${ts} ${paddedLabel} ${context}${message}`;
-      //                              ^^^^^^^^^^^^ use coloredLabel here
-    }),
-  );
-}
-```
+Changes to `nestConsoleFormat()` in `libs/common/src/logger/logger.builder.ts`:
 
-Note: `padStart` must be applied **before** colorization (ANSI codes add invisible characters that break padding), or the padding width must account for the ANSI overhead.
+1. **Removed** `winston.format.colorize({ level: true })` from the `combine()` pipeline — this was colorizing `info.level` which was never used in the output
+2. **Created** `const colorizer = winston.format.colorize()` outside the `combine()` chain (once per format instance, not per log entry)
+3. **Added** `winstonLevel` lookup via `NEST_LEVEL_TO_WINSTON[nestLevel]` to map NestJS level names back to Winston level names
+4. **Applied** `colorizer.colorize(winstonLevel, paddedLabel)` inside `printf` to wrap the padded NestJS label with ANSI color codes
+5. **Padding applied before colorization** — `padStart(7, ' ')` runs on the plain label, then colorization wraps the padded string, so ANSI escape codes don't interfere with alignment
 
-### Files to modify
+The JSON file transport (`nestJsonFormat`) was already unaffected — it has its own separate format pipeline with no colorize step.
+
+### Files modified
 
 | File | Change |
 |------|--------|
-| `libs/common/src/logger/logger.builder.ts` | Fix `nestConsoleFormat()` to colorize the NestJS label |
+| `libs/common/src/logger/logger.builder.ts` | Replaced `colorize({ level: true })` format step with `colorizer.colorize()` call inside `printf` targeting the NestJS label |
 
 ## Acceptance Criteria
 
-- [ ] Console log output includes ANSI color codes on the level label
-- [ ] Colors match the registered `LEVEL_COLORS`: error=red, warn=yellow, log/info=green, debug=magenta, verbose=cyan
-- [ ] Label padding/alignment is preserved (7-char padded labels align correctly)
-- [ ] JSON file transport is unaffected (no ANSI codes in `.jsonl` output)
-- [ ] `npm run test` passes
+- [x] Console log output includes ANSI color codes on the level label
+- [x] Colors match the registered `LEVEL_COLORS`: error=red, warn=yellow, log/info=green, debug=magenta, verbose=cyan
+- [x] Label padding/alignment is preserved (7-char padded labels align correctly)
+- [x] JSON file transport is unaffected (no ANSI codes in `.jsonl` output)
+- [x] `npm run test` passes (258/258)
 - [ ] `docker compose logs` shows colored level labels
 
 ## Dependencies and References

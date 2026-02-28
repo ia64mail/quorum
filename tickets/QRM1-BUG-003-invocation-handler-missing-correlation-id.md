@@ -28,25 +28,26 @@ The `correlationId` field is present in the `InvokeRequest` DTO but not included
 
 ### Fix: Add correlationId to InvocationHandler log messages
 
-In `apps/agent/src/invocation/invocation.handler.ts`, include `correlationId` in the log message for incoming invocations:
+The `correlationId` was being passed as a metadata object (2nd argument to NestJS `Logger.log()`) rather than interpolated into the message string. NestJS Logger treats the 2nd argument as context, not structured metadata, so the correlation ID was silently dropped from output.
 
-```
-Invocation received: correlationId=smoke-test-001 action="..." caller=moderator depth=0
-```
+Fixed by inlining `correlationId` directly into all 4 log message strings in `apps/agent/src/connection/invocation-handler.service.ts`:
 
-Also include it in any subsequent log messages within the same invocation flow (tool calls, completion, errors) to enable full tracing.
+1. **Invocation received** (line 32): `Invocation received: correlationId=... action="..." caller=... depth=...`
+2. **LLM processing failed** (line 40): `LLM processing failed: correlationId=... <error>`
+3. **Calling tool** (line 143): `Calling tool: <name> correlationId=...`
+4. **Tool failed** (line 161): `Tool <name> failed: correlationId=... <error>`
 
-### Files to modify
+### Files modified
 
 | File | Change |
 |------|--------|
-| `apps/agent/src/invocation/invocation.handler.ts` | Add `correlationId` to all log messages |
+| `apps/agent/src/connection/invocation-handler.service.ts` | Inlined `correlationId` into all 4 log message strings, removed metadata object 2nd args |
 
 ## Acceptance Criteria
 
-- [ ] `InvocationHandler` log messages include `correlationId` field
-- [ ] `correlationId` appears in logs for tool calls and completion within the same invocation
-- [ ] `npm run test` passes
+- [x] `InvocationHandler` log messages include `correlationId` field
+- [x] `correlationId` appears in logs for tool calls and completion within the same invocation
+- [x] `npm run test` passes (258/258)
 - [ ] Smoke test Scenario 8 finds correlation IDs in both MCP server and agent logs
 
 ## Dependencies and References
