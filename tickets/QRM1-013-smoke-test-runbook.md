@@ -320,3 +320,31 @@ transport, or use a separate Protocol instance per connection.
 **BUG-003: InvocationHandler doesn't log correlationId.** The handler logs `action`, `caller`, and `depth` but omits `correlationId`. Direct invocations (scenarios 3-4) have no correlation ID in any logs. Only broker-routed requests (scenarios 5-6) show correlation IDs via `MessageBroker`.
 
 **Tracked in:** [QRM1-BUG-003](QRM1-BUG-003-invocation-handler-missing-correlation-id.md)
+
+---
+
+## Run 3 — 2026-02-28
+
+### Pre-run fixes applied
+
+1. **QRM1-BUG-002 resolved** — `register_agent` tool now accepts `moderator` role. Terminal `McpClientService.register()` validates the server response.
+2. **QRM1-BUG-003 resolved** — `InvocationHandler` now inlines `correlationId` in all log messages (invocation received, tool calls, errors).
+
+### Results
+
+| Scenario | Result | Notes |
+|----------|--------|-------|
+| 1. Service Health | **PASS** | `{"status":"ok"}` |
+| 2. Agent Registration | **PASS** | 4/4 agents, all connected (moderator included) |
+| 3. Single-Hop Invocation | **PASS** | `success: true`, response: `SMOKE_TEST_OK` |
+| 4. Context Store Relay | **PASS** | Architect stored `QRM1-SMOKE-PASS`, developer retrieved it |
+| 5. Unavailable Role | **PASS** | `Agent qa not registered` |
+| 6. Depth Limit | **PASS** | `Max call depth (5) exceeded` |
+| 7. Circular Call | **INCONCLUSIVE** | LLM replied directly instead of self-invoking |
+| 8. Log Correlation | **PASS** | `correlationId` present in `InvocationHandler` logs across architect and developer services |
+
+### Verdict
+
+**7/7 deterministic scenarios pass.** Scenario 7 remains inconclusive by design — circular call prevention is non-deterministic in integration (depends on LLM choosing to self-invoke) and is thoroughly covered by unit tests in `message-broker.service.spec.ts`.
+
+All bugs from Run 2 (BUG-002, BUG-003) are confirmed resolved. QRM1 milestone success criterion met.
