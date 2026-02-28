@@ -28,6 +28,7 @@ Agents communicate via MCP server and collaborate according to their roles. Each
 ```
 docs/       # Project documentation — living reference for system architecture
 tickets/    # Ticket library — implementation timeline knowledge base (see tickets/README.md)
+logs/       # Docker JSON logs (bind-mounted, gitignored) — {role}-{timestamp}.jsonl
 ```
 
 ### Ticket Library

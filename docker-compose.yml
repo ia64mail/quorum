@@ -20,7 +20,7 @@ services:
       PORT: 3000
       ENABLE_TEST_ENDPOINTS: "true"
     volumes:
-      - quorum-logs:/app/logs
+      - ./logs:/app/logs
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
       interval: 5s
@@ -46,7 +46,7 @@ services:
       PORT: 3001
       MCP_CALLBACK_URL: http://terminal:3001
     volumes:
-      - quorum-logs:/app/logs
+      - ./logs:/app/logs
     networks:
       - quorum-net
 
@@ -66,7 +66,7 @@ services:
       AGENT_CALLBACK_URL: http://architect:3002
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
-      - quorum-logs:/app/logs
+      - ./logs:/app/logs
     networks:
       - quorum-net
 
@@ -86,7 +86,7 @@ services:
       AGENT_CALLBACK_URL: http://teamlead:3002
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
-      - quorum-logs:/app/logs
+      - ./logs:/app/logs
     networks:
       - quorum-net
 
@@ -106,12 +106,9 @@ services:
       AGENT_CALLBACK_URL: http://developer:3002
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
-      - quorum-logs:/app/logs
+      - ./logs:/app/logs
     networks:
       - quorum-net
-
-volumes:
-  quorum-logs:
 
 networks:
   quorum-net:

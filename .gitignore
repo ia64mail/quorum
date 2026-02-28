@@ -37,3 +37,4 @@ lerna-debug.log*
 .idea/usage.statistics.xml
 .idea/shelf/
 .idea/tasks.xml
+logs/
