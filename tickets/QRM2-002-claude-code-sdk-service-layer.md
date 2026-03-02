@@ -235,23 +235,23 @@ package.json                         # MODIFIED — add @anthropic-ai/claude-age
 
 ## Acceptance Criteria
 
-- [ ] `@anthropic-ai/claude-agent-sdk` added to `package.json` and installs successfully
-- [ ] `ClaudeCodeService` exists at `apps/agent/src/llm/claude-code.service.ts` with `execute()` method
-- [ ] `ExecuteParams` and `ExecuteResult` types defined at `apps/agent/src/llm/claude-code.types.ts`
-- [ ] `execute()` calls `query()` with correct defaults: `cwd` from config, `bypassPermissions`, `persistSession: false`, `settingSources: []`
-- [ ] `execute()` passes `ANTHROPIC_API_KEY` via `env` option and `model` from config
-- [ ] `execute()` accepts `mcpServers` and uses streaming input mode (`AsyncIterable` prompt) when provided
-- [ ] `execute()` accepts `allowedTools` / `disallowedTools` for tool permission passthrough
-- [ ] `execute()` returns typed `ExecuteResult` discriminated union (success with `result`/`sessionId`/`numTurns` or error)
-- [ ] Session ID captured from `SDKSystemMessage` init event and included in success result
-- [ ] SDK exceptions (subprocess failures) caught and mapped to `{ success: false }` — no unhandled rejections
-- [ ] Graceful shutdown: `OnApplicationShutdown` aborts all in-flight executions via tracked `AbortController` set
-- [ ] `LlmModule` provides and exports both `AnthropicService` and `ClaudeCodeService`
-- [ ] Barrel export updated to re-export `ClaudeCodeService` and types
-- [ ] Unit tests cover: success path, error result, SDK exception, abort, options passthrough, streaming input mode, shutdown
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (all existing + new tests)
+- [x] `@anthropic-ai/claude-agent-sdk` added to `package.json` and installs successfully
+- [x] `ClaudeCodeService` exists at `apps/agent/src/llm/claude-code.service.ts` with `execute()` method
+- [x] `ExecuteParams` and `ExecuteResult` types defined at `apps/agent/src/llm/claude-code.types.ts`
+- [x] `execute()` calls `query()` with correct defaults: `cwd` from config, `bypassPermissions`, `persistSession: false`, `settingSources: []`
+- [x] `execute()` passes `ANTHROPIC_API_KEY` via `env` option and `model` from config
+- [x] `execute()` accepts `mcpServers` and uses streaming input mode (`AsyncIterable` prompt) when provided
+- [x] `execute()` accepts `allowedTools` / `disallowedTools` for tool permission passthrough
+- [x] `execute()` returns typed `ExecuteResult` discriminated union (success with `result`/`sessionId`/`numTurns` or error)
+- [x] Session ID captured from `SDKSystemMessage` init event and included in success result
+- [x] SDK exceptions (subprocess failures) caught and mapped to `{ success: false }` — no unhandled rejections
+- [x] Graceful shutdown: `OnApplicationShutdown` aborts all in-flight executions via tracked `AbortController` set
+- [x] `LlmModule` provides and exports both `AnthropicService` and `ClaudeCodeService`
+- [x] Barrel export updated to re-export `ClaudeCodeService` and types
+- [x] Unit tests cover: success path, error result, SDK exception, abort, options passthrough, streaming input mode, shutdown
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (all existing + new tests)
 
 ## Dependencies and References
 
@@ -275,3 +275,49 @@ package.json                         # MODIFIED — add @anthropic-ai/claude-age
 - [SDK permissions guide](https://platform.claude.com/docs/en/agent-sdk/permissions)
 - Current `AnthropicService`: `apps/agent/src/llm/anthropic.service.ts`
 - Current `InvocationHandler`: `apps/agent/src/connection/invocation-handler.service.ts`
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-03-01
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `package.json` | Modified | Added `@anthropic-ai/claude-agent-sdk@^0.2.63`. SDK bundles the Claude Code runtime; peer-depends on `zod ^4.0.0` (already satisfied). `@anthropic-ai/sdk` retained for terminal app |
+| `package-lock.json` | Modified | Lock file updated with SDK and its optional `@img/sharp-*` platform binaries |
+| `apps/agent/src/llm/claude-code.types.ts` | Created | `ExecuteParams` and `ExecuteResult` interfaces. `ExecuteResult` is a discriminated union on `success`. `McpServerConfig` used for `mcpServers` field with `TODO(QRM2-003)` noting potential need for `McpSdkServerConfigWithInstance` once in-process MCP servers are wired |
+| `apps/agent/src/llm/claude-code.service.ts` | Created | `ClaudeCodeService` wrapping SDK `query()`. Implements `OnApplicationShutdown` for abort-on-teardown. `processMessage()` switch handles `system`/`assistant`/`result` message types. `toAsyncIterable()` helper wraps prompt for streaming input mode. `previewContent()` extracts first 200 chars for debug logging |
+| `apps/agent/src/llm/claude-code.service.spec.ts` | Created | 8 unit tests covering all ticket-specified scenarios: success mapping, error result with joined errors, SDK exception catch, external abort, options passthrough (all `query()` args verified), streaming input mode when `mcpServers` present, default `maxTurns=20`, graceful shutdown aborting multiple active controllers |
+| `apps/agent/src/llm/llm.module.ts` | Modified | Added `ClaudeCodeService` to `providers` and `exports` alongside existing `AnthropicService` |
+| `apps/agent/src/llm/index.ts` | Modified | Barrel re-exports `ClaudeCodeService`, `ExecuteParams`, `ExecuteResult` |
+| `__mocks__/@anthropic-ai/claude-agent-sdk.ts` | Created | Module-level Jest mock exporting a no-op `query()` async generator. Referenced via `moduleNameMapper` in `package.json` Jest config to prevent SDK from spawning real subprocesses during tests |
+| `tickets/QRM2-000-roadmap.md` | Modified | Added notes on QRM2-004 (`AskUserQuestion` must be in `disallowedTools`) and QRM2-006 (autonomous clarification pattern via `invoke_agent`) |
+
+### Deviations from Ticket Spec
+
+- **No `QuorumLogger` direct injection.** The ticket references `QuorumLogger` as a constructor dependency, but the codebase pattern (established in QRM1-006 through QRM1-012) is to set `QuorumLogger` at bootstrap via `LoggerBuilder.fromEnv()` and use NestJS's `new Logger(context)` in services — which delegates to the app-level logger. The implementation follows the established pattern. All structured logging (JSON file transport, dual-output) works through this delegation.
+
+- **`sessionId` captured from init, not just read from result.** The initial implementation read `session_id` directly from the `SDKResultMessage`. Post-review fix stores it from the `SDKSystemMessage` init event and passes it through to `processMessage()`, falling back to the result message's `session_id` if init was somehow missed. This matches the ticket's intent of early capture for correlation.
+
+- **`env` passes only `ANTHROPIC_API_KEY`, not `...process.env`.** The initial implementation spread `process.env` into the `env` option. Post-review fix narrows to explicit key-only passthrough per the ticket's minimal-env design. In the container runtime, the SDK subprocess inherits the container's environment by default — the `env` option is additive, so only the API key needs explicit passing.
+
+- **`McpServerConfig` type instead of `McpSdkServerConfigWithInstance`.** The ticket spec uses `McpSdkServerConfigWithInstance` for the `mcpServers` field, but this type is specific to in-process server instances created via `createSdkMcpServer()` (QRM2-003). At QRM2-002 scope, only the base `McpServerConfig` is needed. A `TODO(QRM2-003)` documents the type refinement for when the MCP bridge is implemented.
+
+### Post-Review Fixes
+
+- **Narrowed `env` option.** Removed `...process.env` spread from `query()` env — passes only `{ ANTHROPIC_API_KEY }`. Test tightened from key-presence check to `toEqual` exact object assertion.
+
+- **Captured `sessionId` from init event.** Added `sessionId` local variable populated from `SDKSystemMessage` init, threaded through `processMessage()` as parameter, used with `sessionId ?? message.session_id` fallback on success result.
+
+- **Removed dead `totalCostUsd` tracking.** The `let totalCostUsd = 0` variable was assigned inside the generator loop immediately before `return`, making the assignment dead code. Removed variable; fallback path (generator exhausted without result) now uses literal `0`.
+
+- **Added `TODO(QRM2-003)` for type clarification.** `McpServerConfig` vs `McpSdkServerConfigWithInstance` needs verification once in-process MCP servers are wired.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 266 tests passing (8 new + 258 existing, 0 regressions)
