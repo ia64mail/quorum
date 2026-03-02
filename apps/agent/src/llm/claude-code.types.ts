@@ -9,7 +9,9 @@ export interface ExecuteParams {
   /** System prompt prepended to the conversation. */
   systemPrompt: string;
   /** MCP servers to expose to the agent session. When provided, the prompt is
-   *  delivered as a streaming `AsyncIterable<SDKUserMessage>`. */
+   *  delivered as a streaming `AsyncIterable<SDKUserMessage>`.
+   *  TODO(QRM2-003): Verify whether `McpSdkServerConfigWithInstance` is needed
+   *  for in-process MCP servers instead of the base `McpServerConfig`. */
   mcpServers?: Record<string, McpServerConfig>;
   /** Tools the agent is allowed to use without prompting. */
   allowedTools?: string[];

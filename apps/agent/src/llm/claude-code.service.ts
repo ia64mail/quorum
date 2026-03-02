@@ -20,7 +20,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     this.activeControllers.add(controller);
 
     const start = Date.now();
-    let totalCostUsd = 0;
+    let sessionId: string | undefined;
 
     try {
       const prompt = params.mcpServers
@@ -38,10 +38,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           persistSession: false,
           settingSources: [],
           includePartialMessages: false,
-          env: {
-            ...process.env,
-            ANTHROPIC_API_KEY: this.config.anthropic.apiKey,
-          },
+          env: { ANTHROPIC_API_KEY: this.config.anthropic.apiKey },
           maxTurns: params.maxTurns ?? 20,
           abortController: controller,
           ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
@@ -53,10 +50,10 @@ export class ClaudeCodeService implements OnApplicationShutdown {
       });
 
       for await (const message of gen) {
-        const mapped = this.processMessage(message);
-        if (mapped) {
-          totalCostUsd = mapped.totalCostUsd;
-          return mapped;
+        const mapped = this.processMessage(message, sessionId);
+        if (mapped) return mapped;
+        if (message.type === 'system' && message.subtype === 'init') {
+          sessionId = message.session_id;
         }
       }
 
@@ -64,7 +61,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         success: false,
         error: 'Generator completed without a result message',
         durationMs: Date.now() - start,
-        totalCostUsd,
+        totalCostUsd: 0,
       };
     } catch (err) {
       return {
@@ -89,7 +86,10 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     this.activeControllers.clear();
   }
 
-  private processMessage(message: SDKMessage): ExecuteResult | null {
+  private processMessage(
+    message: SDKMessage,
+    sessionId: string | undefined,
+  ): ExecuteResult | null {
     switch (message.type) {
       case 'system':
         if (message.subtype === 'init') {
@@ -108,7 +108,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           return {
             success: true,
             result: message.result,
-            sessionId: message.session_id,
+            sessionId: sessionId ?? message.session_id,
             durationMs: message.duration_ms,
             totalCostUsd: message.total_cost_usd,
             numTurns: message.num_turns,
