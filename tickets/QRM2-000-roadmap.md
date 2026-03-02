@@ -47,6 +47,8 @@ Adapter layer that exposes MCP orchestration tools (`invoke_agent`, `context_sto
 ### QRM2-004 — Role Permission Profiles
 Per-role configuration defining which Claude Code built-in tools each agent can use and which bash commands are denied. Profiles control `allowedTools` lists and hook-based command filtering to enforce the principle of least privilege.
 
+> **Note:** `AskUserQuestion` must be in `disallowedTools` for all agent roles. Agents have no interactive user — the single-message async iterable exhausts on entry, so `AskUserQuestion` would hang indefinitely. Clarification flows through `invoke_agent` instead (see QRM2-006).
+
 **Depends on:** QRM2-002
 
 ### QRM2-005 — InvocationHandler Migration
@@ -56,6 +58,8 @@ Replace the manual 10-round Anthropic SDK tool loop in `InvocationHandler` with 
 
 ### QRM2-006 — Prompt Adaptation
 Update role prompt templates to reflect Claude Code capabilities. Agents now have filesystem tools — prompts must describe workspace conventions, available capabilities, and collaboration patterns in the context of code-capable agents.
+
+> **Note — Autonomous clarification pattern:** Prompts must explicitly instruct agents to never attempt user interaction (`AskUserQuestion` is disabled via QRM2-004). When an agent needs clarification, it must use `invoke_agent` to reach the appropriate team member: **architect** for design/pattern questions, **teamlead** for task scope/priority, **productowner** for business requirements, **moderator** for blocker escalation. Prompts should also bias agents toward reasonable assumptions over excessive cross-agent chatter to conserve depth budget and tokens.
 
 **Depends on:** QRM2-005
 

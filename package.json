@@ -23,6 +23,7 @@
     "test:e2e": "jest --config ./apps/quorum/test/jest-e2e.json"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.63",
     "@anthropic-ai/sdk": "^0.73.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@nestjs/common": "^11.0.1",
@@ -84,7 +85,8 @@
       "<rootDir>/libs/"
     ],
     "moduleNameMapper": {
-      "^@app/common(|/.*)$": "<rootDir>/libs/common/src/$1"
+      "^@app/common(|/.*)$": "<rootDir>/libs/common/src/$1",
+      "^@anthropic-ai/claude-agent-sdk$": "<rootDir>/__mocks__/@anthropic-ai/claude-agent-sdk.ts"
     }
   }
 }
