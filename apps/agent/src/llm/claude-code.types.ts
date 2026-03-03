@@ -1,4 +1,4 @@
-import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 
 /**
  * Parameters for {@link ClaudeCodeService.execute}.
@@ -8,11 +8,11 @@ export interface ExecuteParams {
   prompt: string;
   /** System prompt prepended to the conversation. */
   systemPrompt: string;
-  /** MCP servers to expose to the agent session. When provided, the prompt is
-   *  delivered as a streaming `AsyncIterable<SDKUserMessage>`.
-   *  TODO(QRM2-003): Verify whether `McpSdkServerConfigWithInstance` is needed
-   *  for in-process MCP servers instead of the base `McpServerConfig`. */
-  mcpServers?: Record<string, McpServerConfig>;
+  /** In-process MCP servers to expose to the agent session. When provided,
+   *  the prompt is delivered as a streaming `AsyncIterable<SDKUserMessage>`.
+   *  Quorum agents always use in-process SDK servers created by the bridge —
+   *  stdio/SSE/HTTP config variants are not applicable. */
+  mcpServers?: Record<string, McpSdkServerConfigWithInstance>;
   /** Tools the agent is allowed to use without prompting. */
   allowedTools?: string[];
   /** Tools the agent is explicitly forbidden from using. */

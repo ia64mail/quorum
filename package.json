@@ -9,7 +9,10 @@
     "node": "24"
   },
   "scripts": {
-    "build": "nest build",
+    "build": "nest build --all",
+    "build:agent": "nest build agent",
+    "build:mcp-server": "nest build mcp-server",
+    "build:terminal": "nest build terminal",
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
