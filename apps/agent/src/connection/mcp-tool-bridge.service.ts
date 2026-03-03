@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { DEPLOYABLE_AGENT_ROLES, ContextScope } from '@app/common';
+import { AgentRole, DEPLOYABLE_AGENT_ROLES, ContextScope } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { AgentConfigService } from '../config';
 import { McpClientService } from './mcp-client.service';
@@ -22,6 +22,15 @@ import { McpClientService } from './mcp-client.service';
  */
 @Injectable()
 export class McpToolBridgeService {
+  private static readonly SCOPE_VALUES = Object.values(ContextScope) as [
+    string,
+    ...string[],
+  ];
+  private static readonly AGENT_ROLE_VALUES = Object.values(AgentRole) as [
+    string,
+    ...string[],
+  ];
+
   private readonly logger = new Logger(McpToolBridgeService.name);
 
   constructor(
@@ -85,21 +94,13 @@ export class McpToolBridgeService {
   }
 
   private contextStoreTool(request: InvokeRequest) {
-    const scopeValues = Object.values(ContextScope) as [string, ...string[]];
-    const agentRoleValues = [
-      'moderator',
-      'architect',
-      'teamlead',
-      'developer',
-      'qa',
-      'productowner',
-    ] as [string, ...string[]];
-
     return tool(
       'context_store',
       'Store a context item in the shared context store',
       {
-        scope: z.enum(scopeValues).describe('Context scope'),
+        scope: z
+          .enum(McpToolBridgeService.SCOPE_VALUES)
+          .describe('Context scope'),
         key: z.string().min(1).describe('Item key within the scope'),
         value: z.unknown().describe('JSON-serializable value to store'),
         correlationId: z
@@ -107,7 +108,7 @@ export class McpToolBridgeService {
           .optional()
           .describe('Required for conversation scope'),
         agentRole: z
-          .enum(agentRoleValues)
+          .enum(McpToolBridgeService.AGENT_ROLE_VALUES)
           .optional()
           .describe('Agent role creating this item'),
         ttl: z
@@ -127,13 +128,13 @@ export class McpToolBridgeService {
   }
 
   private contextQueryTool(request: InvokeRequest) {
-    const scopeValues = Object.values(ContextScope) as [string, ...string[]];
-
     return tool(
       'context_query',
       'Query the context store by keys, search, or get-all',
       {
-        scope: z.enum(scopeValues).describe('Context scope to query'),
+        scope: z
+          .enum(McpToolBridgeService.SCOPE_VALUES)
+          .describe('Context scope to query'),
         mode: z.enum(['keys', 'search', 'get-all']).describe('Query mode'),
         keys: z
           .array(z.string())
@@ -192,14 +193,12 @@ export class McpToolBridgeService {
   }
 
   private contextStatsTool() {
-    const scopeValues = Object.values(ContextScope) as [string, ...string[]];
-
     return tool(
       'context_stats',
       'Get aggregate statistics for stored context',
       {
         scope: z
-          .enum(scopeValues)
+          .enum(McpToolBridgeService.SCOPE_VALUES)
           .optional()
           .describe('Limit stats to a specific scope'),
         correlationId: z

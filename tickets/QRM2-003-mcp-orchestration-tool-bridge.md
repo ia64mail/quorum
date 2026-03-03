@@ -170,22 +170,22 @@ apps/agent/src/
 
 ## Acceptance Criteria
 
-- [ ] `McpToolBridgeService` exists with a `createBridge(request: InvokeRequest)` method
-- [ ] `createBridge()` returns `Record<string, McpSdkServerConfigWithInstance>` with a `"quorum"` key
-- [ ] Uses `createSdkMcpServer()` from `@anthropic-ai/claude-agent-sdk` to create the in-process server
-- [ ] Five orchestration tools registered: `invoke_agent`, `context_store`, `context_query`, `context_summarize`, `context_stats`
-- [ ] `invoke_agent` tool: agent provides `target`, `action`, `context`, `wait`; handler auto-injects `callerRole`, `correlationId`, `depth + 1` with override semantics
-- [ ] `context_store`/`context_query`/`context_summarize` tools: handler auto-injects `correlationId` as default (agent override wins)
-- [ ] `context_stats` tool: no parameter injection, passthrough only
-- [ ] All tool handlers proxy to `McpClientService.callTool()` and return `CallToolResult`
-- [ ] Tool handler exceptions caught and returned as `{ isError: true }` results
-- [ ] `TODO(QRM2-003)` in `claude-code.types.ts` resolved — `mcpServers` type narrowed to `McpSdkServerConfigWithInstance`
-- [ ] `McpToolBridgeService` wired into `ConnectionModule` (or `LlmModule` with circular dependency resolved)
-- [ ] Barrel exports updated
-- [ ] Unit tests cover: parameter augmentation for all 5 tools, override semantics, error handling, result passthrough, bridge shape
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (all existing + new tests)
+- [x] `McpToolBridgeService` exists with a `createBridge(request: InvokeRequest)` method
+- [x] `createBridge()` returns `Record<string, McpSdkServerConfigWithInstance>` with a `"quorum"` key
+- [x] Uses `createSdkMcpServer()` from `@anthropic-ai/claude-agent-sdk` to create the in-process server
+- [x] Five orchestration tools registered: `invoke_agent`, `context_store`, `context_query`, `context_summarize`, `context_stats`
+- [x] `invoke_agent` tool: agent provides `target`, `action`, `context`, `wait`; handler auto-injects `callerRole`, `correlationId`, `depth + 1` with override semantics
+- [x] `context_store`/`context_query`/`context_summarize` tools: handler auto-injects `correlationId` as default (agent override wins)
+- [x] `context_stats` tool: no parameter injection, passthrough only
+- [x] All tool handlers proxy to `McpClientService.callTool()` and return `CallToolResult`
+- [x] Tool handler exceptions caught and returned as `{ isError: true }` results
+- [x] `TODO(QRM2-003)` in `claude-code.types.ts` resolved — `mcpServers` type narrowed to `McpSdkServerConfigWithInstance`
+- [x] `McpToolBridgeService` wired into `ConnectionModule` (or `LlmModule` with circular dependency resolved)
+- [x] Barrel exports updated
+- [x] Unit tests cover: parameter augmentation for all 5 tools, override semantics, error handling, result passthrough, bridge shape
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (all existing + new tests)
 
 ## Dependencies and References
 
@@ -204,3 +204,41 @@ apps/agent/src/
 - Current auto-augmentation: `apps/agent/src/connection/invocation-handler.service.ts:171-193`
 - Tool-mapper (schema stripping reference): `libs/common/src/llm/tool-mapper.ts`
 - `ExecuteParams.mcpServers` TODO: `apps/agent/src/llm/claude-code.types.ts:14`
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-03-02
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/agent/src/connection/mcp-tool-bridge.service.ts` | Created | `McpToolBridgeService` with `createBridge()` method. Five tool definitions using SDK `tool()` helper, each with Zod input schemas (auto-params stripped). Private `proxy()` method wraps `McpClientService.callTool()` with error handling. Static class constants for `ContextScope` and `AgentRole` enum values to avoid repetition |
+| `apps/agent/src/connection/mcp-tool-bridge.service.spec.ts` | Created | 15 unit tests covering: bridge shape (quorum key, SDK config, 5 tools), `invoke_agent` augmentation + override, `context_store` default injection + override, `context_query` all 3 modes + override, `context_summarize` default + override, `context_stats` passthrough, error handling (catches thrown → `isError`), result passthrough (success + `isError`), request scoping across bridges |
+| `apps/agent/src/connection/connection.module.ts` | Modified | Added `McpToolBridgeService` to `providers` and `exports` |
+| `apps/agent/src/connection/index.ts` | Modified | Barrel re-export of `McpToolBridgeService` |
+| `apps/agent/src/llm/claude-code.types.ts` | Modified | Resolved `TODO(QRM2-003)`: narrowed `mcpServers` type from `McpServerConfig` to `McpSdkServerConfigWithInstance`, updated doc comment |
+| `package.json` | Modified | Changed `build` script to `nest build --all` (builds all apps/libs); added per-app `build:agent`, `build:mcp-server`, `build:terminal` scripts |
+
+### Deviations from Ticket Spec
+
+**Service placed in `ConnectionModule` (not `LlmModule`):** The ticket suggested `apps/agent/src/llm/mcp-tool-bridge.service.ts` as the primary location but recommended `ConnectionModule` as the resolution for the circular dependency. Implementation followed the `ConnectionModule` path — the bridge depends on `McpClientService` (owned by `ConnectionModule`) and adapts MCP connectivity for the LLM layer, making `ConnectionModule` the natural home.
+
+**Augmentation uses `??` instead of spread-order:** The existing `augmentArgs` in `InvocationHandler` uses spread order for default injection (`{ correlationId: request.correlationId, ...args }` — agent args win by overwriting). The bridge uses `args.correlationId ?? request.correlationId` instead. Semantically equivalent: both let the agent override `correlationId` while providing the request's value as default. The `??` form is more explicit about intent.
+
+**`context_stats` behavioral delta from existing `augmentArgs`:** The existing `augmentArgs` applies `correlationId` default injection to all `context_*` tools (via `toolName.startsWith('context_')`), including `context_stats`. The bridge treats `context_stats` as pure passthrough per the ticket spec (no auto-injection). This is intentional — the MCP server's `context_stats` tool has both parameters optional, and auto-injecting `correlationId` would silently filter stats to the current conversation when the agent may want global stats. **QRM2-005 should be aware of this behavioral change** when migrating `InvocationHandler` to use the bridge.
+
+### Post-Review Fixes
+
+- **Replaced hardcoded agent role strings with `AgentRole` enum:** The `context_store` tool's `agentRole` field originally used a hardcoded 6-element string array. Changed to `Object.values(AgentRole)` via a `private static readonly AGENT_ROLE_VALUES` class constant, matching how `invoke_agent` uses `DEPLOYABLE_AGENT_ROLES`. Prevents drift if roles change.
+- **Extracted repeated `ContextScope` cast to class constant:** `Object.values(ContextScope) as [string, ...string[]]` appeared in 3 tool methods. Extracted to `private static readonly SCOPE_VALUES` for DRY.
+
+### Verification
+
+```
+npm run build   → 4 apps compiled successfully
+npm run lint    → clean
+npm run test    → 286/286 passed (31 suites)
+```
