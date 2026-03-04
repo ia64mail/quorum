@@ -73,6 +73,21 @@ The user-facing component providing a conversational interface.
 - Manage conversation context with Moderator
 - Relay orchestration commands to MCP Server
 
+#### Moderator LLM vs Clarification Handler
+
+The Terminal App contains two distinct communication paths:
+
+| | Moderator LLM | Clarification Handler |
+|---|---|---|
+| **Who initiates** | User sends a message | Agent escalates mid-task via `invoke_agent(moderator, ...)` |
+| **Intelligence** | Full LLM reasoning — interprets intent, selects agents, sequences workflow | None — passthrough relay between agent and user |
+| **Scope** | Entire workflow orchestration | Single decision point |
+| **Context** | Full conversation history with the user | Just the question and the user's answer |
+
+The **Moderator LLM** is the orchestration brain: it decomposes user requests into agent workflows ("build auth" → architect designs → team lead creates tickets → developer implements), synthesizes multi-agent results into coherent responses, and makes judgment calls about agent output.
+
+The **Clarification Handler** is a direct agent-to-user channel that bypasses the Moderator LLM. When an agent needs a user decision mid-task (e.g., "push or pull architecture?"), the handler surfaces the question in the console, collects the answer, auto-persists it to the Context Store, and returns it to the calling agent. This avoids a synchronous call-chain deadlock that would occur if the agent tried to invoke the Moderator LLM while it's already blocked waiting for that agent.
+
 ### 2. MCP Server Container
 
 The communication backbone connecting all agents.

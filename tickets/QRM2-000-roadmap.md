@@ -44,46 +44,51 @@ Adapter layer that exposes MCP orchestration tools (`invoke_agent`, `context_sto
 
 **Depends on:** QRM2-002
 
-### QRM2-004 — Role Permission Profiles
+### QRM2-004 — Moderator Invocation Endpoint (User Clarification Flow)
+Add the moderator as an invocable target in `invoke_agent` so agents can escalate clarification requests to the user. Extends the MCP server's target enum, adds a POST /invoke endpoint to the Terminal App, and implements a direct user-prompting handler that surfaces agent questions in the console — bypassing the moderator LLM to avoid call-chain deadlocks. Decisions are auto-persisted to Context Store so they're never asked twice.
+
+**Depends on:** QRM2-003
+
+### QRM2-005 — Role Permission Profiles
 Per-role configuration defining which Claude Code built-in tools each agent can use and which bash commands are denied. Profiles control `allowedTools` lists and hook-based command filtering to enforce the principle of least privilege.
 
-> **Note:** `AskUserQuestion` must be in `disallowedTools` for all agent roles. Agents have no interactive user — the single-message async iterable exhausts on entry, so `AskUserQuestion` would hang indefinitely. Clarification flows through `invoke_agent` instead (see QRM2-006).
+> **Note:** `AskUserQuestion` must be in `disallowedTools` for all agent roles. Agents have no interactive user — the single-message async iterable exhausts on entry, so `AskUserQuestion` would hang indefinitely. Clarification flows through `invoke_agent` to the moderator instead (see QRM2-004, QRM2-007).
 
 **Depends on:** QRM2-002
 
-### QRM2-005 — InvocationHandler Migration
+### QRM2-006 — InvocationHandler Migration
 Replace the manual 10-round Anthropic SDK tool loop in `InvocationHandler` with a single `ClaudeCodeService.execute()` call, integrating the tool bridge and permission profiles. The agentic loop moves inside Claude Code — the handler becomes a thin orchestration layer.
 
-**Depends on:** QRM2-002, QRM2-003, QRM2-004
+**Depends on:** QRM2-002, QRM2-003, QRM2-005
 
-### QRM2-006 — Prompt Adaptation
+### QRM2-007 — Prompt Adaptation
 Update role prompt templates to reflect Claude Code capabilities. Agents now have filesystem tools — prompts must describe workspace conventions, available capabilities, and collaboration patterns in the context of code-capable agents.
 
-> **Note — Autonomous clarification pattern:** Prompts must explicitly instruct agents to never attempt user interaction (`AskUserQuestion` is disabled via QRM2-004). When an agent needs clarification, it must use `invoke_agent` to reach the appropriate team member: **architect** for design/pattern questions, **teamlead** for task scope/priority, **productowner** for business requirements, **moderator** for blocker escalation. Prompts should also bias agents toward reasonable assumptions over excessive cross-agent chatter to conserve depth budget and tokens.
+> **Note — Autonomous clarification pattern:** Prompts must explicitly instruct agents to never attempt user interaction (`AskUserQuestion` is disabled via QRM2-005). When an agent needs clarification, it must use `invoke_agent` to reach the appropriate team member: **architect** for design/pattern questions, **teamlead** for task scope/priority, **productowner** for business requirements, **moderator** for user-facing clarification and blocker escalation (see QRM2-004). Prompts should also bias agents toward reasonable assumptions over excessive cross-agent chatter to conserve depth budget and tokens.
 
-**Depends on:** QRM2-005
+**Depends on:** QRM2-004, QRM2-006
 
-### QRM2-007 — Terminal Moderator Evaluation
+### QRM2-008 — Terminal Moderator Evaluation
 Evaluate whether the terminal's `ChatService` should migrate to Claude Code SDK or remain on the raw Anthropic SDK. The terminal is user-facing and doesn't need filesystem access — migration may add overhead without proportional value.
 
-**Depends on:** QRM2-005
+**Depends on:** QRM2-006
 
-### QRM2-008 — E2E Integration Smoke Test
+### QRM2-009 — E2E Integration Smoke Test
 End-to-end validation in Docker: moderator-initiated task produces observable code changes in the workspace. Verifies container security posture, MCP orchestration, log tracing, and CC tool execution across roles.
 
-**Depends on:** QRM2-001, QRM2-005, QRM2-006
+**Depends on:** QRM2-001, QRM2-006, QRM2-007
 
 ---
 
 ## Dependency Graph
 
 ```
-QRM2-001 (Docker) ───────────────────────────────────────────┐
-                                                              ├→ QRM2-008 (E2E)
-QRM2-002 (SDK) ──→ QRM2-003 (Bridge) ──┐                     │
-               ──→ QRM2-004 (Perms)  ──┼→ QRM2-005 (Handler) ┤
-                                                ├→ QRM2-006 (Prompts) ──┘
-                                                └→ QRM2-007 (Terminal Eval)
+QRM2-001 (Docker) ──────────────────────────────────────────────────────────┐
+                                                                             ├→ QRM2-009 (E2E)
+QRM2-002 (SDK) ──→ QRM2-003 (Bridge) ──→ QRM2-004 (Clarify) ──┐             │
+               ──→ QRM2-005 (Perms)  ──┐                       ├→ QRM2-007 (Prompts) ┘
+                                       ├→ QRM2-006 (Handler) ──┤
+                                                               └→ QRM2-008 (Terminal Eval)
 ```
 
-**Parallel tracks:** QRM2-001 (infrastructure) and QRM2-002 (code) can start simultaneously. QRM2-003 and QRM2-004 can also run in parallel once QRM2-002 lands.
+**Parallel tracks:** QRM2-001 (infrastructure) and QRM2-002 (code) can start simultaneously. QRM2-003 and QRM2-005 can also run in parallel once QRM2-002 lands. QRM2-004 runs after QRM2-003.
