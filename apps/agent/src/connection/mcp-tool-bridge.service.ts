@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { AgentRole, DEPLOYABLE_AGENT_ROLES, ContextScope } from '@app/common';
+import { AgentRole, INVOCABLE_AGENT_ROLES, ContextScope } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { AgentConfigService } from '../config';
 import { McpClientService } from './mcp-client.service';
@@ -73,7 +73,7 @@ export class McpToolBridgeService {
       'Invoke another agent through the message broker',
       {
         target: z
-          .enum(DEPLOYABLE_AGENT_ROLES as unknown as [string, ...string[]])
+          .enum(INVOCABLE_AGENT_ROLES as unknown as [string, ...string[]])
           .describe('Target agent role to invoke'),
         action: z.string().describe('Task description for the target agent'),
         context: z

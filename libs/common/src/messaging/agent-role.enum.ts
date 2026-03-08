@@ -15,3 +15,9 @@ export const DEPLOYABLE_AGENT_ROLES = [
   AgentRole.qa,
   AgentRole.productowner,
 ] as const;
+
+/** All roles that are valid targets for `invoke_agent` (deployable + moderator). */
+export const INVOCABLE_AGENT_ROLES = [
+  ...DEPLOYABLE_AGENT_ROLES,
+  AgentRole.moderator,
+] as const;

@@ -9,6 +9,7 @@ import {
 } from '@app/common';
 import { AnthropicService } from '../llm';
 import { McpClientService } from '../connection';
+import { StdinLockService } from '../clarification';
 
 const MAX_TOOL_ROUNDS = 10;
 
@@ -62,6 +63,7 @@ export class ChatService {
   constructor(
     private readonly anthropic: AnthropicService,
     private readonly mcpClient: McpClientService,
+    private readonly stdinLock: StdinLockService,
   ) {}
 
   async start(): Promise<void> {
@@ -84,8 +86,11 @@ export class ChatService {
   private chatLoop(rl: readline.Interface): Promise<void> {
     return new Promise((resolve) => {
       const prompt = () => {
-        rl.question('You: ', (input) => {
-          void this.handleInput(input, resolve, prompt);
+        void this.stdinLock.acquire().then((release) => {
+          rl.question('You: ', (input) => {
+            release();
+            void this.handleInput(input, resolve, prompt);
+          });
         });
       };
 

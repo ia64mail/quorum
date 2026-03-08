@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { SYSTEM_PREAMBLE } from '@app/common';
 import { AnthropicService } from '../llm';
 import { McpClientService } from '../connection';
+import { StdinLockService } from '../clarification';
 import { ChatService } from './chat.service';
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,7 @@ describe('ChatService', () => {
           provide: McpClientService,
           useValue: { getTools: mockGetTools, callTool: mockCallTool },
         },
+        StdinLockService,
       ],
     }).compile();
 
