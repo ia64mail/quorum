@@ -22,6 +22,10 @@ const invokeRequestSchema = z.object({
   depth: z.number().int().min(0),
 });
 
+/** Compile-time check: schema output must stay in sync with InvokeRequest. */
+type _SchemaMatchesInvokeRequest =
+  z.infer<typeof invokeRequestSchema> extends InvokeRequest ? true : never;
+
 @Controller()
 export class ClarificationController {
   constructor(private readonly handler: ClarificationHandler) {}

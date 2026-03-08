@@ -43,22 +43,51 @@ export class ClarificationHandler {
   }
 
   private displayQuestion(caller: string, action: string): void {
-    const border = '─'.repeat(60);
+    const width = 58;
+    const lines = this.wrapText(action, width);
+    const border = '─'.repeat(width + 2);
     process.stdout.write(
-      `\n┌─ Clarification from ${caller} ${'─'.repeat(Math.max(0, 37 - caller.length))}┐\n`,
+      `\n┌─ Clarification from ${caller} ${'─'.repeat(Math.max(0, width - 21 - caller.length))}┐\n`,
     );
-    process.stdout.write(`│ ${action.padEnd(58)} │\n`);
+    for (const line of lines) {
+      process.stdout.write(`│ ${line.padEnd(width)} │\n`);
+    }
     process.stdout.write(`└${border}┘\n\n`);
+  }
+
+  private wrapText(text: string, width: number): string[] {
+    const lines: string[] = [];
+    for (const paragraph of text.split('\n')) {
+      if (paragraph.length <= width) {
+        lines.push(paragraph);
+        continue;
+      }
+      const words = paragraph.split(' ');
+      let current = '';
+      for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word;
+        if (candidate.length > width && current) {
+          lines.push(current);
+          current = word;
+        } else {
+          current = candidate;
+        }
+      }
+      if (current) lines.push(current);
+    }
+    return lines.length ? lines : [''];
   }
 
   private readUserInput(): Promise<string> {
     return new Promise<string>((resolve, reject) => {
+      let settled = false;
       const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
       });
 
       rl.question('Your answer: ', (answer) => {
+        settled = true;
         rl.close();
         const trimmed = answer.trim();
         if (!trimmed) {
@@ -69,12 +98,16 @@ export class ClarificationHandler {
       });
 
       rl.on('error', (err: unknown) => {
+        if (settled) return;
+        settled = true;
         rl.close();
         reject(err instanceof Error ? err : new Error(String(err)));
       });
 
       rl.on('close', () => {
-        // If stdin closes before we get an answer (e.g. EOF)
+        if (settled) return;
+        settled = true;
+        reject(new Error('stdin closed before answer received'));
       });
     });
   }
@@ -86,7 +119,7 @@ export class ClarificationHandler {
     try {
       await this.mcpClient.callTool('context_store', {
         scope: 'project',
-        key: `clarification:${request.caller}:${Date.now()}`,
+        key: `clarification:${request.caller}:${request.correlationId}`,
         value: {
           question: request.action,
           answer,

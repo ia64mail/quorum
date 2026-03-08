@@ -261,19 +261,56 @@ apps/agent/src/connection/
 
 ## Acceptance Criteria
 
-- [ ] `INVOCABLE_AGENT_ROLES` constant exists in `@app/common` and includes all 6 roles (5 deployable + moderator)
-- [ ] `invoke_agent` tool on MCP server accepts `moderator` as a valid target
-- [ ] Terminal App exposes POST /invoke endpoint that accepts `InvokeRequest`
-- [ ] `ClarificationHandler` receives invocations and displays the agent's question in the console
-- [ ] Console output clearly identifies which agent is asking (e.g., `[architect asks]`)
-- [ ] User can type a response via stdin; response is returned as `InvokeResponse`
-- [ ] After user responds, decision is auto-stored in Context Store via `context_store` MCP tool
-- [ ] `McpToolBridgeService`'s `invoke_agent` target enum updated to `INVOCABLE_AGENT_ROLES`
-- [ ] Stdin access is coordinated with `ChatService` via `StdinLockService` (no interleaved I/O)
-- [ ] Error handling: if stdin is unavailable or `context_store` fails, return `{ success: false, error: '...' }`
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (all existing + new tests)
+- [x] `INVOCABLE_AGENT_ROLES` constant exists in `@app/common` and includes all 6 roles (5 deployable + moderator)
+- [x] `invoke_agent` tool on MCP server accepts `moderator` as a valid target
+- [x] Terminal App exposes POST /invoke endpoint that accepts `InvokeRequest`
+- [x] `ClarificationHandler` receives invocations and displays the agent's question in the console
+- [x] Console output clearly identifies which agent is asking (e.g., `[architect asks]`)
+- [x] User can type a response via stdin; response is returned as `InvokeResponse`
+- [x] After user responds, decision is auto-stored in Context Store via `context_store` MCP tool
+- [x] `McpToolBridgeService`'s `invoke_agent` target enum updated to `INVOCABLE_AGENT_ROLES`
+- [x] Stdin access is coordinated with `ChatService` via `StdinLockService` (no interleaved I/O)
+- [x] Error handling: if stdin is unavailable or `context_store` fails, return `{ success: false, error: '...' }`
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (all existing + new tests)
+
+## Implementation Notes
+
+**Status:** Complete (2 commits on `qrm2-agent-sdk-migration`)
+
+### Deviations from Plan
+
+None structurally — Option B was chosen for the target enum as planned. All files match the proposed file structure. Four post-review refinements were applied:
+
+1. **Compile-time schema guard added** (`clarification.controller.ts:25-27`). The agent's `InvocationController` has a `_SchemaMatchesInvokeRequest` type alias that fails compilation if the Zod schema drifts from `InvokeRequest`. The same guard was missing from `ClarificationController` — now added. Note: the `invokeRequestSchema` itself is duplicated between the two controllers; extracting to `libs/common` is deferred (see Known Tech Debt below).
+
+2. **Long question word-wrapping** (`clarification.service.ts:58-79`). The original `displayQuestion` used `action.padEnd(58)` which overflows the box border for multi-sentence questions. Replaced with `wrapText()` — word-wraps at 58 chars respecting newlines, outputs multiple `│ ... │` rows.
+
+3. **Context Store key uses `correlationId`** (`clarification.service.ts:122`). Changed from `clarification:${caller}:${Date.now()}` to `clarification:${caller}:${correlationId}`. Eliminates millisecond collision risk and makes decisions queryable by correlation chain.
+
+4. **EOF-safe `readUserInput`** (`clarification.service.ts:81-112`). Added a `settled` flag to prevent double-settling: `rl.close()` in the question callback fires the `close` event, which would otherwise reject an already-resolved promise. The `close` handler now rejects only if stdin closes *before* the user answers (e.g., container restart, piped input EOF).
+
+### Key Implementation Details
+
+**Stdin lock integration with ChatService** (`chat.service.ts:86-93`): The chat loop wraps each `rl.question()` call in `stdinLock.acquire()/release()`. When a clarification arrives, `ClarificationHandler` acquires the same lock, blocking the chat prompt until the clarification completes. The handler creates its own temporary `readline.Interface` for the single-question interaction rather than sharing the chat loop's instance.
+
+**Context Store persistence is non-fatal** (`clarification.service.ts:118-137`): If `context_store` call fails (MCP offline, store full), the user's answer is still returned to the calling agent. A warning is logged but the clarification succeeds. This prevents infrastructure issues from blocking agent workflows.
+
+**Error handling split**: Empty answers reject with `Error('Empty answer')` which propagates to `{ success: false, error: 'Clarification failed: Empty answer' }`. All other errors (stdin broken, EOF) follow the same pattern. The `finally` block guarantees lock release on any code path.
+
+### Known Tech Debt
+
+- **Duplicated `invokeRequestSchema`**: The Zod schema for `InvokeRequest` validation is defined identically in `apps/agent/src/connection/invocation.controller.ts` and `apps/terminal/src/clarification/clarification.controller.ts`. Both have a comment noting this should move to `libs/common/src/messaging/`. Extracting it touches every `InvokeRequest` consumer — deferred to avoid scope creep.
+
+### Test Coverage
+
+| File | Tests | What's covered |
+|------|-------|----------------|
+| `clarification.service.spec.ts` | 7 | Question display, answer return, context_store call shape, empty answer, MCP failure resilience, lock acquire/release, lock release on error |
+| `stdin-lock.service.spec.ts` | 4 | Initial state, acquire/release, FIFO queue ordering, double-release idempotency, hand-off semantics |
+
+All 298 tests pass (33 suites). Build and lint clean.
 
 ## Dependencies and References
 
