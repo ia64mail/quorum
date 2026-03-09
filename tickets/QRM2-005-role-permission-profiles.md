@@ -92,10 +92,10 @@ A const map keyed by `AgentRole` (from `@app/common`) for the five deployable ro
 | Role | Additional `disallowedTools` | Rationale |
 |------|----------------------------|-----------|
 | **developer** | *(none)* | Full implementation access — needs all code tools |
-| **architect** | `NotebookEdit` | Design reviewer, not general code author. `FileWrite`/`FileEdit` are available but path-restricted to `docs/` via `allowedWritePaths` (see below) — the architect can author and update project documentation but cannot modify source code. Can still use `Bash` for analysis commands (grep, find, tree, test runners) |
+| **architect** | `NotebookEdit` | Design reviewer, not general code author. `FileWrite`/`FileEdit` are available but path-restricted to `docs/` and `tickets/` via `allowedWritePaths` (see below) — the architect can author and update project documentation and system design review tickets but cannot modify source code. Can still use `Bash` for analysis commands (grep, find, tree, test runners) |
 | **teamlead** | *(none)* | Creates tickets and reviews code — needs file write access for ticket files and light edits. `Bash` for build/test monitoring |
 | **qa** | *(none)* | Writes test files, runs test suites. Needs full filesystem and bash access |
-| **productowner** | `FileWrite`, `FileEdit`, `NotebookEdit`, `Bash`, `EnterWorktree`, `Agent` | Requirements and review only. Can read files and search the codebase but shouldn't modify code, run commands, or spawn sub-agents |
+| **productowner** | `NotebookEdit`, `Bash`, `EnterWorktree`, `Agent` | Requirements and user stories. `FileWrite`/`FileEdit` are available but path-restricted to `tickets/` via `allowedWritePaths` — the product owner can author user stories and requirements tickets but cannot modify source code or documentation. Cannot run commands or spawn sub-agents |
 
 ### Denied Bash Commands
 
@@ -116,10 +116,10 @@ Per-role path restrictions for `FileWrite`, `FileEdit`, and `NotebookEdit`. When
 | Role | `allowedWritePaths` | Effect |
 |------|---------------------|--------|
 | **developer** | *(undefined)* | Unrestricted — can write anywhere in the workspace |
-| **architect** | `['docs/']` | Can create/edit files under `docs/` (architecture docs, design decisions). `FileWrite`/`FileEdit` to source code paths are denied by the hook |
+| **architect** | `['docs/', 'tickets/']` | Can create/edit files under `docs/` (architecture docs, design decisions) and `tickets/` (system design reviews). `FileWrite`/`FileEdit` to source code paths are denied by the hook |
 | **teamlead** | *(undefined)* | Unrestricted — needs write access for tickets, code review edits |
 | **qa** | *(undefined)* | Unrestricted — writes test files alongside source |
-| **productowner** | *(n/a — `FileWrite`/`FileEdit`/`NotebookEdit` in `disallowedTools`)* | Write tools fully disabled at tool level |
+| **productowner** | `['tickets/']` | Can create/edit files under `tickets/` (user stories, requirements). `FileWrite`/`FileEdit` to all other paths are denied by the hook |
 
 The path check resolves the target path to a workspace-relative form, strips leading `./` or `/`, and checks if it starts with any allowed prefix. Absolute paths outside the workspace are always denied when `allowedWritePaths` is set.
 
@@ -256,8 +256,8 @@ apps/agent/src/
 - [ ] `RoleToolProfile` interface defined with `disallowedTools: string[]`, `deniedBashCommands: string[]`, and optional `allowedWritePaths?: string[]`
 - [ ] `ROLE_TOOL_PROFILES` map covers all five `DEPLOYABLE_AGENT_ROLES`
 - [ ] `AskUserQuestion`, `Config`, and `ExitPlanMode` appear in every role's `disallowedTools`
-- [ ] Architect profile denies `NotebookEdit` and sets `allowedWritePaths: ['docs/']` — can write documentation but not source code
-- [ ] Product owner profile denies `Bash`, `FileWrite`, `FileEdit`, `NotebookEdit`, `EnterWorktree`, `Agent`
+- [ ] Architect profile denies `NotebookEdit` and sets `allowedWritePaths: ['docs/', 'tickets/']` — can write documentation and system design review tickets but not source code
+- [ ] Product owner profile denies `NotebookEdit`, `Bash`, `EnterWorktree`, `Agent` and sets `allowedWritePaths: ['tickets/']` — can write user stories and requirements tickets but not source code or documentation
 - [ ] Developer and QA profiles have no additional tool denials beyond the common set and no `allowedWritePaths` restriction
 - [ ] Team lead profile has no additional tool denials beyond the common set and no `allowedWritePaths` restriction
 - [ ] Per-role `deniedBashCommands` lists defined with prefix patterns
