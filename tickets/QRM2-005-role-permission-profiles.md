@@ -318,6 +318,26 @@ Three issues were identified during code review and fixed in a follow-up commit:
 | `tool-guard-hook.spec.ts` | 26 | Bash prefix matching, partial mismatch, case-insensitive, sudo stripping (single + nested), whitespace normalisation, empty deny list, non-string command, write path allow/deny, absolute workspace paths, outside-workspace denial, prefix-substring attack, `./` paths, camelCase `filePath`, multiple allowedWritePaths, undefined allowedWritePaths (unrestricted), non-guarded tools passthrough |
 | `role-permission.service.spec.ts` | 11 | Profile resolution for each deployable role, unknown role throws, `getDisallowedTools()` accessor, `getToolGuardHook()` returns function, lazy singleton (same ref), integrated write path enforcement, integrated bash command enforcement |
 
+### Security Review
+
+A focused security review was conducted against the last 2 commits. No actionable vulnerabilities were found. Summary of verified controls and noted observations:
+
+**Verified controls:**
+
+| Control | Status |
+|---------|--------|
+| Workspace-prefix substring attack prevention | Implemented (trailing-slash check in `toWorkspaceRelative`) |
+| Path traversal via `../` | Mitigated (`resolve()` normalizes before comparison) |
+| `AskUserQuestion` universally denied | Confirmed in all 5 profiles |
+| SDK `disallowedTools` enforcement | Correctly delegated to SDK `query()` options |
+| `sudo` stripping (including nested) | Implemented with `while` loop |
+| Case-insensitive bash matching | Implemented via `.toLowerCase()` |
+| Tool names match SDK types | `FileWrite`, `FileEdit`, `NotebookEdit` confirmed against `sdk-tools.d.ts` |
+
+**Observation 1: Bash prefix matching is bypassable via shell operators.** The `normaliseBashCommand()` function strips `sudo` and collapses whitespace but does not parse shell operators. A command like `echo noop && git push --force` or `bash -c "git push"` would bypass the prefix check. This is a **known design trade-off** — the ticket explicitly documents the hook as a "behavioral guardrail, not a security boundary." The container (non-root user, dropped capabilities, read-only rootfs per QRM2-001) is the actual security boundary. No action required unless the threat model changes to treat the hook as a security control.
+
+**Observation 2: `NotebookEdit` uses `notebook_path` field, not `file_path`.** The SDK's `NotebookEditInput` defines its path field as `notebook_path`, but `extractFilePath()` in `tool-guard-hook.ts` only checks `file_path`/`filePath`. If the SDK passes `notebook_path` as the sole key, the guard returns `allowed: true` (missing path → skip check). **Not currently exploitable** — both roles with `allowedWritePaths` (architect, product owner) have `NotebookEdit` in `disallowedTools`, so the tool is blocked before the hook fires. This is a **latent bug** that should be fixed if a future profile adds `allowedWritePaths` without also denying `NotebookEdit`. Fix: add `toolInput.notebook_path` to `extractFilePath()`.
+
 ### Verification
 
 ```
