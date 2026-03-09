@@ -46,6 +46,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           ...(params.disallowedTools
             ? { disallowedTools: params.disallowedTools }
             : {}),
+          ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
         },
       });
 

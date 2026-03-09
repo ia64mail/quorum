@@ -1,4 +1,7 @@
-import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  McpSdkServerConfigWithInstance,
+  CanUseTool,
+} from '@anthropic-ai/claude-agent-sdk';
 
 /**
  * Parameters for {@link ClaudeCodeService.execute}.
@@ -17,6 +20,11 @@ export interface ExecuteParams {
   allowedTools?: string[];
   /** Tools the agent is explicitly forbidden from using. */
   disallowedTools?: string[];
+  /** Runtime tool permission callback. Called before every tool execution to
+   *  allow or deny based on tool name and input (e.g. bash command filtering,
+   *  write path guards). Operates alongside `disallowedTools` — those remove
+   *  tools entirely; this inspects individual invocations at runtime. */
+  canUseTool?: CanUseTool;
   /** Maximum conversation turns before the session stops. Defaults to 20. */
   maxTurns?: number;
   /** Optional controller for cancelling the execution from outside. */

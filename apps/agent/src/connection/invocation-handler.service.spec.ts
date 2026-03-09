@@ -2,18 +2,21 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AgentRole } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { AgentConfigService } from '../config';
-import { AnthropicService } from '../llm';
+import { RolePermissionService } from '../config/role-permission.service';
+import { ClaudeCodeService } from '../llm';
+import type { ExecuteResult } from '../llm/claude-code.types';
 import { RolePromptService } from '../prompts';
-import { McpClientService } from './mcp-client.service';
-import { InvocationHandler } from './invocation-handler.service';
+import { McpToolBridgeService } from './mcp-tool-bridge.service';
+import { InvocationHandler, toCanUseTool } from './invocation-handler.service';
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-const mockChat = jest.fn();
-const mockGetTools = jest.fn();
-const mockCallTool = jest.fn();
+const mockExecute = jest.fn<Promise<ExecuteResult>, [unknown]>();
+const mockCreateBridge = jest.fn();
+const mockGetDisallowedTools = jest.fn();
+const mockGetToolGuardHook = jest.fn();
 const mockGetSystemPrompt = jest.fn();
 
 const mockConfig = {
@@ -31,63 +34,6 @@ const mockConfig = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function textResponse(text: string) {
-  return {
-    id: 'msg_1',
-    type: 'message',
-    role: 'assistant',
-    content: [{ type: 'text', text }],
-    stop_reason: 'end_turn',
-  };
-}
-
-function toolUseResponse(
-  tools: Array<{
-    id: string;
-    name: string;
-    input: Record<string, unknown>;
-  }>,
-) {
-  return {
-    id: 'msg_1',
-    type: 'message',
-    role: 'assistant',
-    content: tools.map((t) => ({
-      type: 'tool_use',
-      id: t.id,
-      name: t.name,
-      input: t.input,
-    })),
-    stop_reason: 'tool_use',
-  };
-}
-
-function mcpToolResult(text: string, isError = false) {
-  return {
-    content: [{ type: 'text', text }],
-    isError,
-  };
-}
-
-interface ChatCallParams {
-  system: string;
-  messages: Array<{
-    role: string;
-    content: string | Array<{ type: string; [key: string]: unknown }>;
-  }>;
-  tools: unknown[];
-}
-
-/** Type-safe accessor for mockChat call arguments. */
-function chatCallAt(index: number): ChatCallParams {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return
-  return mockChat.mock.calls[index][0];
-}
-
 const baseRequest: InvokeRequest = {
   correlationId: 'corr-123',
   caller: AgentRole.moderator,
@@ -95,6 +41,22 @@ const baseRequest: InvokeRequest = {
   action: 'design auth system',
   wait: true,
   depth: 0,
+};
+
+const successResult: ExecuteResult = {
+  success: true,
+  result: 'Here is my design.',
+  sessionId: 'sess-abc',
+  durationMs: 5000,
+  totalCostUsd: 0.0123,
+  numTurns: 3,
+};
+
+const failureResult: ExecuteResult = {
+  success: false,
+  error: 'timeout',
+  durationMs: 30000,
+  totalCostUsd: 0.005,
 };
 
 // ---------------------------------------------------------------------------
@@ -106,19 +68,26 @@ describe('InvocationHandler', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    mockGetTools.mockReturnValue([]);
-    mockGetSystemPrompt.mockReturnValue(
-      'Mocked system prompt for architect from moderator',
-    );
+    mockGetSystemPrompt.mockReturnValue('Mocked system prompt');
+    mockCreateBridge.mockReturnValue({ quorum: { name: 'quorum' } });
+    mockGetDisallowedTools.mockReturnValue(['AskUserQuestion']);
+    mockGetToolGuardHook.mockReturnValue(() => ({ allowed: true }));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         InvocationHandler,
         { provide: AgentConfigService, useValue: mockConfig },
-        { provide: AnthropicService, useValue: { chat: mockChat } },
+        { provide: ClaudeCodeService, useValue: { execute: mockExecute } },
         {
-          provide: McpClientService,
-          useValue: { getTools: mockGetTools, callTool: mockCallTool },
+          provide: McpToolBridgeService,
+          useValue: { createBridge: mockCreateBridge },
+        },
+        {
+          provide: RolePermissionService,
+          useValue: {
+            getDisallowedTools: mockGetDisallowedTools,
+            getToolGuardHook: mockGetToolGuardHook,
+          },
         },
         {
           provide: RolePromptService,
@@ -130,9 +99,9 @@ describe('InvocationHandler', () => {
     handler = module.get<InvocationHandler>(InvocationHandler);
   });
 
-  describe('single turn (no tools)', () => {
-    it('should return LLM text response as success result', async () => {
-      mockChat.mockResolvedValue(textResponse('Here is my design.'));
+  describe('success path', () => {
+    it('should return success result from execute()', async () => {
+      mockExecute.mockResolvedValue(successResult);
 
       const result = await handler.handle(baseRequest);
 
@@ -141,356 +110,260 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
       });
     });
+  });
 
-    it('should call RolePromptService.getSystemPrompt with request caller', async () => {
-      mockChat.mockResolvedValue(textResponse('Done'));
+  describe('failure path', () => {
+    it('should return failure result from execute()', async () => {
+      mockExecute.mockResolvedValue(failureResult);
 
-      await handler.handle(baseRequest);
+      const result = await handler.handle(baseRequest);
 
-      expect(mockGetSystemPrompt).toHaveBeenCalledWith(AgentRole.moderator);
+      expect(result).toEqual({
+        success: false,
+        error: 'timeout',
+      });
+    });
+  });
+
+  describe('exception handling', () => {
+    it('should catch exceptions and return SDK execution failed error', async () => {
+      mockExecute.mockRejectedValue(new Error('Connection refused'));
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'SDK execution failed: Connection refused',
+      });
     });
 
-    it('should pass the resolved system prompt to AnthropicService.chat', async () => {
-      mockChat.mockResolvedValue(textResponse('Done'));
-      mockGetSystemPrompt.mockReturnValue('Custom resolved prompt');
+    it('should handle non-Error thrown values', async () => {
+      mockExecute.mockRejectedValue('raw string error');
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'SDK execution failed: raw string error',
+      });
+    });
+  });
+
+  describe('prompt building', () => {
+    it('should include action in prompt', async () => {
+      mockExecute.mockResolvedValue(successResult);
 
       await handler.handle(baseRequest);
 
-      expect(mockChat).toHaveBeenCalledWith(
+      expect(mockExecute).toHaveBeenCalledWith(
         expect.objectContaining({
-          system: 'Custom resolved prompt',
+          prompt: expect.stringContaining('design auth system') as string,
         }),
       );
     });
 
-    it('should include action in user message', async () => {
-      mockChat.mockResolvedValue(textResponse('Done'));
-
-      await handler.handle(baseRequest);
-
-      const call = chatCallAt(0);
-      expect(call.messages[0].content).toContain('design auth system');
-    });
-
-    it('should include context in user message when present', async () => {
-      mockChat.mockResolvedValue(textResponse('Done'));
+    it('should include context when present', async () => {
+      mockExecute.mockResolvedValue(successResult);
 
       await handler.handle({
         ...baseRequest,
         context: { framework: 'NestJS' },
       });
 
-      const call = chatCallAt(0);
-      expect(call.messages[0].content).toContain('NestJS');
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('NestJS');
+      expect(call.prompt).toContain('Additional context');
     });
 
-    it('should omit context section when context is absent', async () => {
-      mockChat.mockResolvedValue(textResponse('Done'));
+    it('should omit context when absent', async () => {
+      mockExecute.mockResolvedValue(successResult);
 
       await handler.handle(baseRequest);
 
-      const call = chatCallAt(0);
-      expect(call.messages[0].content).not.toContain('Additional context');
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).not.toContain('Additional context');
     });
 
-    it('should omit context section when context is empty object', async () => {
-      mockChat.mockResolvedValue(textResponse('Done'));
+    it('should omit context when empty object', async () => {
+      mockExecute.mockResolvedValue(successResult);
 
       await handler.handle({ ...baseRequest, context: {} });
 
-      const call = chatCallAt(0);
-      expect(call.messages[0].content).not.toContain('Additional context');
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).not.toContain('Additional context');
     });
   });
 
-  describe('tool loop', () => {
-    it('should execute tool and feed result back to LLM', async () => {
-      mockChat
-        .mockResolvedValueOnce(
-          toolUseResponse([
-            {
-              id: 'tu_1',
-              name: 'context_query',
-              input: { scope: 'project', query: 'auth' },
-            },
-          ]),
-        )
-        .mockResolvedValueOnce(textResponse('Based on the context, use JWT.'));
-
-      mockCallTool.mockResolvedValue(mcpToolResult('{"auth_pattern": "JWT"}'));
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result.success).toBe(true);
-      expect(result.result).toBe('Based on the context, use JWT.');
-      expect(mockCallTool).toHaveBeenCalledTimes(1);
-      expect(mockChat).toHaveBeenCalledTimes(2);
-    });
-
-    it('should execute multiple tool calls in parallel', async () => {
-      mockChat
-        .mockResolvedValueOnce(
-          toolUseResponse([
-            {
-              id: 'tu_1',
-              name: 'context_query',
-              input: { scope: 'project' },
-            },
-            {
-              id: 'tu_2',
-              name: 'context_store',
-              input: { scope: 'conversation', key: 'test', value: 'data' },
-            },
-          ]),
-        )
-        .mockResolvedValueOnce(textResponse('Done'));
-
-      mockCallTool
-        .mockResolvedValueOnce(mcpToolResult('query result'))
-        .mockResolvedValueOnce(mcpToolResult('stored'));
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result.success).toBe(true);
-      expect(mockCallTool).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  describe('invoke_agent augmentation', () => {
-    it('should inject callerRole, correlationId, and depth', async () => {
-      mockChat
-        .mockResolvedValueOnce(
-          toolUseResponse([
-            {
-              id: 'tu_1',
-              name: 'invoke_agent',
-              input: { target: 'developer', action: 'implement feature' },
-            },
-          ]),
-        )
-        .mockResolvedValueOnce(textResponse('Done'));
-
-      mockCallTool.mockResolvedValue(
-        mcpToolResult('{"success": true, "result": "implemented"}'),
-      );
+  describe('system prompt', () => {
+    it('should call RolePromptService.getSystemPrompt with request.caller', async () => {
+      mockExecute.mockResolvedValue(successResult);
 
       await handler.handle(baseRequest);
 
-      expect(mockCallTool).toHaveBeenCalledWith('invoke_agent', {
-        target: 'developer',
-        action: 'implement feature',
-        callerRole: 'architect',
-        correlationId: 'corr-123',
-        depth: 1,
-      });
+      expect(mockGetSystemPrompt).toHaveBeenCalledWith(AgentRole.moderator);
     });
 
-    it('should increment depth based on request depth', async () => {
-      mockChat
-        .mockResolvedValueOnce(
-          toolUseResponse([
-            {
-              id: 'tu_1',
-              name: 'invoke_agent',
-              input: { target: 'qa', action: 'test' },
-            },
-          ]),
-        )
-        .mockResolvedValueOnce(textResponse('Done'));
-
-      mockCallTool.mockResolvedValue(mcpToolResult('tested'));
-
-      await handler.handle({ ...baseRequest, depth: 3 });
-
-      expect(mockCallTool).toHaveBeenCalledWith(
-        'invoke_agent',
-        expect.objectContaining({ depth: 4 }),
-      );
-    });
-  });
-
-  describe('context_* augmentation', () => {
-    it('should default correlationId from request for context tools', async () => {
-      mockChat
-        .mockResolvedValueOnce(
-          toolUseResponse([
-            {
-              id: 'tu_1',
-              name: 'context_store',
-              input: { scope: 'project', key: 'auth', value: 'JWT' },
-            },
-          ]),
-        )
-        .mockResolvedValueOnce(textResponse('Done'));
-
-      mockCallTool.mockResolvedValue(mcpToolResult('stored'));
+    it('should pass resolved system prompt to execute()', async () => {
+      mockGetSystemPrompt.mockReturnValue('Custom resolved prompt');
+      mockExecute.mockResolvedValue(successResult);
 
       await handler.handle(baseRequest);
 
-      expect(mockCallTool).toHaveBeenCalledWith('context_store', {
-        scope: 'project',
-        key: 'auth',
-        value: 'JWT',
-        correlationId: 'corr-123',
-      });
-    });
-
-    it('should allow LLM to override correlationId for context tools', async () => {
-      mockChat
-        .mockResolvedValueOnce(
-          toolUseResponse([
-            {
-              id: 'tu_1',
-              name: 'context_query',
-              input: { scope: 'conversation', correlationId: 'custom-id' },
-            },
-          ]),
-        )
-        .mockResolvedValueOnce(textResponse('Done'));
-
-      mockCallTool.mockResolvedValue(mcpToolResult('data'));
-
-      await handler.handle(baseRequest);
-
-      expect(mockCallTool).toHaveBeenCalledWith('context_query', {
-        scope: 'conversation',
-        correlationId: 'custom-id',
-      });
-    });
-  });
-
-  describe('max rounds', () => {
-    it('should return text with note when max rounds exceeded and text exists', async () => {
-      // Every call returns tool_use — never end_turn
-      mockChat.mockResolvedValue(
-        toolUseResponse([{ id: 'tu_1', name: 'some_tool', input: {} }]),
-      );
-      // Override the last call to include text + tool_use
-      const lastResponse = {
-        id: 'msg_1',
-        type: 'message',
-        role: 'assistant',
-        content: [
-          { type: 'text', text: 'Partial progress' },
-          { type: 'tool_use', id: 'tu_1', name: 'some_tool', input: {} },
-        ],
-        stop_reason: 'tool_use',
-      };
-      // Set up: 9 plain tool_use, then 1 with text
-      mockChat.mockReset();
-      for (let i = 0; i < 9; i++) {
-        mockChat.mockResolvedValueOnce(
-          toolUseResponse([{ id: `tu_${i}`, name: 'some_tool', input: {} }]),
-        );
-      }
-      mockChat.mockResolvedValueOnce(lastResponse);
-      mockCallTool.mockResolvedValue(mcpToolResult('ok'));
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result.success).toBe(true);
-      expect(result.result).toContain('Partial progress');
-      expect(result.result).toContain('maximum of 10 rounds');
-    });
-
-    it('should return error when max rounds exceeded with no text', async () => {
-      mockChat.mockResolvedValue(
-        toolUseResponse([{ id: 'tu_1', name: 'some_tool', input: {} }]),
-      );
-      mockCallTool.mockResolvedValue(mcpToolResult('ok'));
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('maximum of 10 rounds');
-    });
-  });
-
-  describe('error handling', () => {
-    it('should return failure when AnthropicService.chat() throws', async () => {
-      mockChat.mockRejectedValue(new Error('API rate limit exceeded'));
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe(
-        'LLM processing failed: API rate limit exceeded',
-      );
-    });
-
-    it('should continue loop when a tool call fails', async () => {
-      mockChat
-        .mockResolvedValueOnce(
-          toolUseResponse([{ id: 'tu_1', name: 'failing_tool', input: {} }]),
-        )
-        .mockResolvedValueOnce(
-          textResponse('I handled the tool failure gracefully.'),
-        );
-
-      mockCallTool.mockRejectedValue(new Error('tool crashed'));
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result.success).toBe(true);
-      expect(result.result).toBe('I handled the tool failure gracefully.');
-      // The second chat call should include a tool_result with is_error.
-      // messages is mutated in place so the tool_result user message is at index 2
-      // (after initial user msg [0] and first assistant response [1]).
-      const secondCall = chatCallAt(1);
-      const toolResultMsg = secondCall.messages[2];
-      expect(
-        (
-          toolResultMsg.content as Array<{ type: string; [k: string]: unknown }>
-        )[0],
-      ).toEqual(
+      expect(mockExecute).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'tool_result',
-          is_error: true,
-          content: expect.stringContaining('tool crashed') as string,
-        }),
-      );
-    });
-
-    it('should mark tool result as error when MCP returns isError', async () => {
-      mockChat
-        .mockResolvedValueOnce(
-          toolUseResponse([{ id: 'tu_1', name: 'some_tool', input: {} }]),
-        )
-        .mockResolvedValueOnce(textResponse('Noted the error.'));
-
-      mockCallTool.mockResolvedValue(mcpToolResult('Not found', true));
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result.success).toBe(true);
-      const secondCall = chatCallAt(1);
-      const toolResultMsg = secondCall.messages[2];
-      expect(
-        (
-          toolResultMsg.content as Array<{ type: string; [k: string]: unknown }>
-        )[0],
-      ).toEqual(
-        expect.objectContaining({
-          type: 'tool_result',
-          is_error: true,
-          content: 'Not found',
+          systemPrompt: 'Custom resolved prompt',
         }),
       );
     });
   });
 
-  describe('empty tool list', () => {
-    it('should work without tools when getTools returns empty array', async () => {
-      mockGetTools.mockReturnValue([]);
-      mockChat.mockResolvedValue(textResponse('No tools needed.'));
+  describe('bridge integration', () => {
+    it('should call McpToolBridgeService.createBridge with the request', async () => {
+      mockExecute.mockResolvedValue(successResult);
 
-      const result = await handler.handle(baseRequest);
+      await handler.handle(baseRequest);
 
-      expect(result.success).toBe(true);
-      expect(result.result).toBe('No tools needed.');
-      expect(mockChat).toHaveBeenCalledWith(
-        expect.objectContaining({ tools: [] }),
+      expect(mockCreateBridge).toHaveBeenCalledWith(baseRequest);
+    });
+
+    it('should pass bridge result as mcpServers', async () => {
+      const bridgeResult = { quorum: { name: 'quorum', tools: [] } };
+      mockCreateBridge.mockReturnValue(bridgeResult);
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: bridgeResult,
+        }),
       );
     });
+  });
+
+  describe('permission integration — disallowedTools', () => {
+    it('should call RolePermissionService.getDisallowedTools()', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockGetDisallowedTools).toHaveBeenCalled();
+    });
+
+    it('should pass disallowedTools to execute()', async () => {
+      mockGetDisallowedTools.mockReturnValue([
+        'AskUserQuestion',
+        'NotebookEdit',
+      ]);
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          disallowedTools: ['AskUserQuestion', 'NotebookEdit'],
+        }),
+      );
+    });
+  });
+
+  describe('permission integration — canUseTool', () => {
+    it('should call RolePermissionService.getToolGuardHook()', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockGetToolGuardHook).toHaveBeenCalled();
+    });
+
+    it('should pass a canUseTool function to execute()', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const call = mockExecute.mock.calls[0][0] as { canUseTool: unknown };
+      expect(typeof call.canUseTool).toBe('function');
+    });
+  });
+
+  describe('metadata logging', () => {
+    it('should log success metadata without throwing', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      // Verifies the flow completes without error (logging happens internally)
+      const result = await handler.handle(baseRequest);
+      expect(result.success).toBe(true);
+    });
+
+    it('should log failure metadata without throwing', async () => {
+      mockExecute.mockResolvedValue(failureResult);
+
+      const result = await handler.handle(baseRequest);
+      expect(result.success).toBe(false);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toCanUseTool adapter
+// ---------------------------------------------------------------------------
+
+describe('toCanUseTool', () => {
+  const dummyOptions = {
+    signal: new AbortController().signal,
+    toolUseID: 'tu_1',
+  };
+
+  it('should map allowed: true to behavior: allow', async () => {
+    const hook = () => ({ allowed: true });
+    const canUseTool = toCanUseTool(hook);
+
+    const result = await canUseTool('Bash', { command: 'ls' }, dummyOptions);
+
+    expect(result).toEqual({ behavior: 'allow' });
+  });
+
+  it('should map allowed: false with reason to behavior: deny with message', async () => {
+    const hook = () => ({
+      allowed: false,
+      reason: 'Denied bash command: "rm -rf"',
+    });
+    const canUseTool = toCanUseTool(hook);
+
+    const result = await canUseTool(
+      'Bash',
+      { command: 'rm -rf /' },
+      dummyOptions,
+    );
+
+    expect(result).toEqual({
+      behavior: 'deny',
+      message: 'Denied bash command: "rm -rf"',
+    });
+  });
+
+  it('should default deny message to "Denied by role policy" when reason is missing', async () => {
+    const hook = () => ({ allowed: false });
+    const canUseTool = toCanUseTool(hook);
+
+    const result = await canUseTool(
+      'Write',
+      { file_path: '/etc/passwd' },
+      dummyOptions,
+    );
+
+    expect(result).toEqual({
+      behavior: 'deny',
+      message: 'Denied by role policy',
+    });
+  });
+
+  it('should pass tool name and input to the guard hook', async () => {
+    const hook = jest.fn().mockReturnValue({ allowed: true });
+    const canUseTool = toCanUseTool(hook);
+
+    await canUseTool('Bash', { command: 'echo hello' }, dummyOptions);
+
+    expect(hook).toHaveBeenCalledWith('Bash', { command: 'echo hello' });
   });
 });
