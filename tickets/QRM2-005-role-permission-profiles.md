@@ -140,7 +140,7 @@ The hook handles two tool categories:
 
 **Bash filtering** (same as before):
 1. For `Bash` tool, extracts the `command` field from `toolInput`
-2. Normalizes whitespace, strips leading `sudo`
+2. Normalizes whitespace, strips nested `sudo` prefixes (loop)
 3. Checks against `deniedBashCommands` prefixes (case-insensitive)
 
 **Write path filtering:**
@@ -153,7 +153,9 @@ All other tools return `{ allowed: true }`.
 
 This replaces the earlier single-purpose `createBashGuardHook` with a unified hook that covers both guard dimensions from a single callback.
 
-The `sudo` stripping in bash filtering is a convenience — `sudo` isn't installed in the container (QRM2-001), so the command would fail anyway, but stripping it ensures the prefix match catches `sudo git push` the same as `git push`.
+The `sudo` stripping in bash filtering is a convenience — `sudo` isn't installed in the container (QRM2-001), so the command would fail anyway, but stripping it (in a loop, to catch `sudo sudo ...`) ensures the prefix match catches `sudo git push` the same as `git push`.
+
+The write path check uses a trailing-slash comparison to prevent workspace-prefix substring attacks (e.g., `/mnt/quorum/workspace-evil/` matching `/mnt/quorum/workspace`). Paths are resolved via `node:path` `resolve()`/`relative()` against the workspace directory.
 
 ### RolePermissionService
 
@@ -208,21 +210,22 @@ Add `RolePermissionService` to `AgentConfigModule` (it depends only on `AgentCon
 - Every profile includes `AskUserQuestion` in `disallowedTools`
 - Every profile includes `Config` and `ExitPlanMode` in `disallowedTools`
 - No profile contains duplicate entries
-- Architect profile has `allowedWritePaths: ['docs/']`
+- Architect profile has `allowedWritePaths: ['docs/', 'tickets/']`
 
 **Role-specific tool tests:**
 - Architect profile denies `NotebookEdit`, does *not* deny `FileWrite`/`FileEdit` (path-guarded instead)
 - Developer profile has no additional denials beyond common and no `allowedWritePaths`
-- Product owner profile denies `Bash`, `FileWrite`, `FileEdit`, `NotebookEdit`, `EnterWorktree`, `Agent`
+- Product owner profile denies `Bash`, `NotebookEdit`, `EnterWorktree`, `Agent` and sets `allowedWritePaths: ['tickets/']`
 
 **Tool guard hook — bash filtering tests:**
 - Non-guarded tools always allowed
 - Exact prefix match triggers denial (e.g., `git push --force origin main`)
 - Partial prefix mismatch allowed (e.g., `git pull` when `git push` is denied)
 - Case-insensitive matching (`Git Push` denied when `git push` is denied)
-- `sudo` prefix stripped before matching
+- `sudo` prefix stripped before matching (including nested `sudo sudo ...`)
 - Whitespace normalization (`git  push` matches `git push`)
 - Empty denied list allows all bash commands
+- Non-string `command` field gracefully allowed
 
 **Tool guard hook — write path filtering tests:**
 - `FileWrite` to `docs/system-design.md` allowed for architect (`allowedWritePaths: ['docs/']`)
@@ -230,6 +233,8 @@ Add `RolePermissionService` to `AgentConfigModule` (it depends only on `AgentCon
 - `FileWrite` to any path allowed for developer (no `allowedWritePaths`)
 - Absolute workspace paths resolved correctly (e.g., `/mnt/quorum/workspace/docs/foo.md` → `docs/foo.md`)
 - Paths outside workspace always denied when `allowedWritePaths` is set
+- Workspace-prefix substring paths denied (e.g., `workspace-evil/` doesn't match `workspace/`)
+- `./`-prefixed relative paths resolved correctly
 
 **RolePermissionService tests:**
 - Returns correct profile for each role
@@ -273,6 +278,53 @@ apps/agent/src/
 - [ ] `npm run build` compiles successfully
 - [ ] `npm run lint` passes
 - [ ] `npm run test` passes (all existing + new tests)
+
+## Implementation Notes
+
+**Status:** Complete (2 commits on `qrm2-agent-sdk-migration`)
+
+### Deviations from Plan
+
+1. **Product owner retains `FileWrite`/`FileEdit` (path-guarded).** The original ticket design denied `FileWrite` and `FileEdit` at the tool level for the product owner role. During implementation, this was revised to use `allowedWritePaths: ['tickets/']` instead — matching the architect's pattern. This lets the product owner author user stories and requirements tickets directly rather than being fully read-only. The ticket spec (Design Context, Acceptance Criteria, Testing Strategy) was updated accordingly.
+
+2. **Architect `allowedWritePaths` expanded to include `tickets/`.** The original design restricted the architect to `['docs/']`. Expanded to `['docs/', 'tickets/']` so the architect can write system design review tickets alongside documentation.
+
+### Post-Review Fixes
+
+Three issues were identified during code review and fixed in a follow-up commit:
+
+1. **Path traversal bug in `toWorkspaceRelative`** (`tool-guard-hook.ts:109-125`). The original implementation used `resolve(rel) === resolved` as part of the outside-workspace check, which depends on the process's CWD and is unreliable. Additionally, the `startsWith(workspaceDir)` check was vulnerable to prefix-substring attacks — `/mnt/quorum/workspace-evil/` matched `/mnt/quorum/workspace`. Replaced with a clean trailing-slash comparison: `resolved.startsWith(workspaceDir + '/')`.
+
+2. **Single-layer `sudo` stripping** (`tool-guard-hook.ts:89`). Changed `if (cmd.startsWith('sudo '))` to `while (cmd.startsWith('sudo '))` so nested `sudo sudo git push` is caught. Low real-world risk since `sudo` isn't installed in containers (QRM2-001), but eliminates the edge case.
+
+3. **Missing test coverage.** Added three tests:
+   - Workspace-prefix substring attack (`/mnt/quorum/workspace-evil/docs/attack.md` → denied)
+   - `./`-prefixed relative path resolution (`./docs/design.md` → allowed)
+   - Nested `sudo` stripping (`sudo sudo git push` → denied)
+
+### Key Implementation Details
+
+**Hook delivery to SDK (open question).** The ticket identified two possible integration paths for the tool guard hook: `Options.canUseTool` callback or an MCP server wrapper. This ticket only defines the hook — QRM2-006 will verify `canUseTool` behavior with `bypassPermissions` and wire the chosen path. The hook's signature `(toolName, toolInput) => { allowed, reason? }` was designed to align with both options.
+
+**`as const satisfies` for profile map** (`role-tool-profiles.ts:82`). The `ROLE_TOOL_PROFILES` map uses `as const satisfies Record<DeployableRole, RoleToolProfile>` to get both compile-time key completeness checking (every deployable role must have an entry) and readonly inference on the values. This catches missing roles at build time without runtime assertions.
+
+**Lazy singleton hook in `RolePermissionService`** (`role-permission.service.ts:36-47`). `getToolGuardHook()` creates the closure once on first call and caches it. The hook captures the profile's `deniedBashCommands` and `allowedWritePaths` at creation time, so repeated calls don't re-allocate. The workspace directory comes from `AgentConfigService.agent.workspaceDir`.
+
+### Test Coverage
+
+| File | Tests | What's covered |
+|------|-------|----------------|
+| `role-tool-profiles.spec.ts` | 44 | Profile completeness (all roles present, no non-deployable entries), common disallowed tools (AskUserQuestion, Config, ExitPlanMode per role), no duplicates, role-specific denials (architect NotebookEdit, productowner Bash/EnterWorktree/Agent), path-guarded roles don't deny FileWrite/FileEdit, `allowedWritePaths` values, WRITE_TOOLS constant |
+| `tool-guard-hook.spec.ts` | 26 | Bash prefix matching, partial mismatch, case-insensitive, sudo stripping (single + nested), whitespace normalisation, empty deny list, non-string command, write path allow/deny, absolute workspace paths, outside-workspace denial, prefix-substring attack, `./` paths, camelCase `filePath`, multiple allowedWritePaths, undefined allowedWritePaths (unrestricted), non-guarded tools passthrough |
+| `role-permission.service.spec.ts` | 11 | Profile resolution for each deployable role, unknown role throws, `getDisallowedTools()` accessor, `getToolGuardHook()` returns function, lazy singleton (same ref), integrated write path enforcement, integrated bash command enforcement |
+
+### Verification
+
+```
+npm run build   → 4 apps compiled successfully
+npm run lint    → clean
+npm run test    → 379/379 passed (36 suites)
+```
 
 ## Dependencies and References
 

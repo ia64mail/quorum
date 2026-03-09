@@ -65,6 +65,13 @@ describe('createToolGuardHook', () => {
       const result = hook('Bash', { command: 'rm -rf /tmp/foo' });
       expect(result.allowed).toBe(false);
     });
+
+    it('should strip multiple nested sudo prefixes', () => {
+      const result = hook('Bash', {
+        command: 'sudo sudo git push origin main',
+      });
+      expect(result.allowed).toBe(false);
+    });
   });
 
   // ── Write path filtering ───────────────────────────────────────────
@@ -120,6 +127,21 @@ describe('createToolGuardHook', () => {
       });
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('outside workspace');
+    });
+
+    it('should deny workspace-prefix substring paths (e.g. workspace-evil)', () => {
+      const result = hook('FileWrite', {
+        file_path: '/mnt/quorum/workspace-evil/docs/attack.md',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('outside workspace');
+    });
+
+    it('should handle ./ prefixed relative paths', () => {
+      const result = hook('FileWrite', {
+        file_path: './docs/design.md',
+      });
+      expect(result.allowed).toBe(true);
     });
 
     it('should allow any path when allowedWritePaths is undefined', () => {

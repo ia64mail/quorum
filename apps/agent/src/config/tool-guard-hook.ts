@@ -86,7 +86,7 @@ export function createToolGuardHook(
 function normaliseBashCommand(raw: string): string {
   let cmd = raw.replace(/\s+/g, ' ').trim().toLowerCase();
 
-  if (cmd.startsWith('sudo ')) {
+  while (cmd.startsWith('sudo ')) {
     cmd = cmd.slice(5).trimStart();
   }
 
@@ -111,15 +111,18 @@ function toWorkspaceRelative(
   workspaceDir: string,
 ): string | undefined {
   const resolved = resolve(workspaceDir, filePath);
-  const rel = relative(workspaceDir, resolved);
 
-  // Outside workspace: relative path starts with '..'
-  if (rel.startsWith('..') || resolve(rel) === resolved) {
-    // Second check: absolute path that doesn't share the workspace prefix
-    if (!resolved.startsWith(workspaceDir)) {
-      return undefined;
-    }
+  // Trailing-slash comparison prevents prefix-substring attacks
+  // (e.g. /mnt/quorum/workspace-evil matching /mnt/quorum/workspace)
+  const wsPrefix = workspaceDir.endsWith('/')
+    ? workspaceDir
+    : workspaceDir + '/';
+
+  if (resolved !== workspaceDir && !resolved.startsWith(wsPrefix)) {
+    return undefined;
   }
+
+  const rel = relative(workspaceDir, resolved);
 
   // Strip leading './' if present
   return rel.replace(/^\.\//, '');
