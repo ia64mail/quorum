@@ -16,9 +16,12 @@ FROM node:24-alpine AS default
 
 WORKDIR /app
 
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+
 # Alpine has no groupmod/usermod — delete default `node` user and create `quorum` from scratch
 RUN deluser node && delgroup node 2>/dev/null; \
-    addgroup -g 1000 quorum && adduser -u 1000 -G quorum -s /bin/sh -D quorum
+    addgroup -g ${HOST_GID} quorum && adduser -u ${HOST_UID} -G quorum -s /bin/sh -D quorum
 
 ARG APP_NAME
 COPY --from=builder --chown=quorum:quorum /app/dist/apps/${APP_NAME} ./dist
@@ -38,13 +41,16 @@ FROM node:24-bookworm-slim AS agent
 
 WORKDIR /app
 
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git bash ripgrep curl jq openssh-client ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# Bookworm ships groupmod/usermod — rename default `node` user in-place
-RUN groupmod -n quorum node && \
-    usermod -l quorum -d /home/quorum -m -s /bin/bash node
+# Bookworm ships groupmod/usermod — rename default `node` user and adjust uid/gid to match host
+RUN groupmod -n quorum -g ${HOST_GID} node && \
+    usermod -l quorum -u ${HOST_UID} -g ${HOST_GID} -d /home/quorum -m -s /bin/bash node
 
 ARG APP_NAME
 COPY --from=builder --chown=quorum:quorum /app/dist/apps/${APP_NAME} ./dist

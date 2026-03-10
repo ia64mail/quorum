@@ -13,11 +13,11 @@ x-agent-security: &agent-security
     - ALL
   read_only: true
   tmpfs:
-    - /tmp:size=512m,uid=1000,gid=1000
-    - /home/quorum/.claude:size=256m,uid=1000,gid=1000
-    - /home/quorum/.config:size=64m,uid=1000,gid=1000
-    - /home/quorum/.local:size=64m,uid=1000,gid=1000
-    - /home/quorum/.cache:size=128m,uid=1000,gid=1000
+    - /tmp:size=512m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.claude:size=256m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.config:size=64m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.local:size=64m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.cache:size=128m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
 
 services:
   mcp-server:
@@ -27,6 +27,8 @@ services:
       target: default
       args:
         APP_NAME: mcp-server
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
     ports:
       - "3000:3000"
     environment:
@@ -51,6 +53,8 @@ services:
       target: default
       args:
         APP_NAME: terminal
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
     stdin_open: true
     tty: true
     depends_on:
@@ -72,6 +76,8 @@ services:
       target: agent
       args:
         APP_NAME: agent
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
     <<: *agent-security
     depends_on:
       mcp-server:
@@ -94,6 +100,8 @@ services:
       target: agent
       args:
         APP_NAME: agent
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
     <<: *agent-security
     depends_on:
       mcp-server:
@@ -116,6 +124,8 @@ services:
       target: agent
       args:
         APP_NAME: agent
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
     <<: *agent-security
     depends_on:
       mcp-server:

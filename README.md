@@ -254,8 +254,11 @@ npm run test:e2e           # Run end-to-end tests
 
 ```bash
 export WORKSPACE_PATH=/path/to/your/project
-docker compose up
+./scripts/start.sh        # build & start all containers
+./scripts/start.sh -d     # detached mode
 ```
+
+The startup script exports `HOST_UID`/`HOST_GID` from the current user so container bind-mounts (logs, workspace) have correct file ownership, then runs `docker compose build` and `docker compose up`. Extra args are forwarded to both commands.
 
 Starts the MCP server, terminal with moderator, and all agent containers. Agents register on startup and are ready to receive invocations.
 

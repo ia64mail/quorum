@@ -70,6 +70,10 @@ npm run lint
 npm run test
 npm run test:watch
 npm run test:e2e
+
+# Docker — builds and starts all containers with correct host uid/gid
+./scripts/start.sh
+./scripts/start.sh -d     # detached mode
 ```
 
 ## Architecture Concept
