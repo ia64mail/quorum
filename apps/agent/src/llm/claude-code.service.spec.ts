@@ -233,9 +233,11 @@ describe('ClaudeCodeService', () => {
       allowedTools: ['Read', 'Write'],
       disallowedTools: ['Bash'],
     });
-    expect(callArgs.options.env).toEqual({
-      ANTHROPIC_API_KEY: 'sk-ant-test-key',
-    });
+    expect(callArgs.options.env).toEqual(
+      expect.objectContaining({ ANTHROPIC_API_KEY: 'sk-ant-test-key' }),
+    );
+    // process.env keys (e.g. PATH) must also be present
+    expect(callArgs.options.env).toHaveProperty('PATH');
   });
 
   // 6. MCP servers → streaming input

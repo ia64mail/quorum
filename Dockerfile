@@ -51,10 +51,11 @@ COPY --from=builder --chown=quorum:quorum /app/dist/apps/${APP_NAME} ./dist
 COPY --from=builder --chown=quorum:quorum /app/node_modules ./node_modules
 COPY --from=builder --chown=quorum:quorum /app/package*.json ./
 
-RUN mkdir -p /app/logs /tmp/.claude && chown quorum:quorum /app/logs /tmp/.claude
+RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
+ && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude
 
 ENV NODE_ENV=production
 
 USER quorum
 
-CMD ["node", "dist/main.js"]
+CMD ["sh", "-c", "mkdir -p /home/quorum/.claude/debug && exec node dist/main.js"]

@@ -1,8 +1,10 @@
 # QRM2-BUG-001: Claude Code SDK Spawn Failure in Agent Containers
 
+**Status: Resolved**
+
 ## Summary
 
-Agent containers fail to execute Claude Code SDK invocations. Two independent bugs prevent the SDK from spawning its CLI subprocess: (1) the `env` option replaces the entire process environment, stripping `PATH`; (2) the SDK's debug logger crashes Node when `/home/quorum/.claude/debug/` doesn't exist under the tmpfs mount.
+Agent containers fail to execute Claude Code SDK invocations. Three independent bugs prevent the SDK from spawning its CLI subprocess: (1) the `env` option replaces the entire process environment, stripping `PATH`; (2) the SDK's debug logger crashes Node when `/home/quorum/.claude/debug/` doesn't exist under the tmpfs mount; (3) the tmpfs mounts are owned by root, so the `quorum` user cannot create directories.
 
 ## Problem Statement
 
@@ -19,6 +21,12 @@ Error: ENOENT: no such file or directory, open '/home/quorum/.claude/debug/448ca
     at Object.writeFileSync (node:fs:2413:20)
     at Module.appendFileSync (file:///app/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:17:7570)
     at Timeout.z [as _onTimeout] (file:///app/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:17:12176)
+```
+
+Even after addressing root causes 1 and 2, containers crash at startup:
+
+```
+mkdir: cannot create directory '/home/quorum/.claude/debug': Permission denied
 ```
 
 This is a **blocking bug** — no agent can process any invocation. The moderator receives error responses for every delegated task.
@@ -40,11 +48,17 @@ The error handler interprets this ENOENT as "cli.js not found" because it cannot
 
 The SDK writes debug logs to `~/.claude/debug/` via a `Timeout` callback using `appendFileSync`. The Dockerfile creates a tmpfs at `/home/quorum/.claude` but never creates the `debug/` subdirectory. When the SDK's debug timer fires, `appendFileSync` throws ENOENT (missing parent directory), and since the throw occurs inside a `Timeout` callback, it becomes an unhandled exception that crashes Node.
 
+### Root Cause 3: tmpfs mounts owned by root
+
+Docker tmpfs mounts default to `root:root` ownership. The agent container runs as `quorum` (uid 1000), so the startup CMD `mkdir -p /home/quorum/.claude/debug` fails with `Permission denied` because the tmpfs at `/home/quorum/.claude` is not writable by the `quorum` user.
+
 ## Design Context
 
 The `env` passthrough was intentionally minimal — QRM2-002 designed `ClaudeCodeService` to explicitly control which environment variables reach the SDK subprocess for security isolation. The oversight was not accounting for system-level variables (`PATH`, `HOME`, `NODE_ENV`, etc.) that the child process needs to function.
 
 The debug directory issue is a gap between QRM2-001's container hardening (tmpfs mounts, read-only rootfs) and the SDK's runtime expectations. The SDK assumes `~/.claude/` is a persistent, fully populated directory structure.
+
+The tmpfs ownership issue is a Docker default — tmpfs mounts are root-owned unless `uid`/`gid` options are specified.
 
 ## Implementation Details
 
@@ -64,36 +78,59 @@ env: { ...process.env, ANTHROPIC_API_KEY: this.config.anthropic.apiKey },
 
 This preserves `PATH`, `HOME`, `NODE_ENV`, and other system variables while ensuring the API key is always set from config (overriding any inherited value).
 
-### Fix 2: Create debug directory in Dockerfile
+### Fix 2: Create debug directory at container startup
 
 | File | Change |
 |------|--------|
-| `Dockerfile` | Add `/home/quorum/.claude/debug` to the `mkdir` chain in the agent stage |
+| `Dockerfile` | Add `/home/quorum/.claude/debug` to the `RUN mkdir` chain; change agent `CMD` to create the debug directory at startup |
 
 ```dockerfile
-# Before
-RUN mkdir -p /app/logs /tmp/.claude && chown quorum:quorum /app/logs /tmp/.claude
-
-# After
+# Image layer (fallback if tmpfs removed)
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude
-```
 
-Note: The tmpfs mount at `/home/quorum/.claude` overlays this directory at runtime, so the `mkdir` in the image layer only matters if the tmpfs is removed. The real fix is ensuring the tmpfs is populated at startup. Docker's tmpfs mounts start empty, so we also need an entrypoint or init step. However, since the `debug/` directory is created by the SDK on first write in a normal (non-read-only) filesystem, the simplest approach is to add the directory creation to the Dockerfile's `CMD` or use a wrapper entrypoint script.
-
-**Preferred approach**: Create the directory at container startup since tmpfs is empty on each boot:
-
-```dockerfile
+# Startup (required because tmpfs overlays the image layer, starting empty)
 CMD ["sh", "-c", "mkdir -p /home/quorum/.claude/debug && exec node dist/main.js"]
 ```
 
+The tmpfs mount at `/home/quorum/.claude` overlays the image layer at runtime, so the `RUN mkdir` only matters if the tmpfs is removed. The `CMD` wrapper creates the directory on every boot before starting the app.
+
+### Fix 3: Set tmpfs ownership to `quorum` user
+
+| File | Change |
+|------|--------|
+| `docker-compose.yml` | Add `uid=1000,gid=1000` to tmpfs mount options |
+
+```yaml
+# Before
+tmpfs:
+  - /tmp:size=512m
+  - /home/quorum/.claude:size=256m
+
+# After
+tmpfs:
+  - /tmp:size=512m,uid=1000,gid=1000
+  - /home/quorum/.claude:size=256m,uid=1000,gid=1000
+```
+
+This ensures the `quorum` user (uid/gid 1000) owns the tmpfs mounts and can create subdirectories at startup.
+
+### Test update
+
+| File | Change |
+|------|--------|
+| `apps/agent/src/llm/claude-code.service.spec.ts` | Update `env` assertion from exact match to `objectContaining` + `PATH` check |
+
+The test previously asserted `env` was exactly `{ ANTHROPIC_API_KEY: 'sk-ant-test-key' }`. Updated to verify the API key is present and `process.env` keys (e.g. `PATH`) are inherited.
+
 ## Acceptance Criteria
 
-- [ ] `ClaudeCodeService.execute()` passes full `process.env` (with API key override) to the SDK
-- [ ] Agent containers create `/home/quorum/.claude/debug/` at startup
-- [ ] Agents successfully process invocations via Claude Code SDK (no ENOENT errors)
-- [ ] `npm run test` passes with no regressions
-- [ ] `docker compose up` with all agents running — invoke an agent via terminal and receive a valid response
+- [x] `ClaudeCodeService.execute()` passes full `process.env` (with API key override) to the SDK
+- [x] Agent containers create `/home/quorum/.claude/debug/` at startup
+- [x] tmpfs mounts are owned by `quorum` user (uid 1000)
+- [x] No ENOENT or Permission denied errors at container startup
+- [x] `npm run test` passes with no regressions (382/382)
+- [ ] `docker compose up` with all agents running — invoke an agent via terminal and receive a valid response *(blocked by QRM2-BUG-002)*
 
 ## Dependencies and References
 
@@ -103,6 +140,7 @@ CMD ["sh", "-c", "mkdir -p /home/quorum/.claude/debug && exec node dist/main.js"
 - QRM2-001 — Docker Agent Image hardening (introduced tmpfs mounts, read-only rootfs)
 
 ### What This Blocks
+- QRM2-BUG-002 — SDK subprocess silent failure (discovered during BUG-001 verification)
 - QRM2-007 — Prompt Adaptation (cannot test prompt changes without working invocations)
 - QRM2-009 — E2E Integration Smoke Test
 

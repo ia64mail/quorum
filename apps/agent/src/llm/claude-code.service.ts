@@ -38,7 +38,10 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           persistSession: false,
           settingSources: [],
           includePartialMessages: false,
-          env: { ANTHROPIC_API_KEY: this.config.anthropic.apiKey },
+          env: {
+            ...process.env,
+            ANTHROPIC_API_KEY: this.config.anthropic.apiKey,
+          },
           maxTurns: params.maxTurns ?? 20,
           abortController: controller,
           ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
