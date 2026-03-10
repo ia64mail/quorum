@@ -232,12 +232,15 @@ describe('ClaudeCodeService', () => {
       maxTurns: 10,
       allowedTools: ['Read', 'Write'],
       disallowedTools: ['Bash'],
+      debugFile: '/tmp/sdk-debug.log',
     });
     expect(callArgs.options.env).toEqual(
       expect.objectContaining({ ANTHROPIC_API_KEY: 'sk-ant-test-key' }),
     );
     // process.env keys (e.g. PATH) must also be present
     expect(callArgs.options.env).toHaveProperty('PATH');
+    // stderr callback must be a function for subprocess error capture
+    expect(typeof callArgs.options.stderr).toBe('function');
   });
 
   // 6. MCP servers → streaming input

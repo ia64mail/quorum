@@ -15,6 +15,9 @@ x-agent-security: &agent-security
   tmpfs:
     - /tmp:size=512m,uid=1000,gid=1000
     - /home/quorum/.claude:size=256m,uid=1000,gid=1000
+    - /home/quorum/.config:size=64m,uid=1000,gid=1000
+    - /home/quorum/.local:size=64m,uid=1000,gid=1000
+    - /home/quorum/.cache:size=128m,uid=1000,gid=1000
 
 services:
   mcp-server:

@@ -52,7 +52,8 @@ COPY --from=builder --chown=quorum:quorum /app/node_modules ./node_modules
 COPY --from=builder --chown=quorum:quorum /app/package*.json ./
 
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
- && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude
+ && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
+ && ln -s /tmp/.claude.json /home/quorum/.claude.json
 
 ENV NODE_ENV=production
 

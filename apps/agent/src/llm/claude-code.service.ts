@@ -21,6 +21,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
 
     const start = Date.now();
     let sessionId: string | undefined;
+    let messageCount = 0;
 
     try {
       const prompt = params.mcpServers
@@ -44,6 +45,10 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           },
           maxTurns: params.maxTurns ?? 20,
           abortController: controller,
+          debugFile: '/tmp/sdk-debug.log',
+          stderr: (data: string) => {
+            this.logger.warn(`[subprocess stderr] ${data.trimEnd()}`);
+          },
           ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
           ...(params.allowedTools ? { allowedTools: params.allowedTools } : {}),
           ...(params.disallowedTools
@@ -54,6 +59,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
       });
 
       for await (const message of gen) {
+        messageCount++;
         const mapped = this.processMessage(message, sessionId);
         if (mapped) return mapped;
         if (message.type === 'system' && message.subtype === 'init') {
@@ -61,10 +67,14 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         }
       }
 
+      const elapsed = Date.now() - start;
+      this.logger.error(
+        `SDK generator exhausted after ${messageCount} messages and ${elapsed}ms — no result message received`,
+      );
       return {
         success: false,
         error: 'Generator completed without a result message',
-        durationMs: Date.now() - start,
+        durationMs: elapsed,
         totalCostUsd: 0,
       };
     } catch (err) {
