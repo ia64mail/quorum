@@ -4,12 +4,10 @@ import type {
   PermissionResult,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
-import { AgentConfigService } from '../config';
-import { RolePermissionService } from '../config/role-permission.service';
+import { RolePermissionService, type ToolGuardResult } from '../config';
 import { ClaudeCodeService } from '../llm';
 import type { ExecuteResult } from '../llm/claude-code.types';
 import { RolePromptService } from '../prompts';
-import type { ToolGuardResult } from '../config/tool-guard-hook';
 import { McpToolBridgeService } from './mcp-tool-bridge.service';
 
 /**
@@ -49,7 +47,6 @@ export class InvocationHandler {
   private readonly logger = new Logger(InvocationHandler.name);
 
   constructor(
-    private readonly config: AgentConfigService,
     private readonly claudeCode: ClaudeCodeService,
     private readonly bridge: McpToolBridgeService,
     private readonly permissions: RolePermissionService,

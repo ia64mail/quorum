@@ -1,8 +1,8 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AgentRole } from '@app/common';
 import type { InvokeRequest } from '@app/common';
-import { AgentConfigService } from '../config';
-import { RolePermissionService } from '../config/role-permission.service';
+import { RolePermissionService } from '../config';
 import { ClaudeCodeService } from '../llm';
 import type { ExecuteResult } from '../llm/claude-code.types';
 import { RolePromptService } from '../prompts';
@@ -19,20 +19,8 @@ const mockGetDisallowedTools = jest.fn();
 const mockGetToolGuardHook = jest.fn();
 const mockGetSystemPrompt = jest.fn();
 
-const mockConfig = {
-  agent: {
-    role: 'architect',
-    workspaceDir: '/mnt/quorum/workspace',
-    callbackUrl: 'http://architect:3002',
-  },
-  app: { port: 3002, nodeEnv: 'test' },
-  mcp: { serverUrl: 'http://mcp-server:3000' },
-  anthropic: {
-    apiKey: 'test-key',
-    model: 'claude-sonnet-4-5-20250929',
-    maxTokens: 4096,
-  },
-};
+let logSpy: jest.SpyInstance;
+let warnSpy: jest.SpyInstance;
 
 const baseRequest: InvokeRequest = {
   correlationId: 'corr-123',
@@ -73,10 +61,13 @@ describe('InvocationHandler', () => {
     mockGetDisallowedTools.mockReturnValue(['AskUserQuestion']);
     mockGetToolGuardHook.mockReturnValue(() => ({ allowed: true }));
 
+    logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    jest.spyOn(Logger.prototype, 'error').mockImplementation();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         InvocationHandler,
-        { provide: AgentConfigService, useValue: mockConfig },
         { provide: ClaudeCodeService, useValue: { execute: mockExecute } },
         {
           provide: McpToolBridgeService,
@@ -287,19 +278,36 @@ describe('InvocationHandler', () => {
   });
 
   describe('metadata logging', () => {
-    it('should log success metadata without throwing', async () => {
+    it('should log sessionId, numTurns, totalCostUsd, and durationMs on success', async () => {
       mockExecute.mockResolvedValue(successResult);
 
-      // Verifies the flow completes without error (logging happens internally)
-      const result = await handler.handle(baseRequest);
-      expect(result.success).toBe(true);
+      await handler.handle(baseRequest);
+
+      const logMessage = (logSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Invocation complete'),
+      )?.[0] as string;
+      expect(logMessage).toBeDefined();
+      expect(logMessage).toContain('sessionId=sess-abc');
+      expect(logMessage).toContain('turns=3');
+      expect(logMessage).toContain('cost=$0.0123');
+      expect(logMessage).toContain('duration=5000ms');
     });
 
-    it('should log failure metadata without throwing', async () => {
+    it('should log error, totalCostUsd, and durationMs on failure', async () => {
       mockExecute.mockResolvedValue(failureResult);
 
-      const result = await handler.handle(baseRequest);
-      expect(result.success).toBe(false);
+      await handler.handle(baseRequest);
+
+      const warnMessage = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' && call[0].includes('Invocation failed'),
+      )?.[0] as string;
+      expect(warnMessage).toBeDefined();
+      expect(warnMessage).toContain('error="timeout"');
+      expect(warnMessage).toContain('cost=$0.0050');
+      expect(warnMessage).toContain('duration=30000ms');
     });
   });
 });
