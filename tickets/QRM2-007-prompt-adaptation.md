@@ -273,25 +273,25 @@ apps/terminal/src/chat/
 
 ## Acceptance Criteria
 
-- [ ] `SYSTEM_PREAMBLE` includes a Capabilities section describing Claude Code built-in tools (file ops, search, bash)
-- [ ] `SYSTEM_PREAMBLE` includes a Workspace section describing `/mnt/quorum/workspace`, `quorum.md`, `docs/`, `tickets/`
-- [ ] `SYSTEM_PREAMBLE` includes an Autonomous Operation section with clarification routing table (architect, teamlead, productowner, moderator)
-- [ ] `SYSTEM_PREAMBLE` explicitly states `AskUserQuestion` is disabled and must not be attempted
-- [ ] `SYSTEM_PREAMBLE` encodes assumption bias: prefer reasonable assumptions over excessive `invoke_agent` escalation
-- [ ] Developer template describes full filesystem/bash access and git restrictions (`git push --force`, `rm -rf /` denied)
-- [ ] Architect template describes read-all + write-to-`docs/`-and-`tickets/`-only + bash analysis commands + no git commit/push
-- [ ] Team Lead template describes full filesystem + bash + commit (no force-push) + ticket creation in `tickets/`
-- [ ] QA role gets a dedicated template (replaces generic fallback) with test execution focus, file write for tests, no git push/commit
-- [ ] Product Owner role gets a dedicated template (replaces generic fallback) with read-all + write-to-`tickets/`-only, no bash
-- [ ] Moderator template (in `role-prompt-templates.ts`) updated for agent code-capability awareness and clarification flow
-- [ ] `TERMINAL_MODERATOR_PROMPT` (in `chat.service.ts`) updated consistently with agent capability awareness
-- [ ] `GENERIC_PROMPT_TEMPLATE` updated with capability awareness
-- [ ] All templates reference `quorum.md` as the starting point for project-specific context
-- [ ] All per-role Capabilities sections accurately match the permission profiles defined in QRM2-005's `ROLE_TOOL_PROFILES`
-- [ ] Prompt tests updated to verify new section presence and role-specific content
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (all existing + updated tests)
+- [x] `SYSTEM_PREAMBLE` includes a Capabilities section describing Claude Code built-in tools (file ops, search, bash)
+- [x] `SYSTEM_PREAMBLE` includes a Workspace section describing `/mnt/quorum/workspace`, `quorum.md`, `docs/`, `tickets/`
+- [x] `SYSTEM_PREAMBLE` includes an Autonomous Operation section with clarification routing table (architect, teamlead, productowner, moderator)
+- [x] `SYSTEM_PREAMBLE` explicitly states `AskUserQuestion` is disabled and must not be attempted
+- [x] `SYSTEM_PREAMBLE` encodes assumption bias: prefer reasonable assumptions over excessive `invoke_agent` escalation
+- [x] Developer template describes full filesystem/bash access and git restrictions (`git push --force`, `rm -rf /` denied)
+- [x] Architect template describes read-all + write-to-`docs/`-and-`tickets/`-only + bash analysis commands + no git commit/push
+- [x] Team Lead template describes full filesystem + bash + commit (no force-push) + ticket creation in `tickets/`
+- [x] QA role gets a dedicated template (replaces generic fallback) with test execution focus, file write for tests, no git push/commit
+- [x] Product Owner role gets a dedicated template (replaces generic fallback) with read-all + write-to-`tickets/`-only, no bash
+- [x] Moderator template (in `role-prompt-templates.ts`) updated for agent code-capability awareness and clarification flow
+- [x] `TERMINAL_MODERATOR_PROMPT` (in `chat.service.ts`) updated consistently with agent capability awareness
+- [x] `GENERIC_PROMPT_TEMPLATE` updated with capability awareness
+- [x] All templates reference `quorum.md` as the starting point for project-specific context
+- [x] All per-role Capabilities sections accurately match the permission profiles defined in QRM2-005's `ROLE_TOOL_PROFILES`
+- [x] Prompt tests updated to verify new section presence and role-specific content
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (all existing + updated tests)
 
 ## Dependencies and References
 
@@ -313,3 +313,48 @@ apps/terminal/src/chat/
 - Clarification handler: `apps/terminal/src/clarification/clarification.service.ts`
 - QRM2-000 roadmap prompt notes: `tickets/QRM2-000-roadmap.md:64-68`
 - Ticket conventions: `tickets/README.md`
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-03-10
+
+### Files Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `libs/common/src/prompts/role-prompt-templates.ts` | Modified | Rewrote `SYSTEM_PREAMBLE` (added Capabilities, Workspace, Autonomous Operation sections), updated Communication section, added dedicated templates for QA and Product Owner (replacing generic fallback), added Capabilities sections to all 6 role templates, updated Responsibilities/Constraints sections with tool-aware guidance, updated `GENERIC_PROMPT_TEMPLATE` with capability awareness |
+| `libs/common/src/prompts/role-prompt-templates.spec.ts` | Modified | Expanded from ~20 to 53 tests: added preamble tests for new sections (Capabilities, Workspace, Autonomous Operation, AskUserQuestion, assumption bias, quorum.md), added dedicated describe blocks for each role (developer, architect, teamlead, qa, productowner, moderator), replaced generic-fallback-for-qa/po tests with dedicated template assertions, added generic fallback tests for capability awareness |
+| `apps/terminal/src/chat/chat.service.ts` | Modified | Updated `TERMINAL_MODERATOR_PROMPT` with Agent Capabilities Awareness section (agents are Claude Code instances with file/bash/search tools), Clarification Flow section (agents invoke moderator for user-facing decisions), and `quorum.md` reference |
+
+### Deviations from Ticket Spec
+
+- **Terminal moderator wording unified with role template moderator.** The ticket spec didn't prescribe exact wording for the terminal prompt's capability description. Initial implementation used "read, write, and edit files" while the role template moderator used "read, write, and test code." Post-review consolidation aligned both to "read, write, and test code" for consistency.
+
+- **Denied command `rm -rf` normalized to `rm -rf /` across all roles.** The ticket spec listed `rm -rf` (without `/`) for architect and QA denied commands, while developer and teamlead used `rm -rf /`. Post-review consolidation normalized all four roles to `rm -rf /` for consistency. The actual enforcement is in QRM2-005's permission profiles; the prompt wording is advisory guidance.
+
+- **Terminal moderator gained `quorum.md` reference.** The ticket spec's terminal moderator section (line 232-237) didn't explicitly mention `quorum.md`, but the AC "All templates reference `quorum.md`" applied broadly. Added a line telling the moderator that agents read `quorum.md` and to keep it current.
+
+### Test Coverage
+
+| File | Tests | Covers |
+|------|-------|--------|
+| `role-prompt-templates.spec.ts` — `SYSTEM_PREAMBLE` | 10 | Team roles present, Capabilities section (tool names), Workspace section (path, quorum.md, docs/, tickets/), Autonomous Operation (routing targets), AskUserQuestion disabled, assumption bias + depth budget, quorum.md as starting point |
+| `role-prompt-templates.spec.ts` — specific templates | 6 | All 6 roles have templates, `{{caller}}` placeholder present in each |
+| `role-prompt-templates.spec.ts` — developer | 2 | Full filesystem/bash access, git push --force/rm -rf denied |
+| `role-prompt-templates.spec.ts` — architect | 3 | Read-all + write docs/tickets, bash analysis + denied commands, cannot commit/push |
+| `role-prompt-templates.spec.ts` — teamlead | 2 | Full filesystem/bash + commit, ticket creation in tickets/ |
+| `role-prompt-templates.spec.ts` — qa | 3 | Dedicated template (not fallback), test execution commands, write test files + no git |
+| `role-prompt-templates.spec.ts` — productowner | 3 | Dedicated template (not fallback), read-all + write tickets, no bash |
+| `role-prompt-templates.spec.ts` — moderator | 2 | Agent code-capability awareness, clarification flow |
+| `role-prompt-templates.spec.ts` — generic fallback | 4 | `{{caller}}` placeholder, Claude Code tools + permissions, quorum.md, non-empty |
+| `role-prompt-templates.spec.ts` — all templates | 6 | Non-empty string for each role |
+
+### Verification
+
+```
+npm run build   → 4 apps compiled successfully
+npm run lint    → 0 errors, 0 warnings
+npm run test    → 407/407 passed (36 suites), 53 in role-prompt-templates.spec.ts
+```
