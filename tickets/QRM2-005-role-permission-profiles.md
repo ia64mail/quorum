@@ -258,26 +258,27 @@ apps/agent/src/
 
 ## Acceptance Criteria
 
-- [ ] `RoleToolProfile` interface defined with `disallowedTools: string[]`, `deniedBashCommands: string[]`, and optional `allowedWritePaths?: string[]`
-- [ ] `ROLE_TOOL_PROFILES` map covers all five `DEPLOYABLE_AGENT_ROLES`
-- [ ] `AskUserQuestion`, `Config`, and `ExitPlanMode` appear in every role's `disallowedTools`
-- [ ] Architect profile denies `NotebookEdit` and sets `allowedWritePaths: ['docs/', 'tickets/']` — can write documentation and system design review tickets but not source code
-- [ ] Product owner profile denies `NotebookEdit`, `Bash`, `EnterWorktree`, `Agent` and sets `allowedWritePaths: ['tickets/']` — can write user stories and requirements tickets but not source code or documentation
-- [ ] Developer and QA profiles have no additional tool denials beyond the common set and no `allowedWritePaths` restriction
-- [ ] Team lead profile has no additional tool denials beyond the common set and no `allowedWritePaths` restriction
-- [ ] Per-role `deniedBashCommands` lists defined with prefix patterns
-- [ ] `createToolGuardHook()` factory returns a hook that filters both `Bash` commands by prefix and `FileWrite`/`FileEdit`/`NotebookEdit` by path
-- [ ] Bash filtering normalizes whitespace, strips `sudo` prefix, and matches case-insensitively
-- [ ] Write path filtering resolves paths relative to workspace dir and checks against `allowedWritePaths` prefixes
-- [ ] Roles with `allowedWritePaths: undefined` have unrestricted write access
-- [ ] `RolePermissionService` resolves profile by role from `AgentConfigService`
-- [ ] `RolePermissionService` exposes `getDisallowedTools()` and `getToolGuardHook()` convenience methods
-- [ ] `RolePermissionService` wired into `AgentConfigModule` and exported
-- [ ] Barrel exports updated
-- [ ] Unit tests cover: profile completeness, role-specific denials, bash hook prefix matching, write path filtering, hook edge cases, service resolution
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (all existing + new tests)
+- [x] `RoleToolProfile` interface defined with `disallowedTools: string[]`, `deniedBashCommands: string[]`, and optional `allowedWritePaths?: string[]`
+- [x] `ROLE_TOOL_PROFILES` map covers all five `DEPLOYABLE_AGENT_ROLES` (uses `as const satisfies` for compile-time key completeness)
+- [x] `AskUserQuestion`, `Config`, and `ExitPlanMode` appear in every role's `disallowedTools`
+- [x] Architect profile denies `NotebookEdit` and sets `allowedWritePaths: ['docs/', 'tickets/']` — can write documentation and system design review tickets but not source code
+- [x] Product owner profile denies `NotebookEdit`, `Bash`, `EnterWorktree`, `Agent` and sets `allowedWritePaths: ['tickets/']` — can write user stories and requirements tickets but not source code or documentation
+- [x] Developer and QA profiles have no additional tool denials beyond the common set and no `allowedWritePaths` restriction
+- [x] Team lead profile has no additional tool denials beyond the common set and no `allowedWritePaths` restriction
+- [x] Per-role `deniedBashCommands` lists defined with prefix patterns
+- [x] `createToolGuardHook()` factory returns a unified hook that filters both `Bash` commands by prefix and `FileWrite`/`FileEdit`/`NotebookEdit` by allowed write paths
+- [x] Bash filtering normalizes whitespace, strips `sudo` prefix (nested `while` loop), and matches case-insensitively
+- [x] Write path filtering resolves paths relative to workspace dir, uses trailing-slash comparison to prevent prefix-substring attacks, and checks against `allowedWritePaths` prefixes
+- [x] Roles with `allowedWritePaths: undefined` have unrestricted write access
+- [x] `RolePermissionService` resolves profile by role from `AgentConfigService`
+- [x] `RolePermissionService` exposes `getDisallowedTools()` and `getToolGuardHook()` (lazy singleton) convenience methods
+- [x] `RolePermissionService` wired into `AgentConfigModule` and exported
+- [x] Barrel exports updated
+- [x] Hook integrated into `InvocationHandler` via `toCanUseTool()` adapter mapping to SDK's `canUseTool` callback (QRM2-006)
+- [x] Unit tests cover: profile completeness (44 tests), bash hook + write path filtering (26 tests), service resolution (11 tests) — 81 total across 3 spec files
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (all existing + new tests)
 
 ## Implementation Notes
 
