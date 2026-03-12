@@ -65,13 +65,13 @@ Default value: `/mnt/quorum/workspace` (from `TERMINAL_WORKSPACE_DIR` env var, m
 
 ### quorum.md Reader
 
-A lightweight service (or method within `ChatService`) that:
+A private method within `ChatService` that:
 
 1. Resolves the path: `path.join(workspaceDir, 'quorum.md')`
 2. Reads the file contents (`fs.readFile`)
 3. Returns the content as a string, or `undefined` if the file doesn't exist
 
-No parsing, no validation — `quorum.md` is a freeform markdown file. The reader is a simple I/O operation.
+No parsing, no validation — `quorum.md` is a freeform markdown file. The reader is a simple I/O operation. The method is private — it is an implementation detail of `initSystemPrompt()`, not part of the service's public API.
 
 **Missing file handling:** If `quorum.md` doesn't exist, log a warning and proceed without it. The moderator can still function — it just won't have project-specific context. This is important for first-run scenarios where the workspace hasn't been configured yet.
 
@@ -90,7 +90,7 @@ TERMINAL_MODERATOR_PROMPT
 {quorum.md contents}
 ```
 
-The `quorum.md` section is appended after the existing prompt, separated by a horizontal rule. If `quorum.md` is absent, the prompt remains unchanged — no empty section, no placeholder.
+The `quorum.md` section is appended after the existing prompt, separated by a horizontal rule. If `quorum.md` is absent or empty, the prompt remains unchanged — no empty section, no placeholder.
 
 The assembly happens once during `ChatService.start()` (or `onModuleInit`), not per-message. The system prompt is set for the session lifetime. This keeps things simple — no per-turn file reads, no stale-content concerns within a single session.
 
@@ -98,16 +98,16 @@ The assembly happens once during `ChatService.start()` (or `onModuleInit`), not 
 
 The `ChatService` changes are minimal:
 
-1. Inject the workspace path via config (or a reader service)
-2. In `start()` (before entering `chatLoop`), read `quorum.md`
-3. If content exists, set `this.systemPrompt` to `TERMINAL_MODERATOR_PROMPT + separator + quorum content`
-4. If content is absent, `this.systemPrompt` stays as `TERMINAL_MODERATOR_PROMPT`
+1. Inject `TerminalConfigService` for the workspace path
+2. In `start()` (before entering `chatLoop`), call private `initSystemPrompt()`
+3. If content is truthy (non-empty string), set `this.systemPrompt` to `TERMINAL_MODERATOR_PROMPT + separator + quorum content`
+4. If content is absent (`undefined`) or empty (`""`), `this.systemPrompt` stays as `TERMINAL_MODERATOR_PROMPT`
 
 The existing `processWithLoop()` method already reads `this.systemPrompt` — no changes needed downstream.
 
 ### Docker Compose
 
-Add `TERMINAL_WORKSPACE_DIR: /mnt/quorum/workspace` to the terminal service's environment variables. The workspace volume is already mounted for agent containers; the terminal container needs the same mount (read-only is sufficient — the moderator never writes to the workspace):
+Add `TERMINAL_WORKSPACE_DIR: /mnt/quorum/workspace` to the terminal service's environment variables. The workspace volume is already mounted for agent containers via `${WORKSPACE_PATH:-.}`; the terminal container uses the same host-side variable (read-only is sufficient — the moderator never writes to the workspace):
 
 ```yaml
 terminal:
@@ -115,25 +115,21 @@ terminal:
     <<: *shared-env
     TERMINAL_WORKSPACE_DIR: /mnt/quorum/workspace
   volumes:
-    - ${QUORUM_WORKSPACE:-./workspace}:/mnt/quorum/workspace:ro
-    - quorum-logs:/app/logs
+    - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:ro
+    - ./logs:/app/logs
 ```
 
 The `:ro` mount flag ensures the terminal cannot modify workspace files, maintaining the principle that the moderator orchestrates but does not implement.
 
 ### Test Strategy
 
-**Unit tests for quorum.md reading:**
-- File exists → returns contents
-- File missing → returns undefined, logs warning
-- File empty → returns empty string (still "exists")
+All `quorum.md` behaviour is tested through the private `initSystemPrompt()` entry point using `fs/promises` mocks — the reader method is private and not tested in isolation.
 
-**Unit tests for system prompt assembly:**
-- With quorum.md content → prompt includes "Project Configuration" section with content
-- Without quorum.md → prompt equals the base `TERMINAL_MODERATOR_PROMPT`
-
-**Integration test for ChatService initialisation:**
-- Mock filesystem, verify `systemPrompt` is assembled correctly before `chatLoop` starts
+**Unit tests for system prompt assembly (via `initSystemPrompt`):**
+- File exists with content → prompt includes "Project Configuration" section with content
+- File missing (ENOENT) → prompt equals the base `TERMINAL_MODERATOR_PROMPT`
+- File empty → prompt equals the base `TERMINAL_MODERATOR_PROMPT` (no empty section injected)
+- Non-ENOENT error (e.g. EACCES) → error rethrown
 
 **Config tests:**
 - `TERMINAL_WORKSPACE_DIR` env var overrides default
@@ -141,17 +137,17 @@ The `:ro` mount flag ensures the terminal cannot modify workspace files, maintai
 
 ## Acceptance Criteria
 
-- [ ] SDK evaluation decision documented: terminal stays on raw Anthropic SDK (no migration)
-- [ ] Terminal config (`terminal.config.ts`) includes `workspaceDir` with `TERMINAL_WORKSPACE_DIR` env var, defaulting to `/mnt/quorum/workspace`
-- [ ] `TerminalConfigService` exposes `workspaceDir`
-- [ ] `ChatService` reads `quorum.md` from the workspace directory at startup
-- [ ] `quorum.md` contents are injected into the moderator's system prompt under a "Project Configuration" section
-- [ ] Missing `quorum.md` is handled gracefully: warning logged, moderator functions without it
-- [ ] System prompt assembly is tested (with content, without content)
-- [ ] `docker-compose.yml` adds workspace volume mount (read-only) and `TERMINAL_WORKSPACE_DIR` to terminal service
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (all existing + new tests)
+- [x] SDK evaluation decision documented: terminal stays on raw Anthropic SDK (no migration)
+- [x] Terminal config (`terminal.config.ts`) includes `workspaceDir` with `TERMINAL_WORKSPACE_DIR` env var, defaulting to `/mnt/quorum/workspace`
+- [x] `TerminalConfigService` exposes `workspaceDir`
+- [x] `ChatService` reads `quorum.md` from the workspace directory at startup via private `initSystemPrompt()` / `readQuorumMd()`
+- [x] `quorum.md` contents are injected into the moderator's system prompt under a "Project Configuration" section
+- [x] Missing or empty `quorum.md` is handled gracefully: warning logged (missing) or silently skipped (empty), moderator functions without it
+- [x] System prompt assembly is tested (with content, missing file, empty file, non-ENOENT error)
+- [x] `docker-compose.yml` adds workspace volume mount (`${WORKSPACE_PATH:-.}`, read-only) and `TERMINAL_WORKSPACE_DIR` to terminal service
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (all existing + new tests)
 
 ## Dependencies and References
 

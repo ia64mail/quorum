@@ -107,12 +107,12 @@ export class ChatService {
 
   private async initSystemPrompt(): Promise<void> {
     const content = await this.readQuorumMd();
-    if (content !== undefined) {
+    if (content) {
       this.systemPrompt = `${TERMINAL_MODERATOR_PROMPT}\n\n---\n\n## Project Configuration (quorum.md)\n\n${content}`;
     }
   }
 
-  async readQuorumMd(): Promise<string | undefined> {
+  private async readQuorumMd(): Promise<string | undefined> {
     const filePath = path.join(this.config.terminal.workspaceDir, 'quorum.md');
     try {
       return await fs.readFile(filePath, 'utf-8');
