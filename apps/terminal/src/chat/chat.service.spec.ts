@@ -3,15 +3,23 @@ import { SYSTEM_PREAMBLE } from '@app/common';
 import { AnthropicService } from '../llm';
 import { McpClientService } from '../connection';
 import { StdinLockService } from '../clarification';
-import { ChatService } from './chat.service';
+import { TerminalConfigService } from '../config';
+import { ChatService, TERMINAL_MODERATOR_PROMPT } from './chat.service';
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
+jest.mock('fs/promises');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const fsp = require('fs/promises') as { readFile: jest.Mock };
+
 const mockChat = jest.fn();
 const mockGetTools = jest.fn();
 const mockCallTool = jest.fn();
+const mockConfig = {
+  terminal: { workspaceDir: '/test/workspace' },
+} as unknown as TerminalConfigService;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,6 +83,7 @@ describe('ChatService', () => {
           useValue: { getTools: mockGetTools, callTool: mockCallTool },
         },
         StdinLockService,
+        { provide: TerminalConfigService, useValue: mockConfig },
       ],
     }).compile();
 
@@ -358,6 +367,85 @@ describe('ChatService', () => {
       const result = await callProcessWithLoop();
 
       expect(result).toBe('Noted the error.');
+    });
+  });
+
+  describe('readQuorumMd', () => {
+    it('should return file contents when quorum.md exists', async () => {
+      const mockContent = '# Feature: Auth\n\nBuild JWT auth.';
+      fsp.readFile.mockResolvedValue(mockContent);
+
+      const result = await service.readQuorumMd();
+
+      expect(result).toBe(mockContent);
+    });
+
+    it('should return undefined when quorum.md does not exist', async () => {
+      const err = new Error('ENOENT') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      fsp.readFile.mockRejectedValue(err);
+
+      const result = await service.readQuorumMd();
+
+      expect(result).toBeUndefined();
+    });
+
+    it('should return empty string when quorum.md exists but is empty', async () => {
+      fsp.readFile.mockResolvedValue('');
+
+      const result = await service.readQuorumMd();
+
+      expect(result).toBe('');
+    });
+
+    it('should rethrow non-ENOENT errors', async () => {
+      const err = new Error('EACCES') as NodeJS.ErrnoException;
+      err.code = 'EACCES';
+      fsp.readFile.mockRejectedValue(err);
+
+      await expect(service.readQuorumMd()).rejects.toThrow('EACCES');
+    });
+  });
+
+  describe('system prompt assembly', () => {
+    it('should include quorum.md content in system prompt when file exists', async () => {
+      const quorumContent = '# Feature: Auth\n\n## Constraints\nUse JWT.';
+      jest.spyOn(service, 'readQuorumMd').mockResolvedValue(quorumContent);
+
+      await (
+        service as unknown as { initSystemPrompt(): Promise<void> }
+      ).initSystemPrompt();
+
+      const systemPrompt = (service as unknown as { systemPrompt: string })
+        .systemPrompt;
+      expect(systemPrompt).toContain(TERMINAL_MODERATOR_PROMPT);
+      expect(systemPrompt).toContain('## Project Configuration (quorum.md)');
+      expect(systemPrompt).toContain(quorumContent);
+    });
+
+    it('should keep base prompt when quorum.md is missing', async () => {
+      jest.spyOn(service, 'readQuorumMd').mockResolvedValue(undefined);
+
+      await (
+        service as unknown as { initSystemPrompt(): Promise<void> }
+      ).initSystemPrompt();
+
+      const systemPrompt = (service as unknown as { systemPrompt: string })
+        .systemPrompt;
+      expect(systemPrompt).toBe(TERMINAL_MODERATOR_PROMPT);
+      expect(systemPrompt).not.toContain('Project Configuration');
+    });
+
+    it('should include empty quorum.md content when file is empty', async () => {
+      jest.spyOn(service, 'readQuorumMd').mockResolvedValue('');
+
+      await (
+        service as unknown as { initSystemPrompt(): Promise<void> }
+      ).initSystemPrompt();
+
+      const systemPrompt = (service as unknown as { systemPrompt: string })
+        .systemPrompt;
+      expect(systemPrompt).toContain('## Project Configuration (quorum.md)');
     });
   });
 

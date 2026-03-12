@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as readline from 'readline';
 import * as crypto from 'crypto';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import type { MessageParam, ContentBlock } from '@anthropic-ai/sdk/resources';
 import {
   SYSTEM_PREAMBLE,
@@ -10,10 +12,11 @@ import {
 import { AnthropicService } from '../llm';
 import { McpClientService } from '../connection';
 import { StdinLockService } from '../clarification';
+import { TerminalConfigService } from '../config';
 
 const MAX_TOOL_ROUNDS = 10;
 
-const TERMINAL_MODERATOR_PROMPT = `${SYSTEM_PREAMBLE}
+export const TERMINAL_MODERATOR_PROMPT = `${SYSTEM_PREAMBLE}
 
 ---
 
@@ -72,7 +75,7 @@ Agents may invoke you mid-task via \`invoke_agent(moderator, ...)\` when they ne
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
-  private readonly systemPrompt = TERMINAL_MODERATOR_PROMPT;
+  private systemPrompt = TERMINAL_MODERATOR_PROMPT;
   private messages: MessageParam[] = [];
   private currentCorrelationId = '';
 
@@ -80,9 +83,12 @@ export class ChatService {
     private readonly anthropic: AnthropicService,
     private readonly mcpClient: McpClientService,
     private readonly stdinLock: StdinLockService,
+    private readonly config: TerminalConfigService,
   ) {}
 
   async start(): Promise<void> {
+    await this.initSystemPrompt();
+
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -96,6 +102,31 @@ export class ChatService {
       await this.chatLoop(rl);
     } finally {
       rl.close();
+    }
+  }
+
+  private async initSystemPrompt(): Promise<void> {
+    const content = await this.readQuorumMd();
+    if (content !== undefined) {
+      this.systemPrompt = `${TERMINAL_MODERATOR_PROMPT}\n\n---\n\n## Project Configuration (quorum.md)\n\n${content}`;
+    }
+  }
+
+  async readQuorumMd(): Promise<string | undefined> {
+    const filePath = path.join(this.config.terminal.workspaceDir, 'quorum.md');
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
+        this.logger.warn(
+          `quorum.md not found at ${filePath} — moderator will operate without project configuration`,
+        );
+        return undefined;
+      }
+      throw err;
     }
   }
 
