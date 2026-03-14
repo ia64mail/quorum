@@ -99,6 +99,75 @@ All tickets follow the structure and naming conventions defined in `tickets/READ
 
 ---
 
+## Review Protocol
+
+This protocol defines how implementation work is reviewed against ticket requirements. It is the Team Lead's primary reference during code review (see [Team Lead → Code review](#team-lead)).
+
+### Review Workflow
+
+1. **Eligibility check** — Confirm the ticket is ready for review:
+   - Ticket file exists in `tickets/` with complete acceptance criteria
+   - Developer has signaled implementation is complete
+   - `npm run build`, `npm run lint`, and `npm run test` all pass (if any fail, decline immediately with the failure output — do not proceed to review)
+
+2. **Gather context** — Collect the inputs for review:
+   - Read the ticket end-to-end (problem statement, implementation details, acceptance criteria)
+   - Identify changed files: `git diff` against the pre-implementation state
+   - Read relevant `quorum.md` conventions and `docs/` design references cited in the ticket
+
+3. **Review passes** — Evaluate the changes from multiple angles. Run these independently, then merge findings:
+
+   a. **Acceptance criteria audit** — Walk each criterion in the ticket. For every `- [ ]` item, verify the implementation satisfies it by reading the actual code. Flag criteria that are unmet or only partially met.
+
+   b. **Bug scan** — Read the changed files for obvious bugs: logic errors, off-by-one mistakes, unhandled edge cases, race conditions. Focus on the changes themselves, not pre-existing code. Ignore issues a linter or type checker would catch.
+
+   c. **Convention compliance** — Check that the implementation follows patterns defined in this file (import patterns, testing patterns, code style) and existing codebase conventions. Only flag violations that materially affect maintainability — skip pedantic nitpicks.
+
+   d. **Integration check** — Verify the changes integrate correctly with the rest of the system: module wiring, barrel exports, dependency injection, cross-module contracts. Run `npm run build` and `npm run test` to confirm nothing is broken.
+
+4. **Score and filter** — For each finding, assess confidence (is this a real issue or a false positive?):
+   - **High confidence**: The issue is verified against code, will affect functionality or maintainability, and the evidence is clear. Include in review.
+   - **Low confidence**: Might be a false positive, is a pre-existing issue, or is a stylistic preference not backed by project conventions. Exclude from review.
+
+   Filter out: pre-existing issues, issues linters/type checkers would catch, pedantic nitpicks a senior engineer wouldn't flag, general quality suggestions not grounded in project conventions, and changes in functionality that are clearly intentional.
+
+5. **Verdict** — Produce one of:
+
+   **Accept:**
+   - All acceptance criteria verified ✅
+   - No high-confidence issues found
+   - Add Implementation Notes to ticket (files modified, deviations, verification results)
+   - Flip acceptance criteria checkboxes from `- [ ]` to `- [x]`
+
+   **Decline with feedback:**
+   ```
+   ## Review — [Ticket ID]
+
+   ### Issues (N found)
+
+   1. **[Brief description]** — [acceptance criterion or convention violated]
+      File: `path/to/file.ts` (lines N-M)
+      Evidence: [what the code does vs what it should do]
+
+   2. ...
+
+   ### Recommended fixes
+   1. [Specific, actionable fix for issue 1]
+   2. ...
+   ```
+
+   After the developer addresses feedback, re-review from step 1.
+
+### What is NOT a review finding
+
+- Issues that existed before this implementation
+- Stylistic preferences not backed by `quorum.md` or established patterns
+- Missing features that are out of scope for the ticket
+- Suggestions for future improvements (log these as separate tickets instead)
+- Issues that `npm run lint` or `npm run build` would catch — those are verification failures, not review findings
+
+---
+
 ## Role Configurations
 
 ### Architect
@@ -150,9 +219,7 @@ You are the **coordination and decomposition specialist** responsible for transl
 
 2. **Implementation guidance** — Your tickets are the developer's primary input. Implementation details should be specific enough that the developer knows *what* to build, *where* to put it, and *how* it integrates with existing code. Reference specific files, modules, and patterns from the current codebase.
 
-3. **Code review** — After implementation, you review the developer's work against the ticket's acceptance criteria. Your review results in one of:
-   - **Accept**: Implementation meets criteria. Add implementation notes to the ticket (files modified, deviations, verification results). Flip acceptance criteria checkboxes.
-   - **Decline with feedback**: Specific, actionable improvements required. The developer implements fixes. You re-review.
+3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria.
 
 4. **Integration monitoring** — Track how subtasks fit together. Flag dependency conflicts, integration gaps, or inconsistencies across tickets. Run builds and tests (`npm run build`, `npm run test`) to verify integration status.
 
