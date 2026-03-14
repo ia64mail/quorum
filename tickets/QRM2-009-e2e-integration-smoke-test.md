@@ -363,3 +363,32 @@ The runbook includes an empty "Runs" section at the end for recording results, m
 - Test endpoint: `apps/mcp-server/src/testing/test.controller.ts`
 - QRM2-000 roadmap: `tickets/QRM2-000-roadmap.md` (line 76-79)
 - QRM2-BUG tickets: `tickets/QRM2-BUG-001-*.md`, `QRM2-BUG-002-*.md`, `QRM2-BUG-003-*.md` (prior SDK subprocess bugs)
+
+---
+
+## Runs
+
+### Run 1 — 2026-03-14
+
+**Pre-run fixes:** Docker daemon restarted to resolve agent network connectivity to LLM API. Scenarios 6-7 payloads corrected (missing required fields `correlationId`, `caller`, `wait`).
+
+| # | Scenario | Tier | Result | Notes |
+|---|----------|------|--------|-------|
+| 1 | Service Health | 1 | **PASS** | `{"status":"ok"}` |
+| 2 | Agent Registration | 1 | **PASS** | 4 agents (moderator, teamlead, developer, architect), all connected |
+| 3 | Container Security Posture | 1 | **PASS** | user=`quorum` uid=1002 gid=1002, no sudo (`sh: 1: sudo: not found`), CapEff=`0000000000000000`, read-only rootfs |
+| 4 | CC Toolchain Availability | 1 | **PASS** | git 2.39.5, rg 13.0.0, bash 5.2.15, curl 7.88.1, jq 1.6 |
+| 5 | Workspace Volume Writable | 1 | **PASS** | Write/read/delete succeeded despite `read_only: true` rootfs |
+| 6 | Unavailable Role | 1 | **PASS** | `"Agent qa not registered"` |
+| 7 | Depth Limit | 1 | **PASS** | `"Max call depth (5) exceeded"` |
+| 8 | Single-Agent SDK Execution | 2 | **PASS** | `QRM2_SDK_OK` returned. Logs: `sessionId=4a4c70ee-...` `turns=1` `cost=$0.1096` `duration=3331ms` |
+| 9 | Workspace File Creation | 2 | **PASS** | Developer created `smoke-test/hello.ts`, architect read it cross-container. Content: `export const message = "QRM2_SMOKE_OK";` |
+| 10 | Context Store Relay | 2 | **PASS** | Architect stored `QRM2-CONTEXT-PASS` at key `smoke-relay` (conversation scope). Developer retrieved exact value via `context_query`. |
+| 11 | Permission Enforcement — Write Path | 2 | **FAIL** | Architect created `docs/smoke-test-arch.md` (expected: pass) AND `src/forbidden.ts` (expected: denied). Both succeeded. Write path guard did not enforce. See QRM2-BUG-004. |
+| 12 | Multi-Agent Task — Code Generation | 3 | **PASS** | Architect: design doc at `docs/smoke-test-design.md` + stored `greet-design` in context. Developer: queried context, implemented `smoke-test/utils.ts` (greet function) + `smoke-test/utils.test.ts` (3 test cases). All 3 files verified. Architect: 6 turns, $0.0906, 35.7s. Developer: 11 turns, $0.1606, 42.6s. |
+| 13 | Log Correlation | 1 | **PASS** | `correlationId=smoke-qrm2-005` appears in both architect and developer logs with `sessionId`, `turns`, `cost`, `duration`. Cross-service tracing intact. |
+
+**Result: 12/13 PASS, 1 FAIL**
+
+**Bugs found:**
+- **QRM2-BUG-004** — Architect write path guard not enforcing `src/` denial. Root cause: `WRITE_TOOLS` array uses `FileWrite`/`FileEdit` but Claude Code SDK tool names are `Write`/`Edit`. Guard hook never matches actual tool calls. See `tickets/QRM2-BUG-004-write-path-guard-tool-name-mismatch.md`.
