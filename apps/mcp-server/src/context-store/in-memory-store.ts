@@ -39,10 +39,12 @@ export class InMemoryStore
   async onModuleInit(): Promise<void> {
     try {
       const raw = await readFile(this.contextFilePath, 'utf-8');
-      const entries: [string, ContextItem][] = JSON.parse(raw) as [
-        string,
-        ContextItem,
-      ][];
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        this.logger.warn('Context file does not contain an array — ignoring');
+        return;
+      }
+      const entries = parsed as [string, ContextItem][];
       const now = Date.now();
 
       for (const [compositeKey, item] of entries) {
@@ -66,23 +68,28 @@ export class InMemoryStore
   }
 
   async onModuleDestroy(): Promise<void> {
-    const now = Date.now();
-    const entries: [string, ContextItem][] = [];
+    try {
+      const now = Date.now();
+      const entries: [string, ContextItem][] = [];
 
-    for (const [compositeKey, item] of this.store) {
-      if (item.expiresAt !== undefined && now >= item.expiresAt) {
-        continue;
+      for (const [compositeKey, item] of this.store) {
+        if (item.expiresAt !== undefined && now >= item.expiresAt) {
+          continue;
+        }
+        entries.push([compositeKey, item]);
       }
-      entries.push([compositeKey, item]);
+
+      const tmpPath = this.contextFilePath + '.tmp';
+      await writeFile(tmpPath, JSON.stringify(entries, null, 2), 'utf-8');
+      await rename(tmpPath, this.contextFilePath);
+
+      this.logger.log(
+        `Context saved: ${entries.length} items to ${this.contextFilePath}`,
+      );
+    } catch (err: unknown) {
+      const error = err as NodeJS.ErrnoException;
+      this.logger.error(`Failed to save context file: ${error.message}`);
     }
-
-    const tmpPath = this.contextFilePath + '.tmp';
-    await writeFile(tmpPath, JSON.stringify(entries, null, 2), 'utf-8');
-    await rename(tmpPath, this.contextFilePath);
-
-    this.logger.log(
-      `Context saved: ${entries.length} items to ${this.contextFilePath}`,
-    );
   }
 
   private compositeKey(scope: ContextScope, key: string, id?: string): string {

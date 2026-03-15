@@ -568,6 +568,19 @@ describe('InMemoryStore', () => {
       const stats = await freshStore.getStats();
       expect(stats.itemCount).toBe(0);
     });
+
+    it('should start with empty store when file contains non-array JSON', async () => {
+      mockedReadFile.mockResolvedValue('{"not": "an array"}');
+
+      const module = await createModule();
+      const freshStore = module.get<ContextStore>(
+        ContextStore,
+      ) as InMemoryStore;
+      await freshStore.onModuleInit();
+
+      const stats = await freshStore.getStats();
+      expect(stats.itemCount).toBe(0);
+    });
   });
 
   describe('file persistence — onModuleDestroy', () => {
@@ -649,6 +662,18 @@ describe('InMemoryStore', () => {
         TEST_CONTEXT_PATH + '.tmp',
         TEST_CONTEXT_PATH,
       );
+    });
+
+    it('should log error and not throw when write fails', async () => {
+      await store.set({
+        scope: ContextScope.project,
+        key: 'data',
+        value: 'test',
+      });
+
+      mockedWriteFile.mockRejectedValue(new Error('disk full'));
+
+      await expect(store.onModuleDestroy()).resolves.toBeUndefined();
     });
   });
 });

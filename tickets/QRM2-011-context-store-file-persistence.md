@@ -163,20 +163,20 @@ When running outside Docker (`npm run start:dev`), `MCP_WORKSPACE_DIR` won't be 
 
 ## Acceptance Criteria
 
-- [ ] MCP server loads `quorum.context` on startup, populating the in-memory Map
-- [ ] Missing file on first startup logs info and starts with empty store (no error)
-- [ ] Corrupt/unparseable file logs a warning and starts with empty store (no crash)
-- [ ] Expired items in the file are pruned during load
-- [ ] MCP server writes `quorum.context` on graceful shutdown (SIGTERM / app.close())
-- [ ] Expired items are excluded from the written file
-- [ ] Write uses atomic tmp+rename pattern
-- [ ] `quorum.context` lives in the workspace root alongside `quorum.md`
-- [ ] `docker-compose.yml` mounts the workspace volume into mcp-server as rw
-- [ ] `MCP_WORKSPACE_DIR` env var added to mcp-server service
-- [ ] File path is configurable via `CONTEXT_STORE_PATH` env var (optional override)
-- [ ] Non-Docker mode (`npm run start:dev`) writes to cwd by default
-- [ ] Existing unit tests pass (`npm run test` — 0 regressions)
-- [ ] New unit tests cover: load from file, load with expired items, load with missing file, load with corrupt file, save to file, save excludes expired items, atomic write
+- [x] MCP server loads `quorum.context` on startup, populating the in-memory Map
+- [x] Missing file on first startup logs info and starts with empty store (no error)
+- [x] Corrupt/unparseable file logs a warning and starts with empty store (no crash)
+- [x] Expired items in the file are pruned during load
+- [x] MCP server writes `quorum.context` on graceful shutdown (SIGTERM / app.close())
+- [x] Expired items are excluded from the written file
+- [x] Write uses atomic tmp+rename pattern
+- [x] `quorum.context` lives in the workspace root alongside `quorum.md`
+- [x] `docker-compose.yml` mounts the workspace volume into mcp-server as rw
+- [x] `MCP_WORKSPACE_DIR` env var added to mcp-server service
+- [x] File path is configurable via `CONTEXT_STORE_PATH` env var (optional override)
+- [x] Non-Docker mode (`npm run start:dev`) writes to cwd by default
+- [x] Existing unit tests pass (`npm run test` — 0 regressions)
+- [x] New unit tests cover: load from file, load with expired items, load with missing file, load with corrupt file, save to file, save excludes expired items, atomic write
 
 ## Dependencies and References
 
@@ -187,3 +187,37 @@ When running outside Docker (`npm run start:dev`), `MCP_WORKSPACE_DIR` won't be 
   - `apps/mcp-server/src/context-store/in-memory-store.spec.ts` — new test cases
   - `docker-compose.yml` — workspace volume + env var for mcp-server
   - New: `apps/mcp-server/src/context-store/context-store.config.ts` (or extend existing mcp-server config)
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-03-15
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/context-store/in-memory-store.ts` | Modified | Added `OnModuleInit`/`OnModuleDestroy` lifecycle hooks, `Logger`, config injection, file load/save with atomic writes |
+| `apps/mcp-server/src/context-store/in-memory-store.spec.ts` | Modified | 9 new test cases covering all persistence scenarios (load, expired pruning, ENOENT, corrupt file, non-array JSON, save, expired exclusion, atomic write, write failure) |
+| `apps/mcp-server/src/config/context-store.config.ts` | Created | Zod-validated `registerAs` config for `contextStorePath` with `CONTEXT_STORE_PATH` / `MCP_WORKSPACE_DIR` env var resolution |
+| `apps/mcp-server/src/config/index.ts` | Modified | Barrel re-export for `contextStoreConfig` |
+| `apps/mcp-server/src/config/mcp-server-config.module.ts` | Modified | Added `contextStoreConfig` to `ConfigModule.forRoot` load array |
+| `docker-compose.yml` | Modified | Added `MCP_WORKSPACE_DIR` env var and workspace bind-mount to mcp-server service |
+| `apps/agent/src/llm/sdk-hooks.factory.spec.ts` | Modified | Formatting cleanup (no functional change), added missing newline at EOF |
+
+### Deviations from Ticket Spec
+
+- **Config file placed in `config/` not `context-store/`.** The ticket suggested `apps/mcp-server/src/context-store/context-store.config.ts` but the implementation correctly placed it in `apps/mcp-server/src/config/context-store.config.ts` to follow the established per-app config module pattern (alongside `broker.config.ts`, `context.config.ts`).
+
+- **`Array.isArray` guard added on load.** The ticket's pseudocode cast `JSON.parse` output directly. The implementation adds a structural guard that rejects valid JSON that isn't an array (e.g., `{"not": "an array"}`), logging a warning and starting empty — same as the corrupt-file path.
+
+- **`onModuleDestroy` wrapped in try/catch.** The ticket's pseudocode had no error handling on the save path. A write failure (disk full, permissions) during shutdown would propagate and potentially block other `OnModuleDestroy` hooks. The implementation catches and logs the error without rethrowing.
+
+### Verification
+
+```
+npm run build   → 4 apps compiled successfully
+npm run lint    → clean
+npm run test    → 33 passed in in-memory-store.spec.ts (9 new persistence tests + 24 existing)
+```

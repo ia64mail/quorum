@@ -78,7 +78,7 @@ describe('createObservabilityHooks', () => {
 
     await firstHookFn(hooks.PreToolUse)(input, undefined, { signal });
 
-    const logged = logger.debug.mock.calls[0][0] as string;
+    const logged = (logger.debug.mock.calls as string[][])[0][0];
     // The JSON portion should be truncated (200 chars + "...")
     expect(logged).toContain('...');
   });
@@ -158,7 +158,7 @@ describe('createObservabilityHooks', () => {
       signal,
     });
 
-    const logged = logger.warn.mock.calls[0][0] as string;
+    const logged = (logger.warn.mock.calls as string[][])[0][0];
     // Error portion should be capped at 300 chars
     const errorMatch = logged.match(/error="([^"]*)"/);
     expect(errorMatch).toBeTruthy();
