@@ -132,3 +132,39 @@ Operators can still override to `LOG_LEVEL=log` or `LOG_LEVEL=warn` in their she
   - `apps/agent/src/llm/claude-code.service.ts` — hook wiring, assistant message enhancement, session log downgrade
   - `apps/agent/src/llm/sdk-hooks.factory.ts` — new file, hook factory
   - `docker-compose.yml` — LOG_LEVEL default
+
+## Implementation Notes
+
+**Status:** Complete
+
+### Deviations from Plan
+
+1. **`LOG_LEVEL` default kept as `log`, not `debug`.** The ticket specified `${LOG_LEVEL:-debug}` in `docker-compose.yml`, but the operator chose to keep the compose default as `${LOG_LEVEL:-log}` and set `LOG_LEVEL=debug` in their `.env` file instead. This is a cleaner separation — the compose file stays production-safe and local dev verbosity is controlled per-environment via `.env`. The env var override mechanism works identically either way.
+
+2. **Missing newline at EOF in `sdk-hooks.factory.spec.ts`.** Minor oversight — the test file lacks a trailing newline. No functional impact.
+
+### Key Implementation Details
+
+**Full-line colorization replaces `winston.format.colorize()`.** The original format used Winston's built-in `colorize()` which wraps only the passed string in ANSI codes. The new approach defines an explicit `ANSI_COLORS` map and `ansiForLevel()` helper, wrapping the entire assembled line. This avoids invisible ANSI characters breaking padding alignment — a problem noted in the original code comments.
+
+**`NON_TEXT` sentinel for thinking-only messages.** Assistant messages containing only `thinking` blocks (extended thinking) have no extractable text or tool_use content. These are detected via the `NON_TEXT` sentinel return from `previewContent()` and silently skipped, avoiding noisy `[non-text content]` log lines that provided no diagnostic value.
+
+**`PASS_THROUGH` constant in hooks factory.** All three hooks share a single `{ continue: true }` object reference rather than allocating per invocation. Since hooks fire on every tool call (potentially hundreds per session), this avoids unnecessary GC pressure.
+
+**`previewContent()` improved to scan all content blocks.** Previously extracted only `content[0].text` — now uses `Array.find()` to locate the first block with a `text` property, correctly handling messages where text appears after thinking blocks.
+
+### Test Coverage
+
+| File | Tests | What's covered |
+|------|-------|----------------|
+| `sdk-hooks.factory.spec.ts` | 7 | PreToolUse logging + truncation, PostToolUse with/without tool_use_id, PostToolUseFailure logging + error truncation, hook structure validation |
+
+No new tests for `logger.builder.ts` colorization changes (visual formatting, validated via manual `docker compose logs` inspection) or `claude-code.service.ts` message processing changes (existing integration coverage via `processMessage` flow).
+
+### Verification
+
+```
+npm run build   → 4 apps compiled successfully
+npm run lint    → clean
+npm run test    → 420/420 passed (37 suites, 7 new)
+```
