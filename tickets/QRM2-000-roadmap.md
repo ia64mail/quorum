@@ -83,6 +83,11 @@ Improve console log readability and SDK execution transparency. Full-line colori
 
 **Depends on:** QRM2-002, QRM1-006
 
+### QRM2-011 — Context Store File Persistence
+Add file-based persistence to `InMemoryStore`. Serialize the store to `quorum.context` (alongside `quorum.md` in the workspace root) on graceful shutdown via `OnModuleDestroy`, and reload on startup via `OnModuleInit`. Expired items are pruned on load, writes use atomic tmp+rename, and missing/corrupt files degrade gracefully to an empty store. Requires adding the workspace volume mount to the MCP server container.
+
+**Depends on:** QRM1-002, QRM1-003
+
 ---
 
 ## Dependency Graph
@@ -94,6 +99,8 @@ QRM2-002 (SDK) ──→ QRM2-003 (Bridge) ──→ QRM2-004 (Clarify) ──�
                ──→ QRM2-005 (Perms)  ──┐                       ├→ QRM2-007 (Prompts) ┘
                ──→ QRM2-010 (Logs)     ├→ QRM2-006 (Handler) ──┤
                                                                └→ QRM2-008 (Terminal Eval)
+
+QRM2-011 (Context Persistence) ── independent, no QRM2 dependencies
 ```
 
-**Parallel tracks:** QRM2-001 (infrastructure) and QRM2-002 (code) can start simultaneously. QRM2-003 and QRM2-005 can also run in parallel once QRM2-002 lands. QRM2-004 runs after QRM2-003.
+**Parallel tracks:** QRM2-001 (infrastructure) and QRM2-002 (code) can start simultaneously. QRM2-003 and QRM2-005 can also run in parallel once QRM2-002 lands. QRM2-004 runs after QRM2-003. QRM2-011 has no QRM2 dependencies and can be implemented at any point.
