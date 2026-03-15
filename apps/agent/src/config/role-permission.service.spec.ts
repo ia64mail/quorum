@@ -80,12 +80,8 @@ describe('RolePermissionService', () => {
       );
       const hook = service.getToolGuardHook();
 
-      expect(hook('FileWrite', { file_path: 'docs/design.md' }).allowed).toBe(
-        true,
-      );
-      expect(hook('FileWrite', { file_path: 'src/main.ts' }).allowed).toBe(
-        false,
-      );
+      expect(hook('Write', { file_path: 'docs/design.md' }).allowed).toBe(true);
+      expect(hook('Write', { file_path: 'src/main.ts' }).allowed).toBe(false);
     });
 
     it('should produce a working hook that enforces bash commands', async () => {

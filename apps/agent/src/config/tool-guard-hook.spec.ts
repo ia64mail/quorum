@@ -82,28 +82,28 @@ describe('createToolGuardHook', () => {
       WORKSPACE,
     );
 
-    it('should allow FileWrite to an allowed path', () => {
-      const result = hook('FileWrite', {
+    it('should allow Write to an allowed path', () => {
+      const result = hook('Write', {
         file_path: 'docs/system-design.md',
       });
       expect(result.allowed).toBe(true);
     });
 
-    it('should allow FileEdit to an allowed path', () => {
-      const result = hook('FileEdit', {
+    it('should allow Edit to an allowed path', () => {
+      const result = hook('Edit', {
         file_path: `${WORKSPACE}/docs/architecture.md`,
       });
       expect(result.allowed).toBe(true);
     });
 
-    it('should deny FileWrite to a disallowed path', () => {
-      const result = hook('FileWrite', { file_path: 'src/main.ts' });
+    it('should deny Write to a disallowed path', () => {
+      const result = hook('Write', { file_path: 'src/main.ts' });
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('docs/');
     });
 
-    it('should deny FileEdit to a disallowed path', () => {
-      const result = hook('FileEdit', { file_path: 'src/app.module.ts' });
+    it('should deny Edit to a disallowed path', () => {
+      const result = hook('Edit', { file_path: 'src/app.module.ts' });
       expect(result.allowed).toBe(false);
     });
 
@@ -115,14 +115,14 @@ describe('createToolGuardHook', () => {
     });
 
     it('should resolve absolute workspace paths correctly', () => {
-      const result = hook('FileWrite', {
+      const result = hook('Write', {
         file_path: '/mnt/quorum/workspace/docs/foo.md',
       });
       expect(result.allowed).toBe(true);
     });
 
     it('should deny paths outside workspace when allowedWritePaths is set', () => {
-      const result = hook('FileWrite', {
+      const result = hook('Write', {
         file_path: '/etc/passwd',
       });
       expect(result.allowed).toBe(false);
@@ -130,7 +130,7 @@ describe('createToolGuardHook', () => {
     });
 
     it('should deny workspace-prefix substring paths (e.g. workspace-evil)', () => {
-      const result = hook('FileWrite', {
+      const result = hook('Write', {
         file_path: '/mnt/quorum/workspace-evil/docs/attack.md',
       });
       expect(result.allowed).toBe(false);
@@ -138,7 +138,7 @@ describe('createToolGuardHook', () => {
     });
 
     it('should handle ./ prefixed relative paths', () => {
-      const result = hook('FileWrite', {
+      const result = hook('Write', {
         file_path: './docs/design.md',
       });
       expect(result.allowed).toBe(true);
@@ -149,19 +149,19 @@ describe('createToolGuardHook', () => {
         makeProfile({ allowedWritePaths: undefined }),
         WORKSPACE,
       );
-      const result = unrestrictedHook('FileWrite', {
+      const result = unrestrictedHook('Write', {
         file_path: 'src/main.ts',
       });
       expect(result.allowed).toBe(true);
     });
 
     it('should allow when file_path is missing from toolInput', () => {
-      const result = hook('FileWrite', {});
+      const result = hook('Write', {});
       expect(result.allowed).toBe(true);
     });
 
     it('should handle filePath variant (camelCase)', () => {
-      const result = hook('FileWrite', {
+      const result = hook('Write', {
         filePath: 'docs/readme.md',
       });
       expect(result.allowed).toBe(true);
@@ -177,16 +177,14 @@ describe('createToolGuardHook', () => {
     );
 
     it('should allow writes to any of the specified paths', () => {
-      expect(hook('FileWrite', { file_path: 'docs/design.md' }).allowed).toBe(
+      expect(hook('Write', { file_path: 'docs/design.md' }).allowed).toBe(true);
+      expect(hook('Write', { file_path: 'tickets/QRM-001.md' }).allowed).toBe(
         true,
       );
-      expect(
-        hook('FileWrite', { file_path: 'tickets/QRM-001.md' }).allowed,
-      ).toBe(true);
     });
 
     it('should deny writes outside all specified paths', () => {
-      const result = hook('FileWrite', { file_path: 'src/index.ts' });
+      const result = hook('Write', { file_path: 'src/index.ts' });
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('docs/, tickets/');
     });

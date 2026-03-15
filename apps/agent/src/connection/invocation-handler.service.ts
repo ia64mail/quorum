@@ -20,11 +20,14 @@ export function toCanUseTool(
     toolInput: Record<string, unknown>,
   ) => ToolGuardResult,
 ): CanUseTool {
-  return async (toolName, input): Promise<PermissionResult> => {
+  return async (toolName, input, _options): Promise<PermissionResult> => {
     const result = guardHook(toolName, input);
 
     if (result.allowed) {
-      return { behavior: 'allow' };
+      return {
+        behavior: 'allow',
+        updatedInput: input,
+      };
     }
 
     return {

@@ -141,9 +141,9 @@ describe('ROLE_TOOL_PROFILES', () => {
   // ── WRITE_TOOLS constant ──────────────────────────────────────────
 
   describe('WRITE_TOOLS', () => {
-    it('should contain FileWrite, FileEdit, and NotebookEdit', () => {
-      expect(WRITE_TOOLS).toContain('FileWrite');
-      expect(WRITE_TOOLS).toContain('FileEdit');
+    it('should contain Write, Edit, and NotebookEdit', () => {
+      expect(WRITE_TOOLS).toContain('Write');
+      expect(WRITE_TOOLS).toContain('Edit');
       expect(WRITE_TOOLS).toContain('NotebookEdit');
     });
   });

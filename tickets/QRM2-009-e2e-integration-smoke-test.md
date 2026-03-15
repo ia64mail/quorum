@@ -392,3 +392,20 @@ The runbook includes an empty "Runs" section at the end for recording results, m
 
 **Bugs found:**
 - **QRM2-BUG-004** — Architect write path guard not enforcing `src/` denial. Root cause: `WRITE_TOOLS` array uses `FileWrite`/`FileEdit` but Claude Code SDK tool names are `Write`/`Edit`. Guard hook never matches actual tool calls. See `tickets/QRM2-BUG-004-write-path-guard-tool-name-mismatch.md`.
+
+### Run 2 — 2026-03-14 (Scenario 11 retest after BUG-004 partial fix)
+
+**Pre-run fixes:** Three issues addressed in BUG-004:
+1. `WRITE_TOOLS` corrected from `['FileWrite', 'FileEdit', 'NotebookEdit']` to `['Write', 'Edit', 'NotebookEdit']`
+2. `permissionMode` changed from `'bypassPermissions'` to `'default'` — `bypassPermissions` caused `canUseTool` to never be invoked
+3. `toCanUseTool` updated to pass `options.suggestions` as `updatedPermissions` in allow responses
+
+Rebuilt containers via `./scripts/start.sh` (4 builds total during investigation).
+
+| # | Scenario | Tier | Result | Notes |
+|---|----------|------|--------|-------|
+| 11 | Permission Enforcement — Write Path | 2 | **PARTIAL** | `src/forbidden.ts` correctly **denied** with message `"This role can only write to: docs/, tickets/"` ✅. `docs/smoke-test-arch.md` **failed** with ZodError ("Invalid union schema") ✗. Deny path works; allow path broken. |
+
+**Result: Scenario 11 partially fixed — deny enforced, allow broken**
+
+**Root cause of remaining failure:** The `canUseTool` callback is correctly invoked and returns `{ behavior: 'allow', updatedPermissions: [...] }` for allowed paths (confirmed via console.log instrumentation). However, the Claude Code subprocess rejects the allow response with a Zod validation error. The deny response `{ behavior: 'deny', message: '...' }` is accepted by the subprocess. See BUG-004 Issue 3 for investigation directions.

@@ -97,7 +97,7 @@ function normaliseBashCommand(raw: string): string {
 function extractFilePath(
   toolInput: Record<string, unknown>,
 ): string | undefined {
-  // FileWrite / FileEdit / NotebookEdit all use `file_path` or `filePath`
+  // Write / Edit / NotebookEdit all use `file_path` or `filePath`
   const candidate = toolInput.file_path ?? toolInput.filePath;
   return typeof candidate === 'string' ? candidate : undefined;
 }

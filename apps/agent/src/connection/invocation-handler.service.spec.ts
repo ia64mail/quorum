@@ -322,13 +322,17 @@ describe('toCanUseTool', () => {
     toolUseID: 'tu_1',
   };
 
-  it('should map allowed: true to behavior: allow', async () => {
+  it('should map allowed: true to behavior: allow with updatedInput', async () => {
     const hook = () => ({ allowed: true });
     const canUseTool = toCanUseTool(hook);
+    const input = { command: 'ls' };
 
-    const result = await canUseTool('Bash', { command: 'ls' }, dummyOptions);
+    const result = await canUseTool('Bash', input, dummyOptions);
 
-    expect(result).toEqual({ behavior: 'allow' });
+    expect(result).toEqual({
+      behavior: 'allow',
+      updatedInput: input,
+    });
   });
 
   it('should map allowed: false with reason to behavior: deny with message', async () => {

@@ -12,7 +12,7 @@ export interface RoleToolProfile {
   deniedBashCommands: string[];
 
   /**
-   * When set, FileWrite/FileEdit/NotebookEdit are restricted to files
+   * When set, Write/Edit/NotebookEdit are restricted to files
    * under these workspace-relative path prefixes. Undefined = unrestricted.
    */
   allowedWritePaths?: string[];
@@ -79,4 +79,4 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
 } as const satisfies Record<DeployableRole, RoleToolProfile>;
 
 /** Write-guarded tool names checked by the tool guard hook. */
-export const WRITE_TOOLS = ['FileWrite', 'FileEdit', 'NotebookEdit'] as const;
+export const WRITE_TOOLS = ['Write', 'Edit', 'NotebookEdit'] as const;
