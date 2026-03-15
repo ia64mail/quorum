@@ -21,6 +21,7 @@ export class McpClientService implements OnApplicationShutdown {
   private transport!: StreamableHTTPClientTransport;
   private registered = false;
   private reconnecting = false;
+  private shuttingDown = false;
   private cachedTools: Tool[] = [];
 
   constructor(private readonly config: AgentConfigService) {}
@@ -49,6 +50,7 @@ export class McpClientService implements OnApplicationShutdown {
   }
 
   async onApplicationShutdown(_signal?: string): Promise<void> {
+    this.shuttingDown = true;
     await this.unregister();
     await this.closeTransport();
   }
@@ -90,8 +92,9 @@ export class McpClientService implements OnApplicationShutdown {
     });
 
     this.transport.onclose = () => {
-      this.logger.warn('MCP transport closed, attempting reconnection');
       this.registered = false;
+      if (this.shuttingDown) return;
+      this.logger.warn('MCP transport closed, attempting reconnection');
       void this.handleReconnection();
     };
 

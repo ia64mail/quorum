@@ -6,6 +6,7 @@ import { McpServerModule } from './mcp-server.module';
 async function bootstrap() {
   const logger = LoggerBuilder.fromEnv();
   const app = await NestFactory.create(McpServerModule, { logger });
+  app.enableShutdownHooks();
   const config = app.get(McpServerConfigService);
   await app.listen(config.app.port);
 }
