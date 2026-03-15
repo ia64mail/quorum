@@ -409,3 +409,27 @@ Rebuilt containers via `./scripts/start.sh` (4 builds total during investigation
 **Result: Scenario 11 partially fixed — deny enforced, allow broken**
 
 **Root cause of remaining failure:** The `canUseTool` callback is correctly invoked and returns `{ behavior: 'allow', updatedPermissions: [...] }` for allowed paths (confirmed via console.log instrumentation). However, the Claude Code subprocess rejects the allow response with a Zod validation error. The deny response `{ behavior: 'deny', message: '...' }` is accepted by the subprocess. See BUG-004 Issue 3 for investigation directions.
+
+### Run 3 — 2026-03-15 (Full retest after BUG-004 complete resolution)
+
+**Pre-run fixes:** BUG-004 Issue 3 resolved — `toCanUseTool` allow response now passes `updatedInput: input` (the original tool input) as required by the SDK's `PermissionResultAllow` Zod schema. Containers rebuilt via `./scripts/start.sh`.
+
+| # | Scenario | Tier | Result | Notes |
+|---|----------|------|--------|-------|
+| 1 | Service Health | 1 | **PASS** | `{"status":"ok"}` |
+| 2 | Agent Registration | 1 | **PASS** | 4 agents (moderator, developer, architect, teamlead), all connected |
+| 3 | Container Security Posture | 1 | **PASS** | user=`quorum` uid=1002, no sudo, CapEff=`0000000000000000`, read-only rootfs |
+| 4 | CC Toolchain Availability | 1 | **PASS** | git 2.39.5, rg 13.0.0, bash 5.2.15, curl 7.88.1, jq 1.6 |
+| 5 | Workspace Volume Writable | 1 | **PASS** | Write/read/delete succeeded despite `read_only: true` rootfs |
+| 6 | Unavailable Role | 1 | **PASS** | `"Agent qa not registered"` |
+| 7 | Depth Limit | 1 | **PASS** | `"Max call depth (5) exceeded"` |
+| 8 | Single-Agent SDK Execution | 2 | **PASS** | `QRM2_SDK_OK` returned. `sessionId=2abe71d6-...` `turns=1` `cost=$0.1085` `duration=2905ms` |
+| 9 | Workspace File Creation | 2 | **PASS** | Developer created `smoke-test/hello.ts`, architect read it cross-container. Content: `export const message = "QRM2_SMOKE_OK";` |
+| 10 | Context Store Relay | 2 | **PASS** | Architect stored `QRM2-CONTEXT-PASS` at key `smoke-relay` (conversation scope). Developer retrieved exact value via `context_query`. |
+| 11 | Permission Enforcement — Write Path | 2 | **PASS** | `docs/smoke-test-arch.md` created successfully. `src/forbidden.ts` correctly **denied**: `"This role can only write to: docs/, tickets/"`. Both allow and deny paths working. BUG-004 fully resolved. |
+| 12 | Multi-Agent Task — Code Generation | 3 | **PASS** | Architect: design doc at `docs/smoke-test-design.md` + stored `greet-design` in context (5 turns, $0.0852, 32.7s). Developer: queried context, implemented `smoke-test/utils.ts` (greet function) + `smoke-test/utils.test.ts` (6 test cases) (9 turns, $0.1498, 44.5s). All 3 files verified. |
+| 13 | Log Correlation | 1 | **PASS** | `correlationId=smoke-qrm2-005` appears in both architect and developer logs with `sessionId`, `turns`, `cost`, `duration`. Cross-service tracing intact. |
+
+**Result: 13/13 PASS — Full green.**
+
+**QRM2 milestone validated.** All acceptance criteria met. BUG-004 (all 3 issues) confirmed resolved in production containers.
