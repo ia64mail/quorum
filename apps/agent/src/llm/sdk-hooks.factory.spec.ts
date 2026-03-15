@@ -94,11 +94,9 @@ describe('createObservabilityHooks', () => {
       transcript_path: '/tmp/transcript',
     };
 
-    const result = await firstHookFn(hooks.PostToolUse)(
-      input,
-      'toolu_xyz789',
-      { signal },
-    );
+    const result = await firstHookFn(hooks.PostToolUse)(input, 'toolu_xyz789', {
+      signal,
+    });
 
     expect(result).toEqual({ continue: true });
     expect(logger.debug).toHaveBeenCalledWith(

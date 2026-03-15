@@ -1,20 +1,54 @@
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitterModule, EventEmitter2 } from '@nestjs/event-emitter';
-import { ChangeEvent, ContextScope, ContextStore } from '@app/common';
+import {
+  ChangeEvent,
+  ContextItem,
+  ContextScope,
+  ContextStore,
+} from '@app/common';
+import { contextStoreConfig } from '../config';
 import { InMemoryStore } from './in-memory-store';
+
+jest.mock('node:fs/promises');
+
+const mockedReadFile = jest.mocked(readFile);
+const mockedWriteFile = jest.mocked(writeFile);
+const mockedRename = jest.mocked(rename);
+
+const TEST_CONTEXT_PATH = '/tmp/test-quorum.context';
+
+function createModule(): Promise<TestingModule> {
+  return Test.createTestingModule({
+    imports: [EventEmitterModule.forRoot()],
+    providers: [
+      { provide: ContextStore, useClass: InMemoryStore },
+      {
+        provide: contextStoreConfig.KEY,
+        useValue: { contextStorePath: TEST_CONTEXT_PATH },
+      },
+    ],
+  }).compile();
+}
 
 describe('InMemoryStore', () => {
   let store: InMemoryStore;
   let eventEmitter: EventEmitter2;
 
   beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      imports: [EventEmitterModule.forRoot()],
-      providers: [{ provide: ContextStore, useClass: InMemoryStore }],
-    }).compile();
+    jest.clearAllMocks();
+    // Default: no context file exists (first run)
+    mockedReadFile.mockRejectedValue(
+      Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
+    );
+    mockedWriteFile.mockResolvedValue();
+    mockedRename.mockResolvedValue();
 
+    const module = await createModule();
     store = module.get<ContextStore>(ContextStore) as InMemoryStore;
     eventEmitter = module.get<EventEmitter2>(EventEmitter2);
+
+    await store.onModuleInit();
   });
 
   describe('set and get', () => {
@@ -435,6 +469,186 @@ describe('InMemoryStore', () => {
         id: 'conv-1',
         action: 'set',
       });
+    });
+  });
+
+  describe('file persistence — onModuleInit', () => {
+    it('should load items from context file on startup', async () => {
+      const entries: [string, ContextItem][] = [
+        [
+          'project:_:tech_stack',
+          {
+            key: 'tech_stack',
+            value: { runtime: 'Node.js' },
+            scope: ContextScope.project,
+            createdAt: 1710400000000,
+          },
+        ],
+        [
+          'conversation:task-001:decision',
+          {
+            key: 'decision',
+            value: 'JWT',
+            scope: ContextScope.conversation,
+            id: 'task-001',
+            createdAt: 1710400100000,
+          },
+        ],
+      ];
+      mockedReadFile.mockResolvedValue(JSON.stringify(entries));
+
+      const module = await createModule();
+      const freshStore = module.get<ContextStore>(
+        ContextStore,
+      ) as InMemoryStore;
+      await freshStore.onModuleInit();
+
+      expect(await freshStore.get(ContextScope.project, 'tech_stack')).toEqual({
+        runtime: 'Node.js',
+      });
+      expect(
+        await freshStore.get(ContextScope.conversation, 'decision', 'task-001'),
+      ).toBe('JWT');
+    });
+
+    it('should skip expired items during load', async () => {
+      const now = Date.now();
+      const entries: [string, ContextItem][] = [
+        [
+          'project:_:active',
+          {
+            key: 'active',
+            value: 'still here',
+            scope: ContextScope.project,
+            createdAt: now - 5000,
+          },
+        ],
+        [
+          'project:_:expired',
+          {
+            key: 'expired',
+            value: 'gone',
+            scope: ContextScope.project,
+            createdAt: now - 5000,
+            expiresAt: now - 1000,
+          },
+        ],
+      ];
+      mockedReadFile.mockResolvedValue(JSON.stringify(entries));
+
+      const module = await createModule();
+      const freshStore = module.get<ContextStore>(
+        ContextStore,
+      ) as InMemoryStore;
+      await freshStore.onModuleInit();
+
+      expect(await freshStore.get(ContextScope.project, 'active')).toBe(
+        'still here',
+      );
+      expect(
+        await freshStore.get(ContextScope.project, 'expired'),
+      ).toBeUndefined();
+    });
+
+    it('should start with empty store when file is missing (ENOENT)', async () => {
+      // Default beforeEach already mocks ENOENT — just verify store is empty
+      const stats = await store.getStats();
+      expect(stats.itemCount).toBe(0);
+    });
+
+    it('should start with empty store when file is corrupt', async () => {
+      mockedReadFile.mockResolvedValue('not valid json {{{');
+
+      const module = await createModule();
+      const freshStore = module.get<ContextStore>(
+        ContextStore,
+      ) as InMemoryStore;
+      await freshStore.onModuleInit();
+
+      const stats = await freshStore.getStats();
+      expect(stats.itemCount).toBe(0);
+    });
+  });
+
+  describe('file persistence — onModuleDestroy', () => {
+    it('should save store contents to file on shutdown', async () => {
+      await store.set({
+        scope: ContextScope.project,
+        key: 'config',
+        value: { debug: true },
+      });
+
+      await store.onModuleDestroy();
+
+      expect(mockedWriteFile).toHaveBeenCalledWith(
+        TEST_CONTEXT_PATH + '.tmp',
+        expect.any(String),
+        'utf-8',
+      );
+      expect(mockedRename).toHaveBeenCalledWith(
+        TEST_CONTEXT_PATH + '.tmp',
+        TEST_CONTEXT_PATH,
+      );
+
+      const written = JSON.parse(
+        mockedWriteFile.mock.calls[0][1] as string,
+      ) as [string, ContextItem][];
+      expect(written).toHaveLength(1);
+      expect(written[0][0]).toBe('project:_:config');
+      expect(written[0][1].value).toEqual({ debug: true });
+    });
+
+    it('should exclude expired items from saved file', async () => {
+      const now = Date.now();
+      jest.spyOn(Date, 'now').mockReturnValue(now);
+
+      await store.set({
+        scope: ContextScope.project,
+        key: 'persistent',
+        value: 'stays',
+      });
+      await store.set({
+        scope: ContextScope.project,
+        key: 'temporary',
+        value: 'goes',
+        ttl: 1000,
+      });
+
+      jest.spyOn(Date, 'now').mockReturnValue(now + 1000);
+      await store.onModuleDestroy();
+
+      const written = JSON.parse(
+        mockedWriteFile.mock.calls[0][1] as string,
+      ) as [string, ContextItem][];
+      expect(written).toHaveLength(1);
+      expect(written[0][1].key).toBe('persistent');
+
+      jest.restoreAllMocks();
+    });
+
+    it('should use atomic write (tmp + rename)', async () => {
+      await store.set({
+        scope: ContextScope.project,
+        key: 'data',
+        value: 'test',
+      });
+
+      await store.onModuleDestroy();
+
+      // writeFile should be called before rename
+      const writeOrder = mockedWriteFile.mock.invocationCallOrder[0];
+      const renameOrder = mockedRename.mock.invocationCallOrder[0];
+      expect(writeOrder).toBeLessThan(renameOrder);
+
+      expect(mockedWriteFile).toHaveBeenCalledWith(
+        TEST_CONTEXT_PATH + '.tmp',
+        expect.any(String),
+        'utf-8',
+      );
+      expect(mockedRename).toHaveBeenCalledWith(
+        TEST_CONTEXT_PATH + '.tmp',
+        TEST_CONTEXT_PATH,
+      );
     });
   });
 });

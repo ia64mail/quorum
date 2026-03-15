@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { appConfig } from '@app/common';
 import { brokerConfig } from './broker.config';
 import { contextConfig } from './context.config';
+import { contextStoreConfig } from './context-store.config';
 import { McpServerConfigService } from './mcp-server-config.service';
 
 @Global()
@@ -10,7 +11,7 @@ import { McpServerConfigService } from './mcp-server-config.service';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, brokerConfig, contextConfig],
+      load: [appConfig, brokerConfig, contextConfig, contextStoreConfig],
     }),
   ],
   providers: [McpServerConfigService],

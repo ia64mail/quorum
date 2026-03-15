@@ -35,8 +35,10 @@ services:
       <<: *shared-env
       PORT: 3000
       ENABLE_TEST_ENDPOINTS: "true"
+      MCP_WORKSPACE_DIR: /mnt/quorum/workspace
     volumes:
       - ./logs:/app/logs
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
       interval: 5s

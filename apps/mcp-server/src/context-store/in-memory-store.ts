@@ -1,4 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { readFile, rename, writeFile } from 'node:fs/promises';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
+import type { ConfigType } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   ChangeEvent,
@@ -8,13 +16,73 @@ import {
   ContextStore,
   SetParams,
 } from '@app/common';
+import { contextStoreConfig } from '../config';
 
 @Injectable()
-export class InMemoryStore extends ContextStore {
+export class InMemoryStore
+  extends ContextStore
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly store = new Map<string, ContextItem>();
+  private readonly logger = new Logger(InMemoryStore.name);
+  private readonly contextFilePath: string;
 
-  constructor(private readonly eventEmitter: EventEmitter2) {
+  constructor(
+    private readonly eventEmitter: EventEmitter2,
+    @Inject(contextStoreConfig.KEY)
+    private readonly config: ConfigType<typeof contextStoreConfig>,
+  ) {
     super();
+    this.contextFilePath = this.config.contextStorePath;
+  }
+
+  async onModuleInit(): Promise<void> {
+    try {
+      const raw = await readFile(this.contextFilePath, 'utf-8');
+      const entries: [string, ContextItem][] = JSON.parse(raw) as [
+        string,
+        ContextItem,
+      ][];
+      const now = Date.now();
+
+      for (const [compositeKey, item] of entries) {
+        if (item.expiresAt !== undefined && now >= item.expiresAt) {
+          continue;
+        }
+        this.store.set(compositeKey, item);
+      }
+
+      this.logger.log(
+        `Context loaded: ${this.store.size} items from ${this.contextFilePath}`,
+      );
+    } catch (err: unknown) {
+      const error = err as NodeJS.ErrnoException;
+      if (error.code === 'ENOENT') {
+        this.logger.log('No context file found — starting with empty store');
+        return;
+      }
+      this.logger.warn(`Failed to load context file: ${error.message}`);
+    }
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    const now = Date.now();
+    const entries: [string, ContextItem][] = [];
+
+    for (const [compositeKey, item] of this.store) {
+      if (item.expiresAt !== undefined && now >= item.expiresAt) {
+        continue;
+      }
+      entries.push([compositeKey, item]);
+    }
+
+    const tmpPath = this.contextFilePath + '.tmp';
+    await writeFile(tmpPath, JSON.stringify(entries, null, 2), 'utf-8');
+    await rename(tmpPath, this.contextFilePath);
+
+    this.logger.log(
+      `Context saved: ${entries.length} items to ${this.contextFilePath}`,
+    );
   }
 
   private compositeKey(scope: ContextScope, key: string, id?: string): string {
