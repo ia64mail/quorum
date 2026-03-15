@@ -26,6 +26,12 @@ function createMockLogger(): Logger & {
 }
 
 const signal = new AbortController().signal;
+const BASE = {
+  session_id: 'sess-1',
+  transcript_path: '/tmp/transcript',
+  cwd: '/app',
+  tool_use_id: 'toolu_default',
+} as const;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -47,11 +53,10 @@ describe('createObservabilityHooks', () => {
   // PreToolUse
   it('should log tool name and truncated input at debug on PreToolUse', async () => {
     const input: PreToolUseHookInput = {
+      ...BASE,
       hook_event_name: 'PreToolUse',
       tool_name: 'Read',
       tool_input: { file_path: '/mnt/quorum/workspace/src/index.ts' },
-      session_id: 'sess-1',
-      transcript_path: '/tmp/transcript',
     };
 
     const result = await firstHookFn(hooks.PreToolUse)(input, 'toolu_abc', {
@@ -69,11 +74,10 @@ describe('createObservabilityHooks', () => {
 
   it('should truncate long tool_input to 200 chars', async () => {
     const input: PreToolUseHookInput = {
+      ...BASE,
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
       tool_input: { command: 'x'.repeat(500) },
-      session_id: 'sess-1',
-      transcript_path: '/tmp/transcript',
     };
 
     await firstHookFn(hooks.PreToolUse)(input, undefined, { signal });
@@ -86,12 +90,11 @@ describe('createObservabilityHooks', () => {
   // PostToolUse
   it('should log tool name and tool_use_id at debug on PostToolUse', async () => {
     const input: PostToolUseHookInput = {
+      ...BASE,
       hook_event_name: 'PostToolUse',
       tool_name: 'Edit',
       tool_input: {},
       tool_response: 'File edited',
-      session_id: 'sess-1',
-      transcript_path: '/tmp/transcript',
     };
 
     const result = await firstHookFn(hooks.PostToolUse)(input, 'toolu_xyz789', {
@@ -106,12 +109,11 @@ describe('createObservabilityHooks', () => {
 
   it('should use "unknown" when tool_use_id is undefined', async () => {
     const input: PostToolUseHookInput = {
+      ...BASE,
       hook_event_name: 'PostToolUse',
       tool_name: 'Write',
       tool_input: {},
       tool_response: '',
-      session_id: 'sess-1',
-      transcript_path: '/tmp/transcript',
     };
 
     await firstHookFn(hooks.PostToolUse)(input, undefined, { signal });
@@ -124,12 +126,11 @@ describe('createObservabilityHooks', () => {
   // PostToolUseFailure
   it('should log tool failure at warn level', async () => {
     const input: PostToolUseFailureHookInput = {
+      ...BASE,
       hook_event_name: 'PostToolUseFailure',
       tool_name: 'Bash',
       tool_input: { command: 'exit 1' },
       error: 'Command exited with code 1',
-      session_id: 'sess-1',
-      transcript_path: '/tmp/transcript',
     };
 
     const result = await firstHookFn(hooks.PostToolUseFailure)(
@@ -146,12 +147,11 @@ describe('createObservabilityHooks', () => {
 
   it('should truncate long error strings to 300 chars', async () => {
     const input: PostToolUseFailureHookInput = {
+      ...BASE,
       hook_event_name: 'PostToolUseFailure',
       tool_name: 'Bash',
       tool_input: {},
       error: 'E'.repeat(500),
-      session_id: 'sess-1',
-      transcript_path: '/tmp/transcript',
     };
 
     await firstHookFn(hooks.PostToolUseFailure)(input, 'toolu_f2', {
