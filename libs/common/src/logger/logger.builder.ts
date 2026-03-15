@@ -23,6 +23,22 @@ const LEVEL_COLORS: winston.config.AbstractConfigSetColors = {
 
 winston.addColors(LEVEL_COLORS);
 
+/** ANSI escape codes for full-line colorization, keyed by winston color name. */
+const ANSI_COLORS: Record<string, string> = {
+  red: '\x1b[31m',
+  yellow: '\x1b[33m',
+  green: '\x1b[32m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+};
+const ANSI_RESET = '\x1b[0m';
+
+/** Map winston level → ANSI color code using LEVEL_COLORS + ANSI_COLORS. */
+function ansiForLevel(winstonLevel: string): string {
+  const colorName = LEVEL_COLORS[winstonLevel] as string | undefined;
+  return (colorName && ANSI_COLORS[colorName]) || '';
+}
+
 /** Map NestJS level name to winston level name for the minimum-level setting. */
 const NEST_LEVEL_TO_WINSTON: Record<string, string> = {
   log: 'info',
@@ -57,8 +73,6 @@ function startupTimestamp(): string {
  * [Nest] 12345  - 02/11/2026, 2:32:01 PM     LOG [MessageBroker] Invoke: ...
  */
 function nestConsoleFormat(): winston.Logform.Format {
-  const colorizer = winston.format.colorize();
-
   return winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf((info) => {
@@ -78,11 +92,12 @@ function nestConsoleFormat(): winston.Logform.Format {
         hour12: true,
       });
 
-      // Pad before colorizing — ANSI codes add invisible chars that break padding
       const paddedLabel = label.padStart(7, ' ');
-      const coloredLabel = colorizer.colorize(winstonLevel, paddedLabel);
+      const line = `[Nest] ${pid}  - ${ts} ${paddedLabel} ${context}${String(info.message)}`;
 
-      return `[Nest] ${pid}  - ${ts} ${coloredLabel} ${context}${String(info.message)}`;
+      // Colorize the entire line based on log level
+      const ansi = ansiForLevel(winstonLevel);
+      return ansi ? `${ansi}${line}${ANSI_RESET}` : line;
     }),
   );
 }

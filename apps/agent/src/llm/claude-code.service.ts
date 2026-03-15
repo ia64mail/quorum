@@ -7,6 +7,7 @@ import {
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import { AgentConfigService } from '../config';
 import type { ExecuteParams, ExecuteResult } from './claude-code.types';
+import { createObservabilityHooks } from './sdk-hooks.factory';
 
 @Injectable()
 export class ClaudeCodeService implements OnApplicationShutdown {
@@ -44,6 +45,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           },
           maxTurns: params.maxTurns ?? 20,
           abortController: controller,
+          hooks: createObservabilityHooks(this.logger),
           debugFile: '/tmp/sdk-debug.log',
           stderr: (data: string) => {
             this.logger.warn(`[subprocess stderr] ${data.trimEnd()}`);
@@ -106,15 +108,33 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     switch (message.type) {
       case 'system':
         if (message.subtype === 'init') {
-          this.logger.log(`Session started: ${message.session_id}`);
+          this.logger.debug(`Session started: ${message.session_id}`);
         }
         return null;
 
-      case 'assistant':
-        this.logger.debug(
-          `Assistant turn — ${previewContent(message.message)}`,
-        );
+      case 'assistant': {
+        const content = message.message.content;
+        const toolUseNames = extractToolUseNames(content);
+        const preview = previewContent(message.message);
+
+        // Assistant messages may contain only thinking blocks (extended
+        // thinking) with no text or tool_use content. These are opaque by
+        // SDK design — we can't extract anything useful, so skip logging
+        // to avoid noisy "[non-text content]" lines.
+        if (toolUseNames.length > 0) {
+          // Tool-call message: log which tools were selected, and include
+          // the model's stated reasoning if a text block is present.
+          // When reasoning lives only in a thinking block, omit the
+          // unhelpful "[non-text content]" suffix.
+          const suffix = preview !== NON_TEXT ? ` "${preview}"` : '';
+          this.logger.debug(
+            `SDK reasoning: [calls ${toolUseNames.join(', ')}]${suffix}`,
+          );
+        } else if (preview !== NON_TEXT) {
+          this.logger.debug(`SDK response: ${preview}`);
+        }
         return null;
+      }
 
       case 'result':
         if (message.subtype === 'success') {
@@ -149,16 +169,34 @@ async function* toAsyncIterable(prompt: string): AsyncIterable<SDKUserMessage> {
   };
 }
 
+function extractToolUseNames(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter(
+      (block: Record<string, unknown>) =>
+        typeof block === 'object' &&
+        block !== null &&
+        block.type === 'tool_use',
+    )
+    .map((block: Record<string, unknown>) => String(block.name));
+}
+
+/** Sentinel returned when an assistant message has no text blocks (e.g. thinking-only). */
+const NON_TEXT = '[non-text content]';
+
 function previewContent(message: { content: unknown }): string {
   const content = message.content;
   if (typeof content === 'string') {
     return content.slice(0, 200);
   }
   if (Array.isArray(content)) {
-    const first = content[0] as Record<string, unknown> | undefined;
-    if (first && typeof first === 'object' && 'text' in first) {
-      return String(first.text).slice(0, 200);
+    const textBlock = content.find(
+      (block: Record<string, unknown>) =>
+        typeof block === 'object' && block !== null && 'text' in block,
+    ) as Record<string, unknown> | undefined;
+    if (textBlock) {
+      return String(textBlock.text).slice(0, 200);
     }
   }
-  return '[non-text content]';
+  return NON_TEXT;
 }

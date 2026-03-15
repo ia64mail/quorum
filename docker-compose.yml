@@ -4,7 +4,7 @@ x-shared-env: &shared-env
   ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-4096}
   MCP_SERVER_URL: http://mcp-server:3000
   LOG_JSON_DIR: /app/logs
-  LOG_LEVEL: ${LOG_LEVEL:-log}
+  LOG_LEVEL: debug
 
 x-agent-security: &agent-security
   security_opt:
