@@ -78,6 +78,11 @@ End-to-end validation in Docker: moderator-initiated task produces observable co
 
 **Depends on:** QRM2-001, QRM2-006, QRM2-007
 
+### QRM2-010 — Enhanced Agent Log Observability
+Improve console log readability and SDK execution transparency. Full-line colorization (not just the level label), SDK hook-based tool invocation logging (PreToolUse/PostToolUse/PostToolUseFailure), assistant reasoning extraction from message content blocks, "Session started" downgraded to DEBUG, and LOG_LEVEL defaulted to `debug` in docker-compose for local development.
+
+**Depends on:** QRM2-002, QRM1-006
+
 ---
 
 ## Dependency Graph
@@ -87,7 +92,7 @@ QRM2-001 (Docker) ────────────────────�
                                                                              ├→ QRM2-009 (E2E)
 QRM2-002 (SDK) ──→ QRM2-003 (Bridge) ──→ QRM2-004 (Clarify) ──┐             │
                ──→ QRM2-005 (Perms)  ──┐                       ├→ QRM2-007 (Prompts) ┘
-                                       ├→ QRM2-006 (Handler) ──┤
+               ──→ QRM2-010 (Logs)     ├→ QRM2-006 (Handler) ──┤
                                                                └→ QRM2-008 (Terminal Eval)
 ```
 
