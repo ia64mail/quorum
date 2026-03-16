@@ -82,16 +82,43 @@ Fixing only the tool handler (`mcp.service.ts`) would resolve the immediate symp
 
 ## Acceptance Criteria
 
-- [ ] Project-scope items stored without `id` in composite key (`project:_:key`)
-- [ ] Project-scope items retrievable via `get()`, `getAll()`, `getStats()`, and `search()`
-- [ ] Conversation/agent scope items still require and use `id`
-- [ ] `CompositeKeyBuilder` lives in `libs/common` and is reusable by future backends
-- [ ] `CompositeKeyBuilder` has unit tests covering all scope rules and edge cases
-- [ ] Existing `InMemoryStore` tests pass (no regressions)
-- [ ] New tests verify the fixed tool handler behavior
+- [x] Project-scope items stored without `id` in composite key (`project:_:key`)
+- [x] Project-scope items retrievable via `get()`, `getAll()`, `getStats()`, and `search()`
+- [x] Conversation/agent scope items still require and use `id`
+- [x] `CompositeKeyBuilder` lives in `libs/common` and is reusable by future backends
+- [x] `CompositeKeyBuilder` has unit tests covering all scope rules and edge cases
+- [x] Existing `InMemoryStore` tests pass (no regressions)
+- [x] New tests verify the fixed tool handler behavior
 
 ## Dependencies and References
 
 - **Introduced by**: QRM2-011 (context store file persistence) — the persistence itself works; the bug is in key construction
 - **Related docs**: `docs/context-management.md` (scope definitions), `docs/context-store.md` (composite key format)
 - **Affected files**: `apps/mcp-server/src/mcp/mcp.service.ts`, `apps/mcp-server/src/context-store/in-memory-store.ts`
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-03-15
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `libs/common/src/context-store/composite-key-builder.ts` | Created | Static `build()` and `parse()` methods with scope-aware key rules |
+| `libs/common/src/context-store/composite-key-builder.spec.ts` | Created | 10 tests covering build rules, parse roundtrips, error cases |
+| `libs/common/src/context-store/index.ts` | Modified | Re-export `CompositeKeyBuilder` |
+| `apps/mcp-server/src/context-store/in-memory-store.ts` | Modified | Replaced inline `compositeKey()` with `CompositeKeyBuilder.build()` |
+| `apps/mcp-server/src/context-store/in-memory-store.spec.ts` | Modified | Updated 3 tests that relied on the old lenient behavior (no-id for conversation/agent) |
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Modified | Fixed `context_store`, `context_query`, and `context_stats` handlers to strip `id` for project scope |
+
+### Deviations from Ticket Spec
+
+- **Also fixed `context_query` and `context_stats` read handlers.** The ticket only called out `context_store` (write path), but the read handlers in `context_query` and `context_stats` had the same pattern of passing `args.correlationId` without scope-checking. While reads were less likely to hit the bug (project-scope reads rarely have a correlationId), fixing them provides consistency and prevents future issues.
+
+### Verification
+
+- `npm run build` — all 4 apps compile successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 441 tests passing (10 new + 431 existing)

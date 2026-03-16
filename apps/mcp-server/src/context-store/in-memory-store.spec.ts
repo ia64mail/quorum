@@ -109,7 +109,11 @@ describe('InMemoryStore', () => {
         value: 'project-value',
       });
 
-      const result = await store.get(ContextScope.conversation, 'shared-key');
+      const result = await store.get(
+        ContextScope.conversation,
+        'shared-key',
+        'conv-1',
+      );
       expect(result).toBeUndefined();
     });
 
@@ -123,12 +127,15 @@ describe('InMemoryStore', () => {
         scope: ContextScope.agent,
         key: 'name',
         value: 'agent-name',
+        id: 'agent-1',
       });
 
       expect(await store.get(ContextScope.project, 'name')).toBe(
         'project-name',
       );
-      expect(await store.get(ContextScope.agent, 'name')).toBe('agent-name');
+      expect(await store.get(ContextScope.agent, 'name', 'agent-1')).toBe(
+        'agent-name',
+      );
     });
   });
 
@@ -155,16 +162,10 @@ describe('InMemoryStore', () => {
       ).toBe('use GraphQL');
     });
 
-    it('should not return id-scoped items without id', async () => {
-      await store.set({
-        scope: ContextScope.conversation,
-        key: 'topic',
-        value: 'auth',
-        id: 'conv-1',
-      });
-
-      const result = await store.get(ContextScope.conversation, 'topic');
-      expect(result).toBeUndefined();
+    it('should throw when conversation scope is queried without id', async () => {
+      await expect(
+        store.get(ContextScope.conversation, 'topic'),
+      ).rejects.toThrow("'conversation' scope requires an id");
     });
   });
 

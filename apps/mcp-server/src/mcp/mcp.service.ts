@@ -253,11 +253,18 @@ export class McpService implements OnModuleInit {
           };
         }
 
+        const scope = args.scope as ContextScope;
+
+        // Project scope is global — never include an id in the key.
+        // Conversation/agent scopes use correlationId as the id partition.
+        const id =
+          scope === ContextScope.project ? undefined : args.correlationId;
+
         await this.contextStore.set({
-          scope: args.scope as ContextScope,
+          scope,
           key: args.key,
           value: args.value,
-          id: args.correlationId,
+          id,
           createdBy: args.agentRole,
           ttl: args.ttl,
         });
@@ -305,7 +312,8 @@ export class McpService implements OnModuleInit {
       },
       async (args) => {
         const scope = args.scope as ContextScope;
-        const id = args.correlationId;
+        const id =
+          scope === ContextScope.project ? undefined : args.correlationId;
 
         if (args.mode === 'keys') {
           const results: Record<string, unknown> = {};
@@ -446,10 +454,11 @@ export class McpService implements OnModuleInit {
         },
       },
       async (args) => {
-        const stats = await this.contextStore.getStats(
-          args.scope as ContextScope | undefined,
-          args.correlationId,
-        );
+        const scope = args.scope as ContextScope | undefined;
+        const id =
+          scope === ContextScope.project ? undefined : args.correlationId;
+
+        const stats = await this.contextStore.getStats(scope, id);
         return {
           content: [
             { type: 'text' as const, text: JSON.stringify(stats, null, 2) },

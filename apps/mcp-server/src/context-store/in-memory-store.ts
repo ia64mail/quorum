@@ -10,6 +10,7 @@ import type { ConfigType } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   ChangeEvent,
+  CompositeKeyBuilder,
   ContextItem,
   ContextScope,
   ContextStats,
@@ -93,7 +94,7 @@ export class InMemoryStore
   }
 
   private compositeKey(scope: ContextScope, key: string, id?: string): string {
-    return `${scope}:${id ?? '_'}:${key}`;
+    return CompositeKeyBuilder.build(scope, key, id);
   }
 
   private estimateTokens(value: unknown): number {
