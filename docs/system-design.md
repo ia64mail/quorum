@@ -317,7 +317,7 @@ The current backend is `InMemoryStore` — a `Map<string, ContextItem>` with com
 
 Context is persisted to a `quorum.context` JSON file in the workspace directory. The store loads from this file on startup (pruning expired items) and saves on shutdown via atomic tmp+rename. This survives container restarts without requiring an external database.
 
-> **Details:** [Context Management](context-management.md) for MCP API design, [Context Store](context-store.md) for storage implementation and backend evolution plan.
+> **Details:** [Context Management](context-management.md) for MCP API design, [Context Store](context-store.md) for storage implementation details.
 
 ## NestJS Monorepo Structure
 
