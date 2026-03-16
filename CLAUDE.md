@@ -46,6 +46,7 @@ Tickets complement `docs/` — documentation describes the current system; ticke
 | [docs/message-broker.md](docs/message-broker.md) | Message Broker implementation details, safeguards |
 | [docs/context-management.md](docs/context-management.md) | Context sharing concepts, MCP resources/tools API |
 | [docs/context-store.md](docs/context-store.md) | Context Store implementation, OpenSearch, embeddings |
+| [docs/claude-code-sdk.md](docs/claude-code-sdk.md) | Claude Code SDK integration, tool bridge, permissions, hardening |
 | [tickets/README.md](tickets/README.md) | Ticket library conventions and structure guide |
 
 ## Build Commands
