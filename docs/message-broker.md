@@ -4,27 +4,31 @@ This document covers the implementation details of Quorum's Message Broker. For 
 
 ## Responsibilities
 
-The Message Broker is a component inside the MCP Server that:
+The Message Broker is a NestJS injectable service inside the MCP Server that:
 
 1. Receives `invoke_agent` requests from any connected agent
-2. Looks up the target agent in the Registry
-3. Delivers the message to the target's handler
-4. Manages response flow back to the caller
+2. Applies safeguards (depth, circular call, availability)
+3. Looks up the target agent in the Registry
+4. Delivers the request via HTTP POST to the agent's callback URL
+5. Enforces role-based timeouts on the response
+6. Returns the response to the caller
 
 ```mermaid
 graph LR
     subgraph "MCP Server"
         TOOL["invoke_agent tool"]
         BROKER[Message Broker]
-        REG[Registry]
+        REG[Agent Registry]
+        CONN["HttpAgentConnection<br/>(per registered agent)"]
 
         TOOL --> BROKER
         BROKER --> REG
+        REG --> CONN
     end
 
     A1[Agent A] -->|"invoke_agent(B, msg)"| TOOL
-    BROKER -->|"deliver"| A2[Agent B]
-    A2 -->|"response"| BROKER
+    CONN -->|"POST /invoke"| A2[Agent B]
+    A2 -->|"response"| CONN
     BROKER -->|"return"| A1
 ```
 
@@ -32,223 +36,217 @@ graph LR
 
 ### InvokeRequest / InvokeResponse
 
+Defined in `libs/common/src/messaging/`:
+
 ```typescript
 interface InvokeRequest {
-  correlationId: string;       // Track through entire call chain
-  parentRequestId?: string;    // Immediate caller's request ID
+  correlationId: string;       // UUID — traces entire call chain
+  parentRequestId?: string;    // Immediate caller's request ID (nested-call debugging)
   caller: AgentRole;
   target: AgentRole;
-  action: string;
+  action: string;              // Natural-language task description
   context?: Record<string, unknown>;
   wait: boolean;
-  depth: number;               // Current call depth
+  depth: number;               // 0-based, incremented at each hop
 }
 
 interface InvokeResponse {
   success: boolean;
-  result?: string;
-  error?: string;
+  result?: string;             // Present on success
+  error?: string;              // Present on failure
 }
 ```
 
-### MessageBroker
+### AgentRole Constants
+
+```typescript
+enum AgentRole {
+  moderator, architect, teamlead, developer, qa, productowner
+}
+
+// The 5 roles deployed as agent containers (excludes moderator)
+DEPLOYABLE_AGENT_ROLES = [architect, teamlead, developer, qa, productowner]
+
+// All 6 roles valid as invoke_agent targets (includes moderator for user clarification)
+INVOCABLE_AGENT_ROLES = [...DEPLOYABLE_AGENT_ROLES, moderator]
+```
+
+## Agent Registry
+
+The `AgentRegistry` is a one-connection-per-role registry backed by `Map<AgentRole, AgentConnection>`. Agents register on startup via the `register_agent` MCP tool and unregister on shutdown.
+
+```typescript
+abstract class AgentConnection {
+  abstract readonly role: AgentRole;
+  abstract isConnected(): boolean;
+  abstract handle(request: InvokeRequest, timeout: number): Promise<InvokeResponse>;
+}
+```
+
+The concrete implementation is `HttpAgentConnection` — it delivers invocations via HTTP POST to the agent's registered callback URL (`${callbackUrl}/invoke`). Key behaviors:
+
+- **Optimistic availability**: `isConnected()` always returns `true`; unreachability is discovered at delivery time
+- **Never throws**: all transport errors, HTTP failures, and timeouts are caught and mapped to `{ success: false, error: '...' }`
+- **AbortController timeout**: each delivery creates an `AbortController` with the broker-provided timeout; `DOMException` abort errors are mapped to timeout messages
+
+Latest registration for a role silently overwrites the previous one (handles reconnection without explicit unregister).
+
+## MessageBroker
 
 ```typescript
 class MessageBroker {
+  private readonly callChains = new Map<string, Set<AgentRole>>();
+
   constructor(
-    private registry: AgentRegistry,
-    private defaultTimeout: number = 300_000
+    private readonly registry: AgentRegistry,
+    private readonly config: McpServerConfigService,
   ) {}
 
-  async invoke(request: InvokeRequest): Promise<InvokeResponse> {
-    const agent = this.registry.get(request.target);
-
-    if (!agent) {
-      return { success: false, error: `Agent ${request.target} not available` };
-    }
-
-    return agent.handle(request, this.getTimeout(request.target));
-  }
-
-  private getTimeout(role: AgentRole): number {
-    return ROLE_TIMEOUTS[role] ?? this.defaultTimeout;
-  }
+  async invoke(request: InvokeRequest): Promise<InvokeResponse>;
 }
 ```
 
-### AgentHandler
-
-Each agent implements a handler that receives invocations:
-
-```typescript
-class AgentHandler {
-  constructor(
-    private llm: ClaudeCodeRunner,
-    private mcpClient: Client
-  ) {}
-
-  async handle(request: InvokeRequest, timeout: number): Promise<InvokeResponse> {
-    const result = await this.llm.run({
-      task: request.action,
-      context: request.context,
-      tools: [this.createInvokeAgentTool(request)],
-      timeout
-    });
-
-    return { success: true, result };
-  }
-
-  private createInvokeAgentTool(parentRequest: InvokeRequest) {
-    return {
-      name: 'ask_agent',
-      description: 'Ask another agent for help or information',
-      execute: (args) => this.mcpClient.callTool('invoke_agent', {
-        ...args,
-        correlationId: parentRequest.correlationId,
-        parentRequestId: parentRequest.correlationId,
-        depth: parentRequest.depth + 1
-      })
-    };
-  }
-}
-```
+The `invoke()` method applies four safeguards in order, then delivers:
 
 ## Safeguards
 
-### Circular Call Prevention
+### 1. Call Depth Limit
 
-Agents calling each other in a loop will deadlock. Track the call chain and reject cycles:
+Prevent unbounded delegation chains. Configurable via environment:
 
 ```typescript
-class MessageBroker {
-  private callChains = new Map<string, Set<AgentRole>>();
-
-  async invoke(request: InvokeRequest): Promise<InvokeResponse> {
-    const chain = this.callChains.get(request.correlationId) || new Set();
-
-    if (chain.has(request.target)) {
-      return {
-        success: false,
-        error: `Circular call: ${[...chain].join(' → ')} → ${request.target}`
-      };
-    }
-
-    chain.add(request.caller);
-    this.callChains.set(request.correlationId, chain);
-
-    try {
-      return await this.deliverToAgent(request);
-    } finally {
-      chain.delete(request.caller);
-      if (chain.size === 0) {
-        this.callChains.delete(request.correlationId);
-      }
-    }
-  }
+if (depth >= config.broker.maxCallDepth) {
+  return { success: false, error: `Max call depth (${maxCallDepth}) exceeded` };
 }
 ```
 
-### Call Depth Limit
+| Environment Variable | Default | Purpose |
+|---------------------|---------|---------|
+| `BROKER_MAX_CALL_DEPTH` | `5` | Maximum allowed call depth |
 
-Prevent unbounded delegation chains:
+### 2. Circular Call Prevention
+
+Track the call chain per `correlationId` and reject cycles:
 
 ```typescript
-const MAX_CALL_DEPTH = 5;
+private readonly callChains = new Map<string, Set<AgentRole>>();
 
-async invoke(request: InvokeRequest): Promise<InvokeResponse> {
-  if (request.depth >= MAX_CALL_DEPTH) {
-    return {
-      success: false,
-      error: `Max call depth (${MAX_CALL_DEPTH}) exceeded`
-    };
-  }
-  // proceed...
+// In invoke():
+const chain = this.callChains.get(correlationId) ?? new Set<AgentRole>();
+
+if (chain.has(target)) {
+  return { success: false, error: `Circular call: ${[...chain].join(' → ')} → ${target}` };
+}
+
+chain.add(caller);
+this.callChains.set(correlationId, chain);
+
+try {
+  return await this.deliverWithTimeout(agent.handle(request, timeout), timeout, target);
+} finally {
+  chain.delete(caller);
+  if (chain.size === 0) this.callChains.delete(correlationId);
 }
 ```
 
-### Role-Based Timeouts
+The chain tracks callers (not targets), so A → B → C is allowed but A → B → A is rejected.
 
-Different agents have different expected response times:
+### 3. Agent Availability
+
+Fail immediately if the target is not registered or not connected:
 
 ```typescript
-const ROLE_TIMEOUTS: Record<AgentRole, number> = {
-  architect: 5 * 60_000,      // 5 min - design review
-  teamlead: 10 * 60_000,      // 10 min - ticket creation
-  developer: 30 * 60_000,     // 30 min - implementation
-  qa: 15 * 60_000,            // 15 min - test execution
-  productowner: 2 * 60_000    // 2 min - clarification
+const agent = this.registry.get(target);
+
+if (!agent) return { success: false, error: `Agent ${target} not registered` };
+if (!agent.isConnected()) return { success: false, error: `Agent ${target} not connected` };
+```
+
+There is no queuing or deferred delivery — if the target is unavailable, the caller gets an immediate error regardless of the `wait` flag.
+
+### 4. Role-Based Timeouts
+
+Different agents have different expected response times. The broker wraps delivery in a timeout promise:
+
+```typescript
+const ROLE_TIMEOUTS: Partial<Record<AgentRole, number>> = {
+  architect:    5 * 60_000,   // 5 min — design review
+  teamlead:    10 * 60_000,   // 10 min — ticket creation
+  developer:   30 * 60_000,   // 30 min — implementation
+  qa:          15 * 60_000,   // 15 min — test execution
+  productowner: 2 * 60_000,   // 2 min — clarification
+  // moderator: uses defaultTimeoutMs (user interaction time varies)
 };
 ```
 
-### Context Size Management
+Roles not in the map (currently `moderator`) fall back to `defaultTimeoutMs`.
 
-Avoid passing full conversation history. Pass only relevant data:
+| Environment Variable | Default | Purpose |
+|---------------------|---------|---------|
+| `BROKER_DEFAULT_TIMEOUT_MS` | `300000` (5 min) | Fallback timeout for roles not in `ROLE_TIMEOUTS` |
 
-```typescript
-// Prefer specific context
-invoke_agent(architect, "what auth pattern?", {
-  ticketId: 'QRM-001',
-  decisions: ['use JWT', 'NestJS guards'],
-  constraint: 'must support refresh tokens'
-})
+The timeout is enforced by `deliverWithTimeout()` — a `Promise` wrapper that resolves to a timeout error if the timer fires before delivery completes. The timer uses `.unref()` so it doesn't block Node.js graceful shutdown.
 
-// Avoid bloated context
-invoke_agent(architect, task, { fullConversation: [...] })
+## Delivery
+
+After all safeguards pass, the broker delivers via the registered `HttpAgentConnection`:
+
+```mermaid
+sequenceDiagram
+    participant B as MessageBroker
+    participant R as AgentRegistry
+    participant C as HttpAgentConnection
+    participant A as Agent (POST /invoke)
+
+    B->>R: get(target)
+    R-->>B: connection
+    B->>C: handle(request, timeout)
+    C->>A: POST ${callbackUrl}/invoke (JSON)
+    A-->>C: InvokeResponse (JSON)
+    C-->>B: InvokeResponse
 ```
 
-> **Note:** See [Context Management](context-management.md) for the MCP API design, and [Context Store](context-store.md) for storage backend implementation details.
+The `HttpAgentConnection.handle()` method:
+1. Creates an `AbortController` with the timeout
+2. Sends HTTP POST with `InvokeRequest` as JSON body
+3. Validates HTTP status and response shape
+4. Maps `DOMException` abort to timeout error
+5. Catches all errors — never throws, always resolves to `InvokeResponse`
 
 ## Transport
 
-WebSocket provides native bidirectional messaging:
+All MCP communication uses **Streamable HTTP** (not WebSocket):
 
-```typescript
-// Agent connects to MCP Server
-const transport = new WebSocketClientTransport('ws://mcp-server:3000');
-const client = new Client({ name: `${role}-agent` });
-await client.connect(transport);
+| Channel | Protocol | Endpoints | Purpose |
+|---------|----------|-----------|---------|
+| MCP Protocol | Streamable HTTP | `POST/GET/DELETE /mcp` | Agent → MCP server tool calls, with per-client `mcp-session-id` sessions |
+| Invocation Delivery | Plain HTTP | `POST /invoke` | MCP server → agent/terminal task delivery |
 
-// Server delivers incoming tasks over the same connection
-agentSocket.on('message', (msg) => handler.handle(msg));
-```
+The MCP server creates a **per-session `McpServer` instance** (each client connection gets its own SDK server with independently registered tools). Session-to-transport mapping is maintained in `McpController`.
 
-Connection lifecycle (reconnection, heartbeats) is handled by `@modelcontextprotocol/sdk`.
-
-## Agent Availability
-
-Handle agents being offline or disconnected:
-
-```typescript
-async invoke(request: InvokeRequest): Promise<InvokeResponse> {
-  const agent = this.registry.get(request.target);
-
-  if (!agent) {
-    return { success: false, error: `${request.target} not registered` };
-  }
-
-  if (!agent.isConnected()) {
-    if (request.wait) {
-      // Synchronous call - fail immediately
-      return { success: false, error: `${request.target} not connected` };
-    } else {
-      // Async call - queue for later delivery
-      return this.queueForDelivery(request);
-    }
-  }
-
-  return this.deliverToAgent(agent, request);
-}
-```
+Agent-side connection management (`McpClientService`) handles reconnection with linear backoff (max 10 retries, 2s base interval). On disconnect, the client reconnects and re-registers automatically. A `shuttingDown` flag prevents reconnection attempts during graceful shutdown.
 
 ## Observability
 
-Include correlation IDs in all logs for tracing call chains:
+All broker operations include `correlationId` for cross-service tracing:
 
-```typescript
-logger.info('Invoking agent', {
-  correlationId: request.correlationId,
-  caller: request.caller,
-  target: request.target,
-  depth: request.depth
-});
 ```
+Invoke: correlationId=abc-123 caller=moderator target=architect depth=0
+Completed: correlationId=abc-123 target=architect success=true
+```
+
+Safeguard rejections are logged at WARN level:
+
+```
+Rejected: Max call depth (5) exceeded [correlationId=abc-123]
+Rejected: Circular call: moderator → architect → moderator [correlationId=abc-123]
+Rejected: Agent qa not registered [correlationId=abc-123]
+```
+
+> **Note:** Agent-side observability (SDK session tracking, tool events, cost/duration) is documented in [Claude Code SDK — Observability Hooks](claude-code-sdk.md#observability-hooks).
+
+## Context Integration
+
+The broker currently passes only the `context` field from the `InvokeRequest` to the target agent. A planned enhancement will have the broker query the Context Store for recent conversation decisions and attach them as bootstrap context before delivery — implementing the pull-based context model described in [Context Management](context-management.md).
+
+> **Note:** See [Context Management](context-management.md) for the MCP API design, and [Context Store](context-store.md) for storage backend implementation details.
