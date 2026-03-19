@@ -148,7 +148,7 @@ Identical Docker images configured via environment variables. Containers are har
 |--------|-------------|
 | **Purpose** | Execute role-specific AI tasks via Claude Code SDK |
 | **Technology** | NestJS application with Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) |
-| **Base Image** | `node:24-bookworm-slim` (Debian, glibc required for SDK toolchain) |
+| **Base Image** | `node:24-bookworm-slim` (Debian, glibc required for SDK toolchain); mcp-server/terminal use `node:24-alpine` |
 | **Configuration** | `AGENT_ROLE` environment variable |
 | **Workspace** | Shared volume at `/mnt/quorum/workspace` (read-write) |
 | **MCP Role** | Dual: client (invoke others via tool bridge) + handler (be invoked via `POST /invoke`) |
@@ -350,7 +350,8 @@ quorum/
 │   │   │   ├── mcp/             # MCP protocol (7 tools, 2 resources)
 │   │   │   ├── registry/        # Agent registry, HttpAgentConnection
 │   │   │   ├── messaging/       # Message broker, role timeouts
-│   │   │   └── context-store/   # InMemoryStore with file persistence
+│   │   │   ├── context-store/   # InMemoryStore with file persistence
+│   │   │   └── testing/         # Gated test endpoints (ENABLE_TEST_ENDPOINTS)
 │   │   └── tsconfig.app.json
 │   │
 │   └── agent/                   # Agent App (single image, multi-role)
@@ -378,12 +379,11 @@ quorum/
 
 The Dockerfile uses a multi-target build: `default` target for mcp-server/terminal (Alpine), `agent` target for agents (Debian bookworm-slim with toolchain). Both accept `HOST_UID`/`HOST_GID` build args to align container user ownership with the host. Use `./scripts/start.sh` to launch — it exports these automatically.
 
-Three YAML anchors provide shared configuration:
+Two YAML anchors provide shared configuration:
 
 | Anchor | Purpose |
 |--------|---------|
 | `x-shared-env` | Common env vars (Anthropic API, MCP server URL, logging) |
-| `x-agent-common` | Shared agent config (build args, depends_on, volumes, env) |
 | `x-agent-security` | Security constraints (read-only fs, dropped caps, tmpfs mounts) |
 
 ```yaml
