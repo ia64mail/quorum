@@ -369,47 +369,7 @@ Two YAML anchors provide shared configuration:
 | `x-shared-env` | Common env vars (Anthropic API, MCP server URL, logging) |
 | `x-agent-security` | Security constraints (read-only fs, dropped caps, tmpfs mounts) |
 
-```yaml
-x-shared-env: &shared-env
-  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
-  ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-4096}
-  MCP_SERVER_URL: http://mcp-server:3000
-  LOG_JSON_DIR: /app/logs
-  LOG_LEVEL: ${LOG_LEVEL:-log}
-
-services:
-  mcp-server:                    # Dockerfile target: default
-    environment:
-      PORT: 3000
-      ENABLE_TEST_ENDPOINTS: "true"
-      MCP_WORKSPACE_DIR: /mnt/quorum/workspace
-    healthcheck: GET /health
-    volumes:
-      - quorum-logs:/app/logs
-      - ${WORKSPACE_PATH}:/mnt/quorum/workspace:rw
-
-  terminal:                      # Dockerfile target: default
-    stdin_open: true
-    tty: true
-    depends_on: [mcp-server (healthy)]
-    environment:
-      PORT: 3001
-      MCP_CALLBACK_URL: http://terminal:3001
-      TERMINAL_WORKSPACE_DIR: /mnt/quorum/workspace
-    volumes:
-      - quorum-logs:/app/logs
-      - ${WORKSPACE_PATH}:/mnt/quorum/workspace:ro
-
-  architect:                     # Dockerfile target: agent
-  teamlead:                      # Dockerfile target: agent
-  developer:                     # Dockerfile target: agent
-    # Each: AGENT_ROLE={service}, PORT: 3002,
-    #        AGENT_CALLBACK_URL: http://{service}:3002,
-    #        AGENT_WORKSPACE_DIR: /mnt/quorum/workspace
-    # Security: x-agent-security (read_only, cap_drop ALL, tmpfs mounts)
-    # Volumes: workspace (rw) + quorum-logs
-```
+**Services** (5 deployed): `mcp-server` (port 3000, default target), `terminal` (port 3001, default target), `architect`, `teamlead`, `developer` (each port 3002, agent target). All agent containers share `x-agent-security` constraints and mount the workspace read-write. The terminal mounts the workspace read-only. All services write logs to a shared `quorum-logs` volume.
 
 Currently 5 deployed services: mcp-server, terminal, architect, teamlead, developer. The qa and productowner roles are fully defined (permissions, prompts, timeouts) but not yet added as compose services.
 
