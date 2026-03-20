@@ -136,9 +136,9 @@ All roles share a common set of disallowed tools: `AskUserQuestion` (would hang 
 | Role | Additional Disallowed Tools | Denied Bash Commands | Write Path Restrictions |
 |------|---------------------------|---------------------|------------------------|
 | **developer** | — | `git push --force`, `rm -rf /` | Unrestricted |
-| **architect** | `NotebookEdit` | `git commit`, `git push`, `rm -rf /` | `docs/`, `tickets/` only |
+| **architect** | `NotebookEdit` | `git push`, `git commit`, `git checkout -b`, `rm -rf`, `npm publish` | `docs/`, `tickets/` only |
 | **teamlead** | — | `git push --force`, `npm publish`, `rm -rf /` | Unrestricted |
-| **qa** | — | `git commit`, `git push`, `rm -rf /`, `npm publish` | Unrestricted |
+| **qa** | — | `git push`, `git commit`, `rm -rf`, `npm publish` | Unrestricted |
 | **productowner** | `NotebookEdit`, `Bash`, `EnterWorktree`, `Agent` | N/A (Bash disabled) | `tickets/` only |
 
 > **Security boundary**: Bash filtering is bypassable via shell operators (pipes, subshells). This is an acknowledged design trade-off — the container itself (read-only filesystem, dropped capabilities, no-new-privileges) is the security boundary, not the tool filter. The filter prevents accidental misuse, not adversarial bypass.
@@ -184,11 +184,11 @@ The read-only rootfs required several workarounds for Claude Code SDK compatibil
 
 The `createObservabilityHooks()` factory produces SDK lifecycle hooks that log tool execution at DEBUG level:
 
-| Hook | Event | Logged Data |
-|------|-------|-------------|
-| `PreToolUse` | Tool execution starts | Tool name, truncated input (200 chars) |
-| `PostToolUse` | Tool execution succeeds | Tool name, `tool_use_id` |
-| `PostToolUseFailure` | Tool execution fails | Tool name, truncated error (300 chars) |
+| Hook | Event | Logged Data | Level |
+|------|-------|-------------|-------|
+| `PreToolUse` | Tool execution starts | Tool name, truncated input (200 chars) | DEBUG |
+| `PostToolUse` | Tool execution succeeds | Tool name, `tool_use_id` | DEBUG |
+| `PostToolUseFailure` | Tool execution fails | Tool name, truncated error (300 chars) | WARN |
 
 All hooks return `{ continue: true }` — they observe but don't modify SDK behavior.
 
