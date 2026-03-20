@@ -178,7 +178,7 @@ All agents access the target project through a mounted volume:
 
 ```
 /mnt/quorum/workspace/           # Target project root
-├── quorum.md                    # Feature definition & role configuration
+├── quorum.md                    # Project conventions & role configuration
 ├── quorum.context               # Context Store persistence (JSON, managed by MCP server)
 ├── docs/                        # Generated system documentation
 │   └── *.md                     # Architecture docs, design decisions
@@ -189,39 +189,22 @@ All agents access the target project through a mounted volume:
 
 ### quorum.md Configuration File
 
-The `quorum.md` file serves as the primary configuration mechanism:
+The `quorum.md` file is the project-wide configuration that agents read for conventions, workflow, and role-specific instructions. It defines how the target project is developed — not what feature is being built.
 
-```markdown
-# Feature: [Feature Name]
-
-## Description
-[What the feature should accomplish]
-
-## Role Configurations
-
-### Architect
-[Custom instructions for architect behavior]
-
-### Team Lead
-[Custom instructions for team lead behavior]
-
-### Developer
-[Custom instructions for developer behavior]
-
-### QA
-[Custom instructions for QA behavior]
-
-### Product Owner
-[Custom instructions for product owner behavior]
-
-## Constraints
-[Technical constraints, deadlines, dependencies]
-```
+**Contents:**
+- Tech stack and build commands
+- Project structure overview
+- Development workflow (milestone-based evolution, commit cadence, ticket conventions)
+- Codebase conventions (import patterns, testing patterns, code style)
+- Review protocol (eligibility, multi-pass review, verdict format)
+- Role configurations (architect, team lead, developer — responsibilities, escalation rules, boundaries)
+- Constraints (shared workspace rules, git discipline, context store usage)
 
 This file is:
-- **Feature-specific**: Redefined for each new development task
-- **Codebase-adaptable**: Adjusted per project's conventions
-- **Universal**: Keeps Quorum apps reusable across projects
+- **Project-wide**: Describes the target project's conventions and development process, not a specific feature
+- **Stable**: Evolves with the project but is not redefined per task or milestone
+- **Codebase-adaptable**: Adjusted per project's conventions when Quorum targets a different codebase
+- **Universal**: Keeps Quorum apps reusable across projects — all project-specific guidance lives here
 
 ## Agent Collaboration Flow
 
@@ -442,7 +425,7 @@ Currently 5 deployed services: mcp-server, terminal, architect, teamlead, develo
 | **In-process tool bridge** | Connects Claude Code subprocess to remote MCP server without exposing raw MCP client ([details](claude-code-sdk.md#mcp-tool-bridge)) |
 | **Mechanical permission enforcement** | `disallowedTools` + `canUseTool` hooks enforce per-role restrictions; container hardening is the security boundary ([details](claude-code-sdk.md#role-permission-profiles)) |
 | **Shared volume workspace** | All agents see same files, enables real collaboration |
-| **quorum.md configuration** | Keeps Quorum universal, configuration lives in target project |
+| **quorum.md configuration** | Project conventions and role instructions live in the target project, keeping Quorum apps universal |
 | **NestJS monorepo** | Consistent tooling, shared libraries, easier deployment |
 | **Docker Compose** | Simple orchestration, suitable for single-host development |
 | **Pull-based context** | Agents query what they need vs receiving everything; prevents context exhaustion ([details](context-management.md)) |
