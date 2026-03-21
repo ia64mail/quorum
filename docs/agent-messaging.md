@@ -120,7 +120,7 @@ server.tool('invoke_agent', {
   target: z.enum(INVOCABLE_AGENT_ROLES),   // All 6 roles (including moderator)
   action: z.string(),                       // What you need the agent to do
   context: z.record(z.unknown()).optional(), // Relevant context to pass
-  wait: z.boolean().default(true),          // Block until response
+  wait: z.boolean().default(true),          // Block until response (async not yet implemented)
   correlationId: z.string().optional(),     // Generated as UUID if omitted
   depth: z.number().int().min(0).default(0) // Call depth (auto-incremented by bridge)
 });
@@ -205,6 +205,7 @@ Quorum's bidirectional MCP architecture enables:
 | User escalation | Invoke moderator → ClarificationHandler → user |
 | Task decomposition | Chained synchronous calls with depth tracking |
 | Call safety | Circular call prevention, depth limit, role-based timeouts |
+| Fire-and-forget (wait: false) | Schema accepts the parameter but broker always awaits — not yet implemented |
 
 This architecture transforms MCP from a simple tool-calling protocol into a **multi-agent coordination platform**.
 
