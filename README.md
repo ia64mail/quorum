@@ -214,10 +214,13 @@ quorum/
 │   ├── mcp-server/         # Communication backbone
 │   └── agent/              # Single Docker image, multi-role via AGENT_ROLE env var
 ├── libs/
-│   └── common/             # Shared types and config across all apps
+│   └── common/             # Shared types, config, prompts, logger, and LLM utils
 │       └── src/
-│           ├── config/         # Config factories (app, anthropic, mcp)
+│           ├── config/         # Config factories (app, anthropic, logger, mcp)
 │           ├── context-store/  # Abstract ContextStore class + types
+│           ├── prompts/        # SYSTEM_PREAMBLE + per-role prompt templates
+│           ├── logger/         # LoggerBuilder, QuorumLogger (dual transport)
+│           ├── llm/            # tool-mapper (MCP → Anthropic schema conversion)
 │           └── messaging/      # AgentRole enum, InvokeRequest/Response
 ├── docs/                   # Architecture documentation
 ├── tickets/                # Implementation timeline knowledge base
@@ -254,8 +257,11 @@ npm run test:e2e           # Run end-to-end tests
 
 ```bash
 export WORKSPACE_PATH=/path/to/your/project
-docker compose up
+./scripts/start.sh        # build & start all containers
+./scripts/start.sh -d     # detached mode
 ```
+
+The startup script exports `HOST_UID`/`HOST_GID` from the current user so container bind-mounts (logs, workspace) have correct file ownership, then runs `docker compose build` and `docker compose up`. Extra args are forwarded to both commands.
 
 Starts the MCP server, terminal with moderator, and all agent containers. Agents register on startup and are ready to receive invocations.
 
@@ -267,14 +273,15 @@ Starts the MCP server, terminal with moderator, and all agent containers. Agents
 | [Agent Messaging](docs/agent-messaging.md) | Bidirectional MCP, `invoke_agent`, communication patterns |
 | [Message Broker](docs/message-broker.md) | Routing, safeguards, transport, availability |
 | [Context Management](docs/context-management.md) | MCP tools/resources API, usage patterns |
-| [Context Store](docs/context-store.md) | Storage backends, InMemoryStore, OpenSearch |
+| [Context Store](docs/context-store.md) | Storage backend, InMemoryStore, file persistence |
+| [Claude Code SDK](docs/claude-code-sdk.md) | Claude Code SDK integration, tool bridge, permissions, hardening |
 | [Ticket Library](tickets/README.md) | Ticket conventions and structure guide |
 
 ## Tech Stack
 
 - **Runtime**: Node.js + TypeScript
 - **Framework**: NestJS (monorepo, webpack)
-- **LLM**: Anthropic Claude via `@anthropic-ai/sdk`
+- **LLM**: Anthropic Claude — agents via `@anthropic-ai/claude-agent-sdk`, moderator via `@anthropic-ai/sdk`
 - **Protocol**: Model Context Protocol via `@modelcontextprotocol/sdk`
 - **Containerization**: Docker Compose
 - **Validation**: Zod

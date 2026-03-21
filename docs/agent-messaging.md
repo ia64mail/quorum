@@ -4,7 +4,7 @@
 
 Quorum's core capability is **coordinated multi-agent collaboration**. Unlike simple tool-calling patterns where an LLM invokes passive functions, Quorum agents are themselves LLMs that can initiate communication with other agents mid-task.
 
-This document describes the **bidirectional MCP** architecture that enables this behavior. For implementation details, see [Message Broker](message-broker.md).
+This document describes the **bidirectional MCP** architecture that enables this behavior. For implementation details, see [Message Broker](message-broker.md). For how Claude Code sessions interact with the MCP layer, see [Claude Code SDK](claude-code-sdk.md).
 
 ## The Problem
 
@@ -46,17 +46,21 @@ This requires **bidirectional MCP**: agents are both invocable (like tools) and 
 
 ### Dual-Role Agents
 
-Each agent maintains two MCP connections:
+Each agent participates in two communication paths:
 
 ```mermaid
 graph TB
     subgraph "Agent Container"
-        HANDLER[Invocation Handler]
-        LLM[Claude Code LLM]
-        CLIENT[MCP Client]
+        CTRL["InvocationController<br/>POST /invoke"]
+        HANDLER[InvocationHandler]
+        SDK["ClaudeCodeService<br/>(SDK subprocess)"]
+        BRIDGE["McpToolBridgeService<br/>(in-process MCP server)"]
+        CLIENT[McpClientService]
 
-        HANDLER -->|"incoming task"| LLM
-        LLM -->|"outgoing call"| CLIENT
+        CTRL -->|"incoming task"| HANDLER
+        HANDLER --> SDK
+        SDK -->|"tool call"| BRIDGE
+        BRIDGE -->|"proxy"| CLIENT
     end
 
     subgraph "MCP Server"
@@ -64,15 +68,17 @@ graph TB
         REG[Agent Registry]
     end
 
-    BROKER -->|"deliver task"| HANDLER
-    CLIENT -->|"invoke other agent"| BROKER
+    BROKER -->|"HTTP POST /invoke"| CTRL
+    CLIENT -->|"Streamable HTTP /mcp"| BROKER
     REG -.->|"lookup"| BROKER
 ```
 
-| Connection | Direction | Purpose |
-|------------|-----------|---------|
-| Invocation Handler | Inbound | Receives tasks from other agents |
-| MCP Client | Outbound | Sends requests to other agents |
+| Path | Direction | Mechanism | Purpose |
+|------|-----------|-----------|---------|
+| Inbound | MCP Server → Agent | HTTP POST to `/invoke` callback URL | Receives tasks from other agents |
+| Outbound | Agent → MCP Server | Streamable HTTP to `/mcp` | Sends requests to other agents via `invoke_agent` |
+
+The outbound path passes through two layers inside the agent: the **MCP Tool Bridge** (an in-process MCP server the SDK subprocess connects to) proxies calls to the **McpClientService** (Streamable HTTP client connected to the remote MCP server). See [Claude Code SDK — MCP Tool Bridge](claude-code-sdk.md#mcp-tool-bridge) for details.
 
 ### Message Broker
 
@@ -80,8 +86,9 @@ The Message Broker is the routing core inside the MCP Server. It:
 
 1. Receives `invoke_agent` requests from any connected agent
 2. Looks up target agent in Registry
-3. Delivers the message to target's handler
-4. Returns response to caller
+3. Validates safeguards (depth, circular calls, availability)
+4. Delivers the message to target's `POST /invoke` endpoint
+5. Returns response to caller
 
 ```mermaid
 graph LR
@@ -96,10 +103,12 @@ graph LR
     end
 
     A1[Agent A] -->|"invoke_agent(B, msg)"| TOOL
-    BROKER -->|"deliver"| A2[Agent B]
+    BROKER -->|"POST /invoke"| A2[Agent B]
     A2 -->|"response"| BROKER
     BROKER -->|"return"| A1
 ```
+
+See [Message Broker](message-broker.md) for full implementation details.
 
 ### The `invoke_agent` Tool
 
@@ -107,12 +116,36 @@ All inter-agent communication flows through a single MCP tool:
 
 ```typescript
 server.tool('invoke_agent', {
-  target: z.enum(['architect', 'teamlead', 'developer', 'qa', 'productowner']),
-  action: z.string().describe('What you need the agent to do'),
-  context: z.record(z.any()).optional().describe('Relevant context to pass'),
-  wait: z.boolean().default(true).describe('Wait for response or fire-and-forget')
+  callerRole: z.enum(AgentRole),           // Identity of the calling agent
+  target: z.enum(INVOCABLE_AGENT_ROLES),   // All 6 roles (including moderator)
+  action: z.string(),                       // What you need the agent to do
+  context: z.record(z.unknown()).optional(), // Relevant context to pass
+  wait: z.boolean().default(true),          // Block until response (async not yet implemented)
+  correlationId: z.string().optional(),     // Generated as UUID if omitted
+  depth: z.number().int().min(0).default(0) // Call depth (auto-incremented by bridge)
 });
 ```
+
+When called through the MCP Tool Bridge, `callerRole`, `correlationId`, and `depth` are auto-injected — agents only need to specify `target`, `action`, and optionally `context`.
+
+### Agent Registration
+
+Agents register with the MCP server on startup via the `register_agent` tool, providing their role and callback URL:
+
+```mermaid
+sequenceDiagram
+    participant A as Agent
+    participant MCP as MCP Server
+    participant REG as Registry
+
+    A->>MCP: connect (Streamable HTTP)
+    A->>MCP: register_agent(role, callbackUrl)
+    MCP->>REG: store HttpAgentConnection
+    A->>MCP: discoverTools()
+    Note over A: Ready to receive invocations
+```
+
+The registry stores one `HttpAgentConnection` per role. Latest registration wins (handles reconnection without explicit unregister). On shutdown, agents call `unregister_agent` and close the transport.
 
 ## Communication Patterns
 
@@ -127,7 +160,7 @@ sequenceDiagram
     participant A as Architect
 
     TL->>B: invoke_agent(architect, "review approach")
-    B->>A: deliver task
+    B->>A: POST /invoke
     Note over A: Processing...
     A->>B: response
     B->>TL: return response
@@ -136,27 +169,30 @@ sequenceDiagram
 
 **Use when:** Agent needs information to proceed.
 
-**Chaining:** Synchronous calls compose naturally. When Developer calls Architect mid-task, and Architect calls ProductOwner for clarification, each call is a nested synchronous request-response. The call stack unwinds as responses return.
+**Chaining:** Synchronous calls compose naturally. When Developer calls Architect mid-task, and Architect calls ProductOwner for clarification, each call is a nested synchronous request-response. The call stack unwinds as responses return. The broker tracks depth and circular calls to prevent unbounded chains.
 
-### Asynchronous (wait: false)
+### User Clarification (via Moderator)
 
-Caller continues immediately, target processes in background.
+Agents can invoke the `moderator` to escalate decisions to the user. This uses a dedicated `ClarificationHandler` that bypasses the Moderator LLM — preventing a deadlock where the Moderator would be blocked waiting for the very agent that's now trying to invoke it.
 
 ```mermaid
 sequenceDiagram
-    participant M as Moderator
+    participant D as Developer
     participant B as Broker
-    participant QA as QA Agent
+    participant T as Terminal
+    participant U as User
 
-    M->>B: invoke_agent(qa, "run tests", wait=false)
-    B->>M: ack
-    Note over M: Continues immediately
-    B->>QA: deliver task
-    Note over QA: Running tests...
-    QA->>B: complete (stored/notified)
+    D->>B: invoke_agent(moderator, "push or pull architecture?")
+    B->>T: POST /invoke
+    T->>U: Display question
+    U->>T: "pull-based"
+    T->>T: Persist to Context Store
+    T->>B: { success: true, result: "pull-based" }
+    B->>D: return answer
+    Note over D: Continues with user's decision
 ```
 
-**Use when:** Long-running tasks, parallel work, no immediate dependency on result.
+The `ClarificationHandler` displays the question verbatim, collects the answer, auto-persists it to the Context Store (project scope, keyed as `clarification:{caller}:{correlationId}`), and returns the answer. A `StdinLockService` (async mutex) prevents interleaved I/O between the chat loop and clarification prompts.
 
 ## Summary
 
@@ -165,10 +201,12 @@ Quorum's bidirectional MCP architecture enables:
 | Capability | Mechanism |
 |------------|-----------|
 | Agent-to-agent communication | `invoke_agent` tool via Message Broker |
-| Mid-task consultation | Synchronous request-response |
-| Parallel work delegation | Asynchronous fire-and-forget |
-| Task decomposition | Chained synchronous calls |
+| Mid-task consultation | Synchronous request-response (wait: true) |
+| User escalation | Invoke moderator → ClarificationHandler → user |
+| Task decomposition | Chained synchronous calls with depth tracking |
+| Call safety | Circular call prevention, depth limit, role-based timeouts |
+| Fire-and-forget (wait: false) | Schema accepts the parameter but broker always awaits — not yet implemented |
 
 This architecture transforms MCP from a simple tool-calling protocol into a **multi-agent coordination platform**.
 
-See [Message Broker](message-broker.md) for implementation details including safeguards, transport, and availability handling. See [Context Management](context-management.md) for the context sharing API and [Context Store](context-store.md) for storage backend details.
+See [Message Broker](message-broker.md) for implementation details including safeguards, delivery, and timeouts. See [Claude Code SDK](claude-code-sdk.md) for how the MCP Tool Bridge connects Claude Code sessions to the orchestration layer. See [Context Management](context-management.md) for the context sharing API and [Context Store](context-store.md) for storage backend details.

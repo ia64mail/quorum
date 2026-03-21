@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { appConfig, anthropicConfig, mcpConfig } from '@app/common';
 import { agentConfig } from './agent.config';
 import { AgentConfigService } from './agent-config.service';
+import { RolePermissionService } from './role-permission.service';
 
 @Module({
   imports: [
@@ -11,7 +12,7 @@ import { AgentConfigService } from './agent-config.service';
       load: [appConfig, anthropicConfig, mcpConfig, agentConfig],
     }),
   ],
-  providers: [AgentConfigService],
-  exports: [AgentConfigService],
+  providers: [AgentConfigService, RolePermissionService],
+  exports: [AgentConfigService, RolePermissionService],
 })
 export class AgentConfigModule {}

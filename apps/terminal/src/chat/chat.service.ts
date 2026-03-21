@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as readline from 'readline';
 import * as crypto from 'crypto';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import type { MessageParam, ContentBlock } from '@anthropic-ai/sdk/resources';
 import {
   SYSTEM_PREAMBLE,
@@ -9,10 +11,12 @@ import {
 } from '@app/common';
 import { AnthropicService } from '../llm';
 import { McpClientService } from '../connection';
+import { StdinLockService } from '../clarification';
+import { TerminalConfigService } from '../config';
 
 const MAX_TOOL_ROUNDS = 10;
 
-const TERMINAL_MODERATOR_PROMPT = `${SYSTEM_PREAMBLE}
+export const TERMINAL_MODERATOR_PROMPT = `${SYSTEM_PREAMBLE}
 
 ---
 
@@ -20,6 +24,22 @@ You are the **Moderator**, chatting with a human user through a terminal interfa
 
 ## Identity
 You are the orchestration hub — the only agent that interfaces directly with the user. All other agents work through you or through each other, but you are the starting point and the final checkpoint for every task.
+
+## Agent Capabilities Awareness
+Your agent team members are Claude Code instances with real tool capabilities:
+- They can **read, write, and test code** directly in the shared workspace at \`/mnt/quorum/workspace\`
+- They can **run shell commands** — builds, tests, linting, git operations
+- They can **search the codebase** using pattern matching and content search
+- Changes agents make are real and persist — when you ask a developer to implement something, they write actual code
+
+When giving instructions to agents, be specific about what you need done — they will execute against the real codebase.
+Agents read \`quorum.md\` at the workspace root for project-specific conventions — ensure it stays current.
+
+## Clarification Flow
+Agents may invoke you mid-task via \`invoke_agent(moderator, ...)\` when they need a user-facing decision. When this happens:
+- The agent's question is surfaced directly to you (the user sees it)
+- Relay the question to the user, collect their answer, and return it
+- Do not answer on the user's behalf unless you are confident from prior context
 
 ## Responsibilities
 - Decide which agent(s) to invoke for a given task
@@ -55,16 +75,20 @@ You are the orchestration hub — the only agent that interfaces directly with t
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
-  private readonly systemPrompt = TERMINAL_MODERATOR_PROMPT;
+  private systemPrompt = TERMINAL_MODERATOR_PROMPT;
   private messages: MessageParam[] = [];
   private currentCorrelationId = '';
 
   constructor(
     private readonly anthropic: AnthropicService,
     private readonly mcpClient: McpClientService,
+    private readonly stdinLock: StdinLockService,
+    private readonly config: TerminalConfigService,
   ) {}
 
   async start(): Promise<void> {
+    await this.initSystemPrompt();
+
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -81,11 +105,39 @@ export class ChatService {
     }
   }
 
+  private async initSystemPrompt(): Promise<void> {
+    const content = await this.readQuorumMd();
+    if (content) {
+      this.systemPrompt = `${TERMINAL_MODERATOR_PROMPT}\n\n---\n\n## Project Configuration (quorum.md)\n\n${content}`;
+    }
+  }
+
+  private async readQuorumMd(): Promise<string | undefined> {
+    const filePath = path.join(this.config.terminal.workspaceDir, 'quorum.md');
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
+        this.logger.warn(
+          `quorum.md not found at ${filePath} — moderator will operate without project configuration`,
+        );
+        return undefined;
+      }
+      throw err;
+    }
+  }
+
   private chatLoop(rl: readline.Interface): Promise<void> {
     return new Promise((resolve) => {
       const prompt = () => {
-        rl.question('You: ', (input) => {
-          void this.handleInput(input, resolve, prompt);
+        void this.stdinLock.acquire().then((release) => {
+          rl.question('You: ', (input) => {
+            release();
+            void this.handleInput(input, resolve, prompt);
+          });
         });
       };
 

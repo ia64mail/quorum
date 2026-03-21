@@ -10,7 +10,7 @@ import {
   AgentRole,
   ContextScope,
   ContextStore,
-  DEPLOYABLE_AGENT_ROLES,
+  INVOCABLE_AGENT_ROLES,
 } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { MessageBroker } from '../messaging';
@@ -92,9 +92,9 @@ export class McpService implements OnModuleInit {
             .enum(agentRoleValues)
             .describe('Role of the calling agent'),
           // Cast: MCP SDK bundles its own Zod which expects mutable [string, ...string[]],
-          // while our DEPLOYABLE_AGENT_ROLES is readonly. Remove cast if SDK aligns with Zod v4.
+          // while our INVOCABLE_AGENT_ROLES is readonly. Remove cast if SDK aligns with Zod v4.
           target: z
-            .enum(DEPLOYABLE_AGENT_ROLES as unknown as [string, ...string[]])
+            .enum(INVOCABLE_AGENT_ROLES as unknown as [string, ...string[]])
             .describe('Target agent role to invoke'),
           action: z.string().describe('Task description for the target agent'),
           context: z
@@ -253,11 +253,18 @@ export class McpService implements OnModuleInit {
           };
         }
 
+        const scope = args.scope as ContextScope;
+
+        // Project scope is global — never include an id in the key.
+        // Conversation/agent scopes use correlationId as the id partition.
+        const id =
+          scope === ContextScope.project ? undefined : args.correlationId;
+
         await this.contextStore.set({
-          scope: args.scope as ContextScope,
+          scope,
           key: args.key,
           value: args.value,
-          id: args.correlationId,
+          id,
           createdBy: args.agentRole,
           ttl: args.ttl,
         });
@@ -305,7 +312,8 @@ export class McpService implements OnModuleInit {
       },
       async (args) => {
         const scope = args.scope as ContextScope;
-        const id = args.correlationId;
+        const id =
+          scope === ContextScope.project ? undefined : args.correlationId;
 
         if (args.mode === 'keys') {
           const results: Record<string, unknown> = {};
@@ -446,10 +454,11 @@ export class McpService implements OnModuleInit {
         },
       },
       async (args) => {
-        const stats = await this.contextStore.getStats(
-          args.scope as ContextScope | undefined,
-          args.correlationId,
-        );
+        const scope = args.scope as ContextScope | undefined;
+        const id =
+          scope === ContextScope.project ? undefined : args.correlationId;
+
+        const stats = await this.contextStore.getStats(scope, id);
         return {
           content: [
             { type: 'text' as const, text: JSON.stringify(stats, null, 2) },

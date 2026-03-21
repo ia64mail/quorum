@@ -6,21 +6,39 @@ x-shared-env: &shared-env
   LOG_JSON_DIR: /app/logs
   LOG_LEVEL: ${LOG_LEVEL:-log}
 
+x-agent-security: &agent-security
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=512m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.claude:size=256m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.config:size=64m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.local:size=64m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.cache:size=128m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+
 services:
   mcp-server:
     build:
       context: .
       dockerfile: Dockerfile
+      target: default
       args:
         APP_NAME: mcp-server
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
     ports:
       - "3000:3000"
     environment:
       <<: *shared-env
       PORT: 3000
       ENABLE_TEST_ENDPOINTS: "true"
+      MCP_WORKSPACE_DIR: /mnt/quorum/workspace
     volumes:
       - ./logs:/app/logs
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
       interval: 5s
@@ -34,8 +52,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: default
       args:
         APP_NAME: terminal
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
     stdin_open: true
     tty: true
     depends_on:
@@ -45,7 +66,9 @@ services:
       <<: *shared-env
       PORT: 3001
       MCP_CALLBACK_URL: http://terminal:3001
+      TERMINAL_WORKSPACE_DIR: /mnt/quorum/workspace
     volumes:
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:ro
       - ./logs:/app/logs
     networks:
       - quorum-net
@@ -54,8 +77,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: agent
       args:
         APP_NAME: agent
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
+    <<: *agent-security
     depends_on:
       mcp-server:
         condition: service_healthy
@@ -65,7 +92,7 @@ services:
       AGENT_ROLE: architect
       AGENT_CALLBACK_URL: http://architect:3002
     volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
     networks:
       - quorum-net
@@ -74,8 +101,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: agent
       args:
         APP_NAME: agent
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
+    <<: *agent-security
     depends_on:
       mcp-server:
         condition: service_healthy
@@ -85,7 +116,7 @@ services:
       AGENT_ROLE: teamlead
       AGENT_CALLBACK_URL: http://teamlead:3002
     volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
     networks:
       - quorum-net
@@ -94,8 +125,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: agent
       args:
         APP_NAME: agent
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
+    <<: *agent-security
     depends_on:
       mcp-server:
         condition: service_healthy
@@ -105,7 +140,7 @@ services:
       AGENT_ROLE: developer
       AGENT_CALLBACK_URL: http://developer:3002
     volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
     networks:
       - quorum-net

@@ -96,4 +96,28 @@ describe('TerminalConfigService', () => {
 
     expect(service.terminal.callbackUrl).toBe('http://terminal:3001');
   });
+
+  it('should default workspaceDir to /mnt/quorum/workspace', async () => {
+    delete process.env.TERMINAL_WORKSPACE_DIR;
+
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [TerminalConfigModule],
+    }).compile();
+
+    const service = module.get<TerminalConfigService>(TerminalConfigService);
+
+    expect(service.terminal.workspaceDir).toBe('/mnt/quorum/workspace');
+  });
+
+  it('should read workspaceDir from TERMINAL_WORKSPACE_DIR env var', async () => {
+    process.env.TERMINAL_WORKSPACE_DIR = '/custom/workspace';
+
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [TerminalConfigModule],
+    }).compile();
+
+    const service = module.get<TerminalConfigService>(TerminalConfigService);
+
+    expect(service.terminal.workspaceDir).toBe('/custom/workspace');
+  });
 });

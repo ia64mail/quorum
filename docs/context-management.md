@@ -7,34 +7,13 @@ When multiple AI agents collaborate, context management becomes critical. Each a
 - **Over-share**: Pass full conversation histories, exhausting context windows
 - **Under-share**: Lose important decisions made by other agents
 
-This document describes Quorum's context management architecture built on MCP primitives provided by `@modelcontextprotocol/sdk`. For implementation details, see [Context Store](context-store.md).
+Quorum solves this with a **pull-based context model**: agents receive minimal bootstrap context on invocation (task description + correlation ID), then query the Context Store for what they need and store their decisions for others.
 
-## The Problem
-
-```mermaid
-sequenceDiagram
-    participant M as Moderator
-    participant TL as TeamLead
-    participant A as Architect
-    participant D as Developer
-
-    M->>TL: "Create auth tickets" + [full history]
-    TL->>A: "Confirm JWT?" + [full history + TL context]
-    A->>D: "Implement login" + [full history + TL + A context]
-
-    Note over D: Context window exhausted!
-```
-
-| Problem | Impact |
-|---------|--------|
-| Context duplication | Same data repeated at each call depth |
-| No selective retrieval | Agents get everything or nothing |
-| No visibility | Can't debug why an agent is slow or confused |
-| No eviction | Old context crowds out new information |
+This document describes the MCP API that exposes context management to agents. For storage backend implementation, see [Context Store](context-store.md). For overall architecture, see [System Design](system-design.md#context-management).
 
 ## Architecture
 
-Quorum's MCP server exposes context management through **resources** (read) and **tools** (read/write):
+The MCP server exposes context through **resources** (read-only) and **tools** (read/write):
 
 ```mermaid
 graph TB
@@ -45,9 +24,9 @@ graph TB
             AS[Agent Scope]
         end
 
-        subgraph "MCP Primitives"
-            RES[Resources<br/>context://]
-            TOOLS[Tools<br/>context_*]
+        subgraph "MCP API"
+            RES["Resources<br/>context://"]
+            TOOLS["Tools<br/>context_*"]
         end
 
         RES --> PS
@@ -63,35 +42,26 @@ graph TB
     A2 -->|call tool| TOOLS
 ```
 
-### Context Scopes
-
-| Scope | Lifetime | Use Case |
-|-------|----------|----------|
-| **Project** | Entire session | Tech stack decisions, constraints, team agreements |
-| **Conversation** | Single task chain (correlationId) | Task-specific decisions, intermediate results |
-| **Agent** | Per-agent | Agent's working memory, scratchpad |
+Context scopes, their lifetimes, and usage patterns are described in [System Design — Context Scopes](system-design.md#context-management). The key principle: agents don't receive full context on invocation — they query for what they need and store decisions for others.
 
 ## MCP Resources
 
 Resources provide read-only access to context. Agents fetch what they need rather than receiving everything.
 
-### Project Context
+### Project Context (`context://project`)
 
-Static resource for project-wide information:
+Static resource returning all project-scoped items:
 
 ```typescript
 server.registerResource(
-  "context://project",
-  {
-    uri: "context://project",
-    mimeType: "application/json",
-    name: "project-context",
-    description: "Project-wide decisions and constraints"
-  },
+  'project-context',
+  'context://project',
+  { description: 'All project-scoped context items' },
   async () => ({
-    content: [{
-      type: "text",
-      text: JSON.stringify(contextStore.getProjectContext())
+    contents: [{
+      uri: 'context://project',
+      mimeType: 'application/json',
+      text: JSON.stringify(await contextStore.getAll(ContextScope.project))
     }]
   })
 );
@@ -100,277 +70,166 @@ server.registerResource(
 **Example content:**
 ```json
 {
-  "techStack": {
-    "runtime": "Node.js 22",
-    "framework": "NestJS",
-    "database": "PostgreSQL"
-  },
-  "decisions": [
-    { "topic": "auth", "decision": "JWT with refresh tokens", "by": "architect" },
-    { "topic": "api", "decision": "REST, not GraphQL", "by": "architect" }
-  ],
-  "constraints": [
-    "No external dependencies without approval",
-    "All endpoints must have OpenAPI docs"
-  ]
+  "techStack": { "runtime": "Node.js 22", "framework": "NestJS" },
+  "auth_pattern": "JWT with refresh tokens"
 }
 ```
 
-### Conversation Context
+### Conversation Context (`context://conversation/{correlationId}`)
 
-Parameterized resource for task-specific context:
+Parameterized resource template for task-specific context:
 
 ```typescript
-server.registerResourceTemplate(
-  {
-    uriTemplate: "context://conversation/{correlationId}",
-    mimeType: "application/json",
-    name: "conversation-context",
-    description: "Context for a specific task chain"
-  },
-  async (uri, { correlationId }) => {
-    const context = contextStore.getConversationContext(correlationId);
+const template = new ResourceTemplate(
+  'context://conversation/{correlationId}',
+  { list: undefined },
+);
+
+server.registerResource(
+  'conversation-context',
+  template,
+  { description: 'All context items for a conversation' },
+  async (uri, variables) => {
+    const correlationId = variables.correlationId as string;
+    const all = await contextStore.getAll(ContextScope.conversation, correlationId);
     return {
-      content: [{
-        type: "text",
-        text: JSON.stringify(context)
+      contents: [{
+        uri: uri.href,
+        mimeType: 'application/json',
+        text: JSON.stringify(all)
       }]
     };
   }
 );
 ```
 
-**Example content:**
-```json
-{
-  "correlationId": "task-auth-impl-001",
-  "originatingAgent": "moderator",
-  "task": "Implement user authentication",
-  "callChain": ["moderator", "teamlead", "architect"],
-  "decisions": [
-    { "key": "session_storage", "value": "Redis", "by": "architect" }
-  ],
-  "artifacts": [
-    { "type": "ticket", "id": "QRM-042", "status": "in_progress" }
-  ]
-}
-```
+### Agent Scope (No Resource)
 
-### Resource Subscriptions
+Agent scope is intentionally excluded from MCP resources. Agent-scoped items are private working memory for a single agent instance — exposing them as a browsable resource would break that isolation. Agents access their own agent-scoped items through the `context_store` and `context_query` tools instead.
 
-Agents can subscribe to context changes:
+### Resource Subscriptions (Not Yet Implemented)
 
-```typescript
-// Client-side: subscribe to conversation context
-await mcpClient.subscribeResource(`context://conversation/${correlationId}`);
-
-// Server-side: notify on changes
-contextStore.on('change', async (scope, key) => {
-  if (scope === 'conversation') {
-    await server.notification({
-      method: "notifications/resources/updated",
-      params: { uri: `context://conversation/${key}` }
-    });
-  }
-});
-```
+The MCP SDK supports `notifications/resources/updated` for real-time change notifications. The codebase has a TODO to wire `'context.change'` events (emitted by the Context Store via `EventEmitter2`) to these MCP notifications. Currently, agents must poll or re-read resources to detect changes.
 
 ## MCP Tools
 
-Tools provide read/write access with validation and budget control.
+Tools provide read/write access with validation and budget control. For how the tool bridge augments parameters in agent containers, see [Claude Code SDK — Bridged Tools](claude-code-sdk.md#bridged-tools).
 
 ### context_store
 
-Store a fact or decision:
+Store a context item for other agents to access:
 
 ```typescript
-server.registerTool(
-  "context_store",
-  {
-    description: "Store context for other agents to access",
-    inputSchema: {
-      scope: z.enum(["project", "conversation", "agent"])
-        .describe("Context scope"),
-      key: z.string()
-        .describe("Unique key for this context item"),
-      value: z.any()
-        .describe("The context data to store"),
-      correlationId: z.string().optional()
-        .describe("Required for conversation scope"),
-      ttl: z.number().optional()
-        .describe("Auto-expire in seconds (conversation/agent scope only)")
-    }
-  },
-  async ({ scope, key, value, correlationId, ttl }) => {
-    await contextStore.set({ scope, key, value, correlationId, ttl });
-
-    return {
-      content: [{
-        type: "text",
-        text: `Stored ${key} in ${scope} scope`
-      }]
-    };
+server.registerTool('context_store', {
+  inputSchema: {
+    scope: z.enum(['project', 'conversation', 'agent']),
+    key: z.string().min(1),
+    value: z.unknown(),
+    correlationId: z.string().optional()
+      .describe('Required for conversation scope'),
+    agentRole: z.enum([...AgentRole]).optional()
+      .describe('Agent role creating this item'),
+    ttl: z.number().int().min(1).optional()
+      .describe('Time-to-live in milliseconds'),
   }
-);
+}, handler);
 ```
+
+**Handler logic:**
+- Conversation scope **requires** `correlationId` (returns error if missing)
+- Project scope **ignores** `correlationId` — items are always global (`id = undefined`)
+- Conversation/agent scope uses `correlationId` as the `id` partition
 
 **Usage by agent:**
 ```
 I'll record this architectural decision for the team.
-
 [calls context_store with scope="project", key="auth_pattern", value="JWT with refresh tokens"]
 ```
 
 ### context_query
 
-Retrieve context with token budget:
+Query context with explicit mode selection:
 
 ```typescript
-server.registerTool(
-  "context_query",
-  {
-    description: "Query context with token budget control",
-    inputSchema: {
-      scope: z.enum(["project", "conversation", "agent"])
-        .describe("Context scope to query"),
-      query: z.string().optional()
-        .describe("Natural language query to filter relevant context"),
-      keys: z.array(z.string()).optional()
-        .describe("Specific keys to retrieve"),
-      correlationId: z.string().optional()
-        .describe("Required for conversation scope"),
-      maxTokens: z.number().default(2000)
-        .describe("Maximum tokens to return")
-    }
-  },
-  async ({ scope, query, keys, correlationId, maxTokens }) => {
-    let context;
-
-    if (keys) {
-      // Direct key lookup
-      context = await contextStore.getByKeys(scope, keys, correlationId);
-    } else if (query) {
-      // Semantic search (requires embedding or keyword matching)
-      context = await contextStore.search(scope, query, correlationId);
-    } else {
-      // Get all in scope
-      context = await contextStore.getAll(scope, correlationId);
-    }
-
-    // Truncate to token budget
-    const truncated = truncateToTokens(context, maxTokens);
-
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify(truncated)
-      }]
-    };
+server.registerTool('context_query', {
+  inputSchema: {
+    scope: z.enum(['project', 'conversation', 'agent']),
+    mode: z.enum(['keys', 'search', 'get-all']),
+    keys: z.array(z.string()).optional()
+      .describe('Keys to look up (mode=keys)'),
+    query: z.string().optional()
+      .describe('Search query (mode=search)'),
+    correlationId: z.string().optional()
+      .describe('Scope identifier (correlationId or agentId)'),
+    maxTokens: z.number().int().min(1).optional()
+      .describe('Token budget for search results'),
   }
-);
+}, handler);
 ```
+
+**Mode behavior:**
+
+| Mode | Behavior | Returns |
+|------|----------|---------|
+| `keys` | Calls `get()` for each key individually | `Record<string, unknown>` (key → value, `undefined` for missing) |
+| `search` | Case-insensitive substring match with token budget | `ContextItem[]` (within `maxTokens` budget, defaults to `CONTEXT_DEFAULT_MAX_TOKENS`) |
+| `get-all` | Returns all items in the scope | `Record<string, unknown>` |
 
 **Usage by agent:**
 ```
 Before implementing auth, let me check what decisions have been made.
-
-[calls context_query with scope="project", query="authentication decisions", maxTokens=1000]
+[calls context_query with scope="project", mode="search", query="authentication"]
 ```
 
 ### context_summarize
 
-Compress verbose context:
+Compress conversation context via truncation (POC — LLM-based summarization planned):
 
 ```typescript
-server.registerTool(
-  "context_summarize",
-  {
-    description: "Summarize conversation context to reduce token usage",
-    inputSchema: {
-      correlationId: z.string()
-        .describe("Conversation to summarize"),
-      targetTokens: z.number().default(500)
-        .describe("Target size after summarization"),
-      preserveKeys: z.array(z.string()).optional()
-        .describe("Keys to keep verbatim (not summarized)")
-    }
-  },
-  async ({ correlationId, targetTokens, preserveKeys }) => {
-    const context = await contextStore.getConversationContext(correlationId);
-
-    // Use LLM to summarize (or simpler heuristics for POC)
-    const summary = await summarizeContext(context, targetTokens, preserveKeys);
-
-    // Store summary back
-    await contextStore.set({
-      scope: "conversation",
-      correlationId,
-      key: "_summary",
-      value: summary
-    });
-
-    return {
-      content: [{
-        type: "text",
-        text: `Summarized to ${countTokens(summary)} tokens`
-      }]
-    };
+server.registerTool('context_summarize', {
+  inputSchema: {
+    correlationId: z.string(),
+    maxTokens: z.number().int().min(1).optional()
+      .describe('Token budget for summary'),
+    preserveKeys: z.array(z.string()).optional()
+      .describe('Keys to always keep in full'),
   }
-);
+}, handler);
 ```
+
+**Handler logic:**
+1. Fetches all items for the conversation via `getAll()`
+2. Splits items into `preserved` (matching `preserveKeys`) and `rest`
+3. Calculates budget: `totalCharBudget = maxTokens × tokenCharRatio` (defaults: 2000 × 4 = 8000 chars)
+4. Subtracts preserved items' size from budget
+5. Accumulates non-preserved items until remaining budget exhausted
+6. Stores result as `_summary` key in the conversation scope
+7. Returns stats: `{ preservedKeys, summarizedKeys, droppedKeys, totalCharsBudget, preservedChars, remainingBudget, charsUsed }`
 
 ### context_stats
 
 Visibility into context usage:
 
 ```typescript
-server.registerTool(
-  "context_stats",
-  {
-    description: "Get context usage statistics",
-    inputSchema: {
-      scope: z.enum(["project", "conversation", "agent", "all"]).optional()
-        .describe("Scope to get stats for"),
-      correlationId: z.string().optional()
-        .describe("Specific conversation ID")
-    }
-  },
-  async ({ scope, correlationId }) => {
-    const stats = await contextStore.getStats(scope, correlationId);
-
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify(stats, null, 2)
-      }]
-    };
+server.registerTool('context_stats', {
+  inputSchema: {
+    scope: z.enum(['project', 'conversation', 'agent']).optional()
+      .describe('Limit stats to a specific scope'),
+    correlationId: z.string().optional()
+      .describe('Further filter by correlationId or agentId'),
   }
-);
+}, handler);
 ```
 
-**Example output:**
+**Returns** a flat `ContextStats` object:
 ```json
 {
-  "project": {
-    "itemCount": 12,
-    "estimatedTokens": 3400
-  },
-  "conversations": {
-    "task-auth-impl-001": {
-      "itemCount": 8,
-      "estimatedTokens": 2100,
-      "depth": 3,
-      "agents": ["moderator", "teamlead", "architect"]
-    }
-  },
-  "agents": {
-    "developer-1": {
-      "itemCount": 5,
-      "estimatedTokens": 800
-    }
-  }
+  "itemCount": 12,
+  "estimatedTokens": 3400
 }
 ```
+
+Omitting `scope` returns aggregate stats across all scopes and IDs.
 
 ## Usage Patterns
 
@@ -389,7 +248,7 @@ sequenceDiagram
 
     Note over MCP: Stored in project scope
 
-    D->>MCP: context_query(project, "auth")
+    D->>MCP: context_query(project, mode=search, "auth")
     MCP->>D: {auth_pattern: "JWT"}
     D->>D: Implements with JWT
 ```
@@ -408,7 +267,7 @@ sequenceDiagram
     Note over MCP: Only passes correlationId, not full context
 
     MCP->>D: {action: "implement QRM-042", correlationId: "xyz"}
-    D->>MCP: context_query(conversation, correlationId="xyz")
+    D->>MCP: context_query(conversation, mode=get-all, correlationId="xyz")
     MCP->>D: {decisions: [...], constraints: [...]}
     D->>D: Has what it needs
 ```
@@ -423,57 +282,23 @@ sequenceDiagram
     participant MCP as MCP Server
 
     D->>MCP: context_stats(conversation, "xyz")
-    MCP->>D: {estimatedTokens: 8500}
+    MCP->>D: {itemCount: 25, estimatedTokens: 8500}
 
     Note over D: Too large, summarize
 
-    D->>MCP: context_summarize("xyz", targetTokens=2000)
-    MCP->>MCP: LLM summarizes context
-    MCP->>D: "Summarized to 1850 tokens"
+    D->>MCP: context_summarize("xyz", maxTokens=2000, preserveKeys=["critical_decision"])
+    MCP->>D: {preservedKeys: [...], summarizedKeys: [...], droppedKeys: [...]}
 ```
 
-## SDK Limitations and Workarounds
+## Agent Identity
 
-| Limitation | Workaround |
-|------------|------------|
-| No agent identity in tool handlers | Pass `agentRole` as explicit parameter |
-| No server-push notifications | Agents poll or use resource subscriptions |
-| No built-in token counting | Implement estimation (chars/4) or use tokenizer |
-| No semantic search | Use keyword matching for POC, add embeddings later |
+Since the MCP SDK doesn't expose client identity in tool handlers, agents must self-identify. The `context_store` tool accepts an optional `agentRole` parameter (from the `AgentRole` enum) to record who created each item. The `invoke_agent` tool uses `callerRole` for the same purpose.
 
-### Agent Identity
-
-Since MCP SDK doesn't expose client identity in tool handlers, agents must self-identify:
-
-```typescript
-// Tool requires agentRole parameter
-server.registerTool("context_store", {
-  inputSchema: {
-    agentRole: z.enum(["architect", "teamlead", "developer", "qa", "productowner"])
-      .describe("Your agent role"),
-    // ... other params
-  }
-}, async ({ agentRole, ...params }) => {
-  await contextStore.set({ ...params, createdBy: agentRole });
-});
-```
-
-## Summary
-
-| Component | Purpose |
-|-----------|---------|
-| `context://project` resource | Read-only project-wide context |
-| `context://conversation/{id}` resource | Read-only task-specific context |
-| `context_store` tool | Write context for other agents |
-| `context_query` tool | Read context with token budget |
-| `context_summarize` tool | Compress verbose context |
-| `context_stats` tool | Visibility into usage |
-
-This architecture transforms context from a "pass everything" model to a **pull-based** model where agents request only what they need, with built-in token budgeting.
+When agents are invoked through the tool bridge in agent containers, the bridge auto-injects `correlationId` as a default (overridable by the agent for cross-conversation queries). See [Claude Code SDK — Parameter Augmentation](claude-code-sdk.md#parameter-augmentation) for details.
 
 ## References
 
-- [Context Store](context-store.md) - Implementation details, storage backends
-- [Agent Messaging](agent-messaging.md) - Bidirectional MCP architecture
-- [Message Broker](message-broker.md) - Inter-agent communication
-- [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) - MCP TypeScript SDK
+- [Context Store](context-store.md) — Storage backend implementation, file persistence, CompositeKeyBuilder
+- [System Design](system-design.md#context-management) — Context scopes, pull-based model, storage overview
+- [Claude Code SDK](claude-code-sdk.md#mcp-tool-bridge) — Tool bridge, parameter augmentation for context tools
+- [Agent Messaging](agent-messaging.md) — Bidirectional MCP architecture
