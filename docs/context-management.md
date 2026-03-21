@@ -103,6 +103,10 @@ server.registerResource(
 );
 ```
 
+### Agent Scope (No Resource)
+
+Agent scope is intentionally excluded from MCP resources. Agent-scoped items are private working memory for a single agent instance — exposing them as a browsable resource would break that isolation. Agents access their own agent-scoped items through the `context_store` and `context_query` tools instead.
+
 ### Resource Subscriptions (Not Yet Implemented)
 
 The MCP SDK supports `notifications/resources/updated` for real-time change notifications. The codebase has a TODO to wire `'context.change'` events (emitted by the Context Store via `EventEmitter2`) to these MCP notifications. Currently, agents must poll or re-read resources to detect changes.
