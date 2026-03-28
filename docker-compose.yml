@@ -33,6 +33,7 @@ services:
       - "3000:3000"
     environment:
       <<: *shared-env
+      APP_NAME: mcp-server
       PORT: 3000
       ENABLE_TEST_ENDPOINTS: "true"
       MCP_WORKSPACE_DIR: /mnt/quorum/workspace
@@ -64,6 +65,7 @@ services:
         condition: service_healthy
     environment:
       <<: *shared-env
+      APP_NAME: terminal
       PORT: 3001
       MCP_CALLBACK_URL: http://terminal:3001
       TERMINAL_WORKSPACE_DIR: /mnt/quorum/workspace
