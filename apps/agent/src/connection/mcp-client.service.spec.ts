@@ -53,7 +53,7 @@ const mockConfig = {
     callbackUrl: 'http://architect:3002',
   },
   app: { port: 3002, nodeEnv: 'test' },
-  mcp: { serverUrl: 'http://mcp-server:3000' },
+  mcp: { serverUrl: 'http://mcp-server:3000', requestTimeoutMs: 1_800_000 },
   anthropic: { apiKey: 'test-key', model: 'claude-sonnet-4-5-20250929' },
 };
 

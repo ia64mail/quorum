@@ -73,7 +73,11 @@ export class McpClientService implements OnApplicationShutdown {
 
   private async connect(): Promise<void> {
     const serverUrl = `${this.config.mcp.serverUrl}/mcp`;
-    this.transport = new StreamableHTTPClientTransport(new URL(serverUrl));
+    this.transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
+      requestInit: {
+        signal: AbortSignal.timeout(this.config.mcp.requestTimeoutMs),
+      },
+    });
     this.client = new Client({
       name: 'moderator-terminal',
       version: '0.1.0',
