@@ -40,17 +40,52 @@ The agent app's MCP client (`apps/agent/src/connection/mcp-client.service.ts:88`
 
 ## Implementation Details
 
-Add an `MCP_REQUEST_TIMEOUT_MS` env var (default: `1800000` = 30 min) to both the terminal and agent config. The `StreamableHTTPClientTransport` constructor accepts `StreamableHTTPClientTransportOptions` which includes `requestInit?: RequestInit` — use `AbortSignal.timeout()` to set a request timeout derived from the env var.
+Add an `MCP_REQUEST_TIMEOUT_MS` env var (default: `1800000` = 30 min) to both the terminal and agent config. Use a custom `fetch` wrapper via the transport's `fetch` option to inject a per-request `AbortSignal.timeout()`.
 
 Since `invoke_agent` is the only long-running tool the moderator calls, a generous global timeout is acceptable — the broker's per-role timeouts remain the precise enforcement layer. Short-duration operations (`register_agent`, `context_query`, etc.) complete well within the budget and are unaffected.
+
+### Why `requestInit.signal` doesn't work
+
+The initial fix (commit `fbeecd5`) passed `AbortSignal.timeout()` via `requestInit.signal`. This is a **no-op** — the SDK's `StreamableHTTPClientTransport` always overwrites `requestInit.signal` with its own internal `_abortController.signal`:
+
+```javascript
+// SDK internals (streamableHttp.js, send method):
+const init = {
+    ...this._requestInit,              // spreads requestInit (including signal)
+    method: 'POST',
+    headers,
+    body: JSON.stringify(message),
+    signal: this._abortController?.signal  // OVERWRITES requestInit.signal
+};
+```
+
+Additionally, `AbortSignal.timeout()` starts its countdown at creation time, not per-request — so even if the SDK didn't overwrite it, a single signal shared across all requests would expire 30 min after connection, not 30 min after each request.
+
+### Correct approach: custom `fetch` wrapper
+
+`StreamableHTTPClientTransport` accepts a `fetch?: FetchLike` option — a custom fetch implementation that receives the final `(url, init)` for every HTTP call. This is the correct injection point for a per-request timeout signal.
+
+The wrapper must:
+1. Create a fresh `AbortSignal.timeout(requestTimeoutMs)` per request
+2. Compose it with the transport's own signal (passed via `init.signal`) using `AbortSignal.any()` so that either timeout or transport shutdown aborts the request
+3. Delegate to the native `fetch`
+
+```typescript
+// Helper — creates a FetchLike that adds a per-request timeout
+function createTimeoutFetch(timeoutMs: number): typeof fetch {
+  return (url, init) => {
+    const signals = [AbortSignal.timeout(timeoutMs)];
+    if (init?.signal) signals.push(init.signal);
+    return fetch(url, { ...init, signal: AbortSignal.any(signals) });
+  };
+}
+```
 
 ### Terminal MCP client (`apps/terminal/src/connection/mcp-client.service.ts`)
 
 ```typescript
 this.transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
-  requestInit: {
-    signal: AbortSignal.timeout(config.mcpRequestTimeoutMs),
-  },
+  fetch: createTimeoutFetch(this.config.mcp.requestTimeoutMs),
 });
 ```
 
@@ -58,19 +93,18 @@ this.transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
 
 Same pattern — apply for consistency. Agent-to-agent calls are typically shorter, but the broker's role-based timeouts remain the authoritative deadline regardless.
 
-### Configuration
+### Configuration (done in `fbeecd5`)
 
-Add `MCP_REQUEST_TIMEOUT_MS` to the existing MCP config factory in each app, validated with Zod:
+`MCP_REQUEST_TIMEOUT_MS` env var and Zod-validated config were added correctly in commit `fbeecd5`. The config layer requires no further changes — only the transport instantiation needs fixing.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MCP_REQUEST_TIMEOUT_MS` | `1800000` (30 min) | HTTP-level request timeout for MCP client transport |
+| `MCP_REQUEST_TIMEOUT_MS` | `1800000` (30 min) | HTTP-level per-request timeout for MCP client transport |
 
-Wire the env var in `docker-compose.yml` under `x-shared-env` so all services (terminal + agents) inherit it.
+### Runtime requirements
 
-### Config injection
-
-Both `McpClientService` classes already inject their app's config service. Add `mcpRequestTimeoutMs` to the existing config and read it during transport instantiation.
+- `AbortSignal.any()` requires Node.js ≥ 20.3.0 (available since Node 20 LTS).
+- `AbortSignal.timeout()` requires Node.js ≥ 17.3.0.
 
 ### Note on duplicate invocation prevention
 
