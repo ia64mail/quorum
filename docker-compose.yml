@@ -7,6 +7,10 @@ x-shared-env: &shared-env
   LOG_JSON_DIR: /app/logs
   LOG_LEVEL: ${LOG_LEVEL:-log}
   npm_config_cache: /tmp/.npm
+  GIT_AUTHOR_NAME: Quorum Agent
+  GIT_AUTHOR_EMAIL: quorum-agent@noreply.local
+  GIT_COMMITTER_NAME: Quorum Agent
+  GIT_COMMITTER_EMAIL: quorum-agent@noreply.local
 
 x-agent-security: &agent-security
   security_opt:
