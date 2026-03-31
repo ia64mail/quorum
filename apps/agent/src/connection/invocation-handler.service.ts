@@ -74,8 +74,18 @@ export class InvocationHandler {
       this.logResult(request, result);
 
       return result.success
-        ? { success: true, result: result.result }
-        : { success: false, error: result.error };
+        ? {
+            success: true,
+            result: result.result,
+            totalCostUsd: result.totalCostUsd,
+            durationMs: result.durationMs,
+          }
+        : {
+            success: false,
+            error: result.error,
+            totalCostUsd: result.totalCostUsd,
+            durationMs: result.durationMs,
+          };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(

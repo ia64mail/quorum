@@ -99,6 +99,8 @@ describe('InvocationHandler', () => {
       expect(result).toEqual({
         success: true,
         result: 'Here is my design.',
+        totalCostUsd: 0.0123,
+        durationMs: 5000,
       });
     });
   });
@@ -112,6 +114,8 @@ describe('InvocationHandler', () => {
       expect(result).toEqual({
         success: false,
         error: 'timeout',
+        totalCostUsd: 0.005,
+        durationMs: 30000,
       });
     });
   });

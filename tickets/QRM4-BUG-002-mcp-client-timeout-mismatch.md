@@ -112,12 +112,20 @@ Fixing the timeout mismatch eliminates the primary trigger for duplicate invocat
 
 ## Acceptance Criteria
 
-- [ ] Terminal MCP client (`apps/terminal/src/connection/mcp-client.service.ts`) configures a request timeout that exceeds the broker's longest role timeout (currently 30 min for developer)
-- [ ] Timeout is configurable via environment variable (`MCP_REQUEST_TIMEOUT_MS` or similar)
-- [ ] Agent MCP client (`apps/agent/src/connection/mcp-client.service.ts`) applies the same timeout configuration
-- [ ] `docker-compose.yml` sets the timeout env var for terminal and all agent services
+- [x] Terminal MCP client (`apps/terminal/src/connection/mcp-client.service.ts`) configures a request timeout that exceeds the broker's longest role timeout (currently 30 min for developer)
+- [x] Timeout is configurable via environment variable (`MCP_REQUEST_TIMEOUT_MS` or similar)
+- [x] Agent MCP client (`apps/agent/src/connection/mcp-client.service.ts`) applies the same timeout configuration
+- [x] `docker-compose.yml` sets the timeout env var for terminal and all agent services
 - [ ] Invocations that run longer than 60 seconds no longer produce `-32001` timeout errors at the client
-- [ ] Existing short-duration MCP operations (register, context_query, etc.) are unaffected
+- [x] Existing short-duration MCP operations (register, context_query, etc.) are unaffected
+
+### Fix History
+
+**Attempt 1 (commit `fbeecd5`):** Added `MCP_REQUEST_TIMEOUT_MS` config and `requestInit.signal` — no-op because SDK overwrites `requestInit.signal`.
+
+**Attempt 2 (commit `24638fd`):** Custom `fetch` wrapper with `AbortSignal.timeout()` — no-op for SSE streams because the HTTP request resolves immediately when the server opens the event stream. The 60s timeout is from the SDK's `Protocol.request()` default (`DEFAULT_REQUEST_TIMEOUT_MSEC`), not the HTTP layer.
+
+**Attempt 3 (current):** Pass `timeout` via `RequestOptions` to `client.callTool()` — this is the correct layer. The SDK's `Protocol.request()` checks `options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MSEC`, so passing `requestTimeoutMs` (30 min) here overrides the 60s default at the JSON-RPC level where the timeout actually fires. The fetch wrapper from attempt 2 remains as a safety net for edge cases.
 
 ## Dependencies and References
 

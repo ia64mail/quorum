@@ -152,10 +152,11 @@ describe('McpClientService', () => {
       await service.connectAndRegister();
       await service.callTool('invoke_agent', { target: 'developer' });
 
-      expect(mockCallTool).toHaveBeenCalledWith({
-        name: 'invoke_agent',
-        arguments: { target: 'developer' },
-      });
+      expect(mockCallTool).toHaveBeenCalledWith(
+        { name: 'invoke_agent', arguments: { target: 'developer' } },
+        undefined,
+        { timeout: 1_800_000 },
+      );
     });
   });
 

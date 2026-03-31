@@ -46,7 +46,9 @@ export class McpClientService implements OnApplicationShutdown {
     name: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.client.callTool({ name, arguments: args });
+    return this.client.callTool({ name, arguments: args }, undefined, {
+      timeout: this.config.mcp.requestTimeoutMs,
+    });
   }
 
   async onApplicationShutdown(_signal?: string): Promise<void> {

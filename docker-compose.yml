@@ -73,6 +73,7 @@ services:
       <<: *shared-env
       APP_NAME: terminal
       PORT: 3001
+      LOG_LEVEL: warn
       MCP_CALLBACK_URL: http://terminal:3001
       TERMINAL_WORKSPACE_DIR: /mnt/quorum/workspace
     volumes:

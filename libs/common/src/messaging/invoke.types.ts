@@ -42,4 +42,8 @@ export interface InvokeResponse {
   result?: string;
   /** Present on failure — describes what went wrong. */
   error?: string;
+  /** Total API cost in USD for this invocation. */
+  totalCostUsd?: number;
+  /** Wall-clock duration of the invocation in milliseconds. */
+  durationMs?: number;
 }
