@@ -22,6 +22,8 @@ export interface InvokeRequest {
   action: string;
   /** Optional key-value payload passed to the target agent. */
   context?: Record<string, unknown>;
+  /** Bootstrap context injected by the Message Broker (not set by callers). */
+  bootstrapContext?: BootstrapContext;
   /** If `true`, caller blocks until the target responds; if `false`, fire-and-forget. */
   wait: boolean;
   /** Current call depth (0-based, incremented at each hop). */
@@ -46,4 +48,35 @@ export interface InvokeResponse {
   totalCostUsd?: number;
   /** Wall-clock duration of the invocation in milliseconds. */
   durationMs?: number;
+}
+
+/**
+ * Context automatically assembled and injected by the Message Broker
+ * before delivering an {@link InvokeRequest} to the target agent.
+ *
+ * Contains project-scope and conversation-scope items retrieved from the
+ * Context Store. Agent-scope items are private working memory and are
+ * intentionally excluded from bootstrap injection.
+ */
+export interface BootstrapContext {
+  /** Project-scope context items (architectural decisions, tech stack, constraints). */
+  project: Record<string, unknown>;
+  /** Conversation-scope context items for the current correlationId. Empty if no correlationId. */
+  conversation: Record<string, unknown>;
+  /** Metadata about the bootstrap assembly. */
+  meta: BootstrapContextMeta;
+}
+
+/**
+ * Metadata describing the bootstrap context assembly produced by the
+ * Message Broker. Enables downstream consumers (prompt rendering, logging)
+ * to make budget-aware decisions without re-computing totals.
+ */
+export interface BootstrapContextMeta {
+  /** Total number of context items included (project + conversation). */
+  itemCount: number;
+  /** Estimated token count consumed by the bootstrap payload. */
+  estimatedTokens: number;
+  /** Which scopes were queried during assembly. */
+  scopesQueried: ('project' | 'conversation')[];
 }
