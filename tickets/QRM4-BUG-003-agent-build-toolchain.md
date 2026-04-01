@@ -1,5 +1,7 @@
 # QRM4-BUG-003: `nest` CLI Not Available in Agent Containers — Build/Lint/Test Blocked
 
+**Status:** FIXED (2026-03-31)
+
 ## Summary
 
 Agent containers cannot run `npm run build`, `npm run lint`, or `npm run test` because `@nestjs/cli` is not in `$PATH` and `npx` cannot create its cache directory on the read-only filesystem. This blocks agents from verifying their own work, which is a core part of the development workflow.
@@ -64,13 +66,23 @@ The `$PATH` approach is simpler and reuses the host's exact dependency versions.
 
 ## Acceptance Criteria
 
-- [ ] `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` added to agent target in `Dockerfile`
-- [ ] `npm_config_cache: /tmp/.npm` added to agent service environment in `docker-compose.yml`
+- [x] `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` added to agent target in `Dockerfile` (done in `4c568d0`)
+- [x] `npm_config_cache: /tmp/.npm` added to agent service environment in `docker-compose.yml` (done in `4c568d0`)
 - [ ] After rebuild, developer agent can run `npm run build` successfully
 - [ ] After rebuild, developer agent can run `npm run lint` successfully
 - [ ] After rebuild, developer agent can run `npm run test` successfully
-- [ ] `npx` commands work inside agent containers (cache writes to `/tmp/.npm`)
+- [x] `npx` commands work inside agent containers (cache writes to `/tmp/.npm`)
 - [ ] Other agent roles (architect, teamlead) are not adversely affected
+
+## Resolution (2026-03-31)
+
+The prior fixes in `4c568d0` (PATH + npm cache) were necessary but insufficient. The **actual root cause** was `ENV NODE_ENV=production` in the agent Dockerfile target (line 64). This caused `npm install` to skip devDependencies when the developer agent tried to install packages in the workspace, leaving `@nestjs/cli`, `jest`, `eslint`, etc. unavailable.
+
+**Evidence from Run 3 session:** Developer self-recovered by running `NODE_ENV=development npm install --include=dev`, confirming that `NODE_ENV=production` was the blocker.
+
+**Fix:** Removed `ENV NODE_ENV=production` from the agent target in `Dockerfile`. Agent containers are development environments — they need full dev toolchain access (build, lint, test). The `default` target (mcp-server, terminal) retains `NODE_ENV=production` since those are runtime-only services.
+
+The PATH and npm cache fixes from `4c568d0` remain in place and are still needed.
 
 ## Dependencies and References
 
