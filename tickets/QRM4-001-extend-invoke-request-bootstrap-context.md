@@ -87,13 +87,13 @@ Run `npm run build` to confirm that the new types compile cleanly and that no ex
 
 ## Acceptance Criteria
 
-- [ ] `BootstrapContext` interface exists in `libs/common/src/messaging/invoke.types.ts` with `project`, `conversation`, and `meta` fields
-- [ ] `BootstrapContextMeta` interface exists in the same file with `itemCount`, `estimatedTokens`, and `scopesQueried` fields
-- [ ] `InvokeRequest.bootstrapContext` is an optional field of type `BootstrapContext`
-- [ ] `bootstrapContext` field has JSDoc indicating it is set by the broker, not callers
-- [ ] `BootstrapContext` and `BootstrapContextMeta` are exported from `libs/common/src/messaging/index.ts`
-- [ ] `npm run build` passes with zero errors
-- [ ] No existing tests are broken (the field is purely additive and optional)
+- [x] `BootstrapContext` interface exists in `libs/common/src/messaging/invoke.types.ts` with `project`, `conversation`, and `meta` fields
+- [x] `BootstrapContextMeta` interface exists in the same file with `itemCount`, `estimatedTokens`, and `scopesQueried` fields
+- [x] `InvokeRequest.bootstrapContext` is an optional field of type `BootstrapContext`
+- [x] `bootstrapContext` field has JSDoc indicating it is set by the broker, not callers
+- [x] `BootstrapContext` and `BootstrapContextMeta` are exported from `libs/common/src/messaging/index.ts`
+- [x] `npm run build` passes with zero errors
+- [x] No existing tests are broken (the field is purely additive and optional)
 
 ## Dependencies and References
 
@@ -115,3 +115,22 @@ Run `npm run build` to confirm that the new types compile cleanly and that no ex
 | `apps/mcp-server/src/messaging/message-broker.service.ts` | Broker will populate `bootstrapContext` in QRM4-003 |
 | `apps/agent/src/connection/invocation-handler.service.ts` | `buildPrompt()` will read `bootstrapContext` in QRM4-004 |
 | `tickets/QRM4-000-roadmap.md` | Roadmap — defines the milestone scope and type decisions |
+
+## Implementation Notes
+
+**Status:** ✅ Accepted
+
+**Files modified:**
+| File | Change |
+|------|--------|
+| `libs/common/src/messaging/invoke.types.ts` | Added `BootstrapContext` and `BootstrapContextMeta` interfaces; added optional `bootstrapContext` field to `InvokeRequest` |
+| `libs/common/src/messaging/index.ts` | Added `BootstrapContext` and `BootstrapContextMeta` to barrel `export type` statement |
+
+**Deviations from ticket:** None — implementation matches the ticket specification exactly.
+
+**Verification results:**
+- `npm run build`: ✅ All 4 apps compile successfully
+- `npm run lint`: ✅ Zero errors, zero warnings
+- `npm run test`: ✅ 38 suites, 469 tests pass
+
+**Review summary:** Type-only, purely additive change. No runtime behavior modified. All 7 acceptance criteria verified against the actual code. No bugs, convention violations, or integration issues found.
