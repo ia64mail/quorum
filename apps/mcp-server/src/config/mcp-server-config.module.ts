@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { appConfig } from '@app/common';
+import { bootstrapConfig } from './bootstrap.config';
 import { brokerConfig } from './broker.config';
 import { contextConfig } from './context.config';
 import { contextStoreConfig } from './context-store.config';
@@ -11,7 +12,13 @@ import { McpServerConfigService } from './mcp-server-config.service';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, brokerConfig, contextConfig, contextStoreConfig],
+      load: [
+        appConfig,
+        bootstrapConfig,
+        brokerConfig,
+        contextConfig,
+        contextStoreConfig,
+      ],
     }),
   ],
   providers: [McpServerConfigService],
