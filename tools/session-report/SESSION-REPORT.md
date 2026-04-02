@@ -52,12 +52,14 @@ The digest provides the raw data. Claude Code adds narrative analysis. The stand
 4. **Outcomes** — what succeeded, what failed
 5. **Cost Summary** — per-invocation and total
 
+### Always included (from quorum.context)
+6. **Context Store Dump** — items added during the session, with analysis of the audit trail
+
 ### Include only when relevant
-6. **Bug Fix Verification** — only when verifying known bug fixes
-7. **Issues** — only when errors, failures, or notable problems occurred
-8. **Comparison Across Sessions** — only when explicitly requested
-9. **Action Items** — only when explicitly requested
-10. **Context Store Dump** — only when context flow is noteworthy
+7. **Bug Fix Verification** — only when verifying known bug fixes
+8. **Issues** — only when errors, failures, or notable problems occurred
+9. **Comparison Across Sessions** — only when explicitly requested
+10. **Action Items** — only when explicitly requested
 
 ### Input sources
 
@@ -67,6 +69,7 @@ A complete session report requires **three** inputs:
 |--------|-----------------|---------------|
 | **parse-logs.mjs digest** | Structured data: invocations, tool calls, costs, errors | `node tools/session-report/parse-logs.mjs` |
 | **Terminal stdout** | User prompt, moderator decisions, agent response summaries, confirmation pauses | `docker attach quorum-terminal-1` during session, or user pastes into conversation |
+| **quorum.context** | Context Store items — full JSON payloads stored by agents during session | Read `$WORKSPACE_PATH/quorum.context` (see `.env` for path). JSON array of `[key, item]` pairs with scope, value, timestamps. |
 | **User context** | Session goal, run number, known bugs to verify | User provides when requesting the report |
 
 The **terminal stdout** is critical because the terminal JSON log is empty for successful sessions (the moderator's orchestration is rendered to the console UI only). Terminal stdout contains:
@@ -75,6 +78,16 @@ The **terminal stdout** is critical because the terminal JSON log is empty for s
 - `← {role} ({duration}, ${cost}):` lines showing agent responses (truncated) and failures
 - `→ context_query` / `→ context_store` lines from the moderator's own MCP calls
 - Confirmation pauses (visible as gaps between `←` and `→` lines)
+
+### Context Store Dump
+
+Read `$WORKSPACE_PATH/quorum.context` (path from `.env` `WORKSPACE_PATH`). The file is a JSON array of `[compositeKey, item]` pairs. Each item has `key`, `value`, `scope`, `createdAt` (epoch ms), and `id` (correlationId).
+
+To write the section:
+1. **Separate carried vs new items** — compare `createdAt` timestamps against the session's start time. Items created before the session were loaded at startup; items created during the session are new.
+2. **Group new items by correlation ID** — matches the invocation phases in the timeline.
+3. **Show the JSON `value` payload** for each item (truncate long values with `...` for readability).
+4. **Write an Analysis paragraph** — describe the audit trail (ticket → implementation → review), note any new patterns (e.g., first project-scope item), and highlight cross-agent context flow (e.g., developer consumed teamlead's ticket status).
 
 ### Tips for Claude Code
 - The **Goal** and **User Prompt** come from terminal stdout — ask the user to paste it if not provided
