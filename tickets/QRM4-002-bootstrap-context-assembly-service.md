@@ -115,21 +115,48 @@ The token estimation formula `Math.ceil(JSON.stringify(value).length / 4)` is cu
 
 ## Acceptance Criteria
 
-- [ ] `apps/mcp-server/src/config/bootstrap.config.ts` exists with a `bootstrapConfig` factory exporting `enabled` (boolean, default `true`), `maxTokens` (int ≥ 1, default `1000`), and `projectRatio` (number 0–1, default `0.6`)
-- [ ] `bootstrapConfig` is loaded in `McpServerConfigModule`, injected and exposed in `McpServerConfigService`, and exported from `config/index.ts`
-- [ ] `apps/mcp-server/src/messaging/bootstrap-context.service.ts` exists with an `@Injectable()` class that has an `assemble(correlationId?: string): Promise<BootstrapContext | null>` method
-- [ ] `assemble()` returns `null` when `BOOTSTRAP_ENABLED=false`
-- [ ] `assemble()` returns `null` when both project and conversation scopes are empty
-- [ ] `assemble()` calls `ContextStore.getAll(ContextScope.project)` always, and `getAll(ContextScope.conversation, correlationId)` only when `correlationId` is provided
-- [ ] Token budgeting respects `BOOTSTRAP_MAX_TOKENS` with the project/conversation split from `BOOTSTRAP_PROJECT_RATIO`
-- [ ] Unused project budget flows to conversation budget (budget reclamation)
-- [ ] When budget is tight, newer items (later in insertion order) are preferred over older ones
-- [ ] Returned `BootstrapContext.meta` accurately reports `itemCount`, `estimatedTokens`, and `scopesQueried`
-- [ ] `BootstrapContextService` is provided and exported from `MessagingModule`
-- [ ] `MessagingModule` imports `ContextStoreModule`
-- [ ] `BootstrapContextService` is exported from `apps/mcp-server/src/messaging/index.ts`
-- [ ] `npm run build` passes with zero errors
-- [ ] `npm run lint` passes with zero errors, zero warnings
+- [x] `apps/mcp-server/src/config/bootstrap.config.ts` exists with a `bootstrapConfig` factory exporting `enabled` (boolean, default `true`), `maxTokens` (int ≥ 1, default `1000`), and `projectRatio` (number 0–1, default `0.6`)
+- [x] `bootstrapConfig` is loaded in `McpServerConfigModule`, injected and exposed in `McpServerConfigService`, and exported from `config/index.ts`
+- [x] `apps/mcp-server/src/messaging/bootstrap-context.service.ts` exists with an `@Injectable()` class that has an `assemble(correlationId?: string): Promise<BootstrapContext | null>` method
+- [x] `assemble()` returns `null` when `BOOTSTRAP_ENABLED=false`
+- [x] `assemble()` returns `null` when both project and conversation scopes are empty
+- [x] `assemble()` calls `ContextStore.getAll(ContextScope.project)` always, and `getAll(ContextScope.conversation, correlationId)` only when `correlationId` is provided
+- [x] Token budgeting respects `BOOTSTRAP_MAX_TOKENS` with the project/conversation split from `BOOTSTRAP_PROJECT_RATIO`
+- [x] Unused project budget flows to conversation budget (budget reclamation)
+- [x] When budget is tight, newer items (later in insertion order) are preferred over older ones
+- [x] Returned `BootstrapContext.meta` accurately reports `itemCount`, `estimatedTokens`, and `scopesQueried`
+- [x] `BootstrapContextService` is provided and exported from `MessagingModule`
+- [x] `MessagingModule` imports `ContextStoreModule`
+- [x] `BootstrapContextService` is exported from `apps/mcp-server/src/messaging/index.ts`
+- [x] `npm run build` passes with zero errors
+- [x] `npm run lint` passes with zero errors, zero warnings
+
+## Implementation Notes
+
+**Status**: ✅ Accepted — reviewed 2026-04-02
+
+**Commit**: `47cb624` on branch `qrm4-bootstrap-context-injection`
+
+**Files modified** (2 new, 5 modified):
+
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/config/bootstrap.config.ts` | **New** — `registerAs('bootstrap', ...)` config factory with Zod schema (`enabled`, `maxTokens`, `projectRatio`) |
+| `apps/mcp-server/src/messaging/bootstrap-context.service.ts` | **New** — `@Injectable()` service with `assemble()` method implementing the 10-step assembly algorithm |
+| `apps/mcp-server/src/config/mcp-server-config.module.ts` | Added `bootstrapConfig` to `ConfigModule.forRoot({ load: [...] })` |
+| `apps/mcp-server/src/config/mcp-server-config.service.ts` | Injected `bootstrapConfig` as `public readonly bootstrap` property |
+| `apps/mcp-server/src/config/index.ts` | Added `bootstrapConfig` barrel export |
+| `apps/mcp-server/src/messaging/messaging.module.ts` | Added `ContextStoreModule` import, `BootstrapContextService` to providers/exports |
+| `apps/mcp-server/src/messaging/index.ts` | Added `BootstrapContextService` barrel export |
+
+**Deviations**: None — implementation follows the ticket spec exactly.
+
+**Design note**: The `applyBudget` helper uses `continue` (skip oversized items, keep trying smaller ones) rather than `break` (stop at first item that doesn't fit). This is a greedy bin-packing approach that maximizes the number of items included within budget — strictly better than the sequential-halt reading of the algorithm description.
+
+**Verification results**:
+- `npm run build` — ✅ all 4 apps compiled
+- `npm run lint` — ✅ zero errors, zero warnings
+- `npm run test` — ✅ 469 tests passed, 38 suites
 
 ## Dependencies and References
 
