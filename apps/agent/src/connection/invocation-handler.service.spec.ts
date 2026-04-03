@@ -45,6 +45,7 @@ const failureResult: ExecuteResult = {
   error: 'timeout',
   durationMs: 30000,
   totalCostUsd: 0.005,
+  numTurns: 20,
 };
 
 // ---------------------------------------------------------------------------
@@ -299,7 +300,7 @@ describe('InvocationHandler', () => {
       expect(logMessage).toContain('duration=5000ms');
     });
 
-    it('should log error, totalCostUsd, and durationMs on failure', async () => {
+    it('should log error, turns, totalCostUsd, and durationMs on failure', async () => {
       mockExecute.mockResolvedValue(failureResult);
 
       await handler.handle(baseRequest);
@@ -310,8 +311,28 @@ describe('InvocationHandler', () => {
       )?.[0] as string;
       expect(warnMessage).toBeDefined();
       expect(warnMessage).toContain('error="timeout"');
+      expect(warnMessage).toContain('turns=20');
       expect(warnMessage).toContain('cost=$0.0050');
       expect(warnMessage).toContain('duration=30000ms');
+    });
+
+    it('should log turns=? when numTurns is not present on failure', async () => {
+      const failureWithoutTurns: ExecuteResult = {
+        success: false,
+        error: 'Connection lost',
+        durationMs: 1000,
+        totalCostUsd: 0,
+      };
+      mockExecute.mockResolvedValue(failureWithoutTurns);
+
+      await handler.handle(baseRequest);
+
+      const warnMessage = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' && call[0].includes('Invocation failed'),
+      )?.[0] as string;
+      expect(warnMessage).toBeDefined();
+      expect(warnMessage).toContain('turns=?');
     });
   });
 });

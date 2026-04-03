@@ -114,6 +114,7 @@ export class InvocationHandler {
     } else {
       this.logger.warn(
         `Invocation failed: ${base} error="${result.error}" ` +
+          `turns=${result.numTurns ?? '?'} ` +
           `cost=$${result.totalCostUsd.toFixed(4)} duration=${result.durationMs}ms`,
       );
     }

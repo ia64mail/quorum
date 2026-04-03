@@ -62,4 +62,6 @@ export type ExecuteResult =
       durationMs: number;
       /** Total API cost in USD (may be 0 if the failure was pre-API). */
       totalCostUsd: number;
+      /** Number of conversation turns consumed (may be absent on pre-API failures). */
+      numTurns?: number;
     };

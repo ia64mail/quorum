@@ -137,7 +137,7 @@ describe('ClaudeCodeService', () => {
   });
 
   // 2. Error result
-  it('should map an error result with joined errors string', async () => {
+  it('should map an error result with joined errors string and numTurns', async () => {
     mockQuery.mockReturnValue(
       generateMessages([
         initMessage(),
@@ -155,6 +155,72 @@ describe('ClaudeCodeService', () => {
       error: 'Max turns reached; Budget exceeded',
       durationMs: 500,
       totalCostUsd: 0.02,
+      numTurns: 20,
+    });
+  });
+
+  // 2a. Empty errors array falls through to subtype (QRM4-BUG-006)
+  it('should use subtype when errors is an empty array', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), errorResult('error_max_turns', [])]),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'error_max_turns',
+      durationMs: 500,
+      totalCostUsd: 0.02,
+      numTurns: 20,
+    });
+  });
+
+  // 2b. Undefined errors falls through to subtype
+  it('should use subtype when errors is undefined', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([
+        initMessage(),
+        {
+          type: 'result',
+          subtype: 'error_max_turns',
+          errors: undefined,
+          duration_ms: 500,
+          total_cost_usd: 0.02,
+          num_turns: 20,
+          session_id: 'sess-1',
+        },
+      ]),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'error_max_turns',
+      durationMs: 500,
+      totalCostUsd: 0.02,
+      numTurns: 20,
+    });
+  });
+
+  // 2c. Single error in array is preserved
+  it('should use single error string when errors has one element', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([
+        initMessage(),
+        errorResult('error_max_turns', ['Max turns reached']),
+      ]),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Max turns reached',
+      durationMs: 500,
+      totalCostUsd: 0.02,
+      numTurns: 20,
     });
   });
 

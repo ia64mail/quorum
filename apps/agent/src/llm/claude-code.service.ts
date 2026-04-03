@@ -149,9 +149,10 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         }
         return {
           success: false,
-          error: message.errors?.join('; ') ?? message.subtype,
+          error: message.errors?.join('; ') || message.subtype,
           durationMs: message.duration_ms,
           totalCostUsd: message.total_cost_usd,
+          numTurns: message.num_turns,
         };
 
       default:
