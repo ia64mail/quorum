@@ -120,9 +120,40 @@ this.logger.log(
 - [ ] Tests updated and passing
 - [ ] `npm run build`, `npm run lint`, `npm run test` pass
 
+## Status: Deferred
+
+**Deferred on:** 2026-04-03
+
+**Reason:** Post-Run 6 analysis revealed that agents routinely exceed the hardcoded `maxTurns: 20` default and complete successfully. The premise of this ticket — that 20 turns is a hard ceiling causing failures — appears incorrect or outdated.
+
+**Evidence (Runs 5–6, 2026-04-02/03):**
+
+| Session | Agent | Reported `num_turns` | Hit `error_max_turns`? |
+|---------|-------|---------------------|------------------------|
+| Run 5 | developer (attempt 1) | 20 | YES |
+| Run 5 | developer (attempt 2) | 35 | No |
+| Run 5 | teamlead (ticket) | 40 | No |
+| Run 5 | teamlead (review) | 24 | No |
+| BUG-008 session | developer | 20 | No |
+| BUG-008 session | teamlead | 29 | No |
+| Run 6 | developer | 30 | No |
+| Run 6 | teamlead | 24 | No |
+
+The code at `claude-code.service.ts:46` passes `maxTurns: params.maxTurns ?? 20` to the SDK, yet agents complete 30-40 turns without hitting the limit. Two hypotheses:
+
+1. **SDK semantics changed** — the Claude Code SDK may have updated `maxTurns` enforcement (advisory vs. hard limit, or raised the internal default), making our `?? 20` fallback ineffective or irrelevant.
+2. **`num_turns` counts differently from `maxTurns`** — the SDK result's `num_turns` may count individual messages while `maxTurns` limits agentic loops (assistant→tool→assistant), so 30 `num_turns` could be under 20 loops.
+
+**Risk of implementing as-is:** The proposed per-role limits (developer: 60, teamlead: 40) were calibrated against a 20-turn ceiling. If the SDK's effective limit is already higher than 20, implementing BUG-007 could inadvertently *introduce* a tighter constraint than the current default.
+
+**Action required before resuming:** Investigate what `maxTurns` actually controls in the current `@anthropic-ai/claude-agent-sdk` version. A minimal test: pass `undefined` instead of `?? 20` and observe whether the SDK has its own default. Then recalibrate the per-role values against actual SDK behavior.
+
+**Resume when:** The `error_max_turns` failure pattern resurfaces in a session, or SDK `maxTurns` semantics are clarified.
+
 ## Dependencies and References
 
 - **Discovered in:** [Run 5 session report](../logs/sessions/2026-04-02-qrm4-run5.md) — Issue 1
+- **Deferred based on:** [Run 6 session report](../logs/sessions/2026-04-03-qrm4-run6.md) — turn count analysis
 - **Existing pattern:** `ROLE_TIMEOUTS` in `apps/mcp-server/src/messaging/role-timeouts.ts`
 - **Existing plumbing:** `ExecuteParams.maxTurns` (`claude-code.types.ts:29`), `ClaudeCodeService` line 46
 - **Related:** QRM4-BUG-006 (error reporting) fixes the diagnostics; this ticket fixes the underlying limit
