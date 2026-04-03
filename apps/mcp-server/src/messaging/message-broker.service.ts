@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { AgentRole, InvokeRequest, InvokeResponse } from '@app/common';
+import type {
+  AgentRole,
+  BootstrapContext,
+  InvokeRequest,
+  InvokeResponse,
+} from '@app/common';
+import { BootstrapContextService } from './bootstrap-context.service';
 import { McpServerConfigService } from '../config';
 import { AgentRegistry } from '../registry';
 import { ROLE_TIMEOUTS } from './role-timeouts';
@@ -12,6 +18,7 @@ export class MessageBroker {
   constructor(
     private readonly registry: AgentRegistry,
     private readonly config: McpServerConfigService,
+    private readonly bootstrapContext: BootstrapContextService,
   ) {}
 
   async invoke(request: InvokeRequest): Promise<InvokeResponse> {
@@ -61,13 +68,21 @@ export class MessageBroker {
       const timeout =
         ROLE_TIMEOUTS[target] ?? this.config.broker.defaultTimeoutMs;
 
-      // TODO: Before delivering to the agent, query ContextStore for bootstrap context.
-      // The broker should call contextStore.search("conversation", "decisions", request.correlationId, 500)
-      // and attach the results as a `bootstrapContext` field on the request, so the receiving agent
-      // starts with recent conversation decisions. This implements the pull-based context model
-      // from docs/context-management.md Pattern 2 (Task Handoff). Requires injecting ContextStore
-      // and extending InvokeRequest with a bootstrapContext field. See docs/context-store.md
-      // (Integration with Message Broker section) for full design.
+      // Assemble bootstrap context (non-fatal — deliver without on failure)
+      let bootstrapResult: BootstrapContext | null = null;
+      try {
+        bootstrapResult = await this.bootstrapContext.assemble(correlationId);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `Bootstrap context assembly failed — proceeding without: ${message} [correlationId=${correlationId}]`,
+        );
+      }
+
+      if (bootstrapResult) {
+        request.bootstrapContext = bootstrapResult;
+      }
+
       const response = await this.deliverWithTimeout(
         agent.handle(request, timeout),
         timeout,

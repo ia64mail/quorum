@@ -4,6 +4,7 @@ import type { InvokeRequest } from '@app/common';
 import { AgentRegistry } from '../registry/agent-registry.service';
 import { MockConnection } from '../registry/mock-connection';
 import { McpServerConfigService } from '../config';
+import { BootstrapContextService } from './bootstrap-context.service';
 import { MessageBroker } from './message-broker.service';
 
 function makeRequest(overrides: Partial<InvokeRequest> = {}): InvokeRequest {
@@ -28,12 +29,19 @@ describe('MessageBroker', () => {
     context: { defaultMaxTokens: 2000, tokenCharRatio: 4 },
   };
 
+  const mockBootstrapService = {
+    assemble: jest.fn().mockResolvedValue(null),
+  };
+
   beforeEach(async () => {
+    mockBootstrapService.assemble.mockResolvedValue(null);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AgentRegistry,
         MessageBroker,
         { provide: McpServerConfigService, useValue: mockConfig },
+        { provide: BootstrapContextService, useValue: mockBootstrapService },
       ],
     }).compile();
 
@@ -160,6 +168,7 @@ describe('MessageBroker', () => {
           AgentRegistry,
           MessageBroker,
           { provide: McpServerConfigService, useValue: shortConfig },
+          { provide: BootstrapContextService, useValue: mockBootstrapService },
         ],
       }).compile();
 
