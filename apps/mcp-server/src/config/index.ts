@@ -1,3 +1,4 @@
+export { bootstrapConfig } from './bootstrap.config';
 export { brokerConfig } from './broker.config';
 export { contextConfig } from './context.config';
 export { contextStoreConfig } from './context-store.config';
