@@ -169,19 +169,19 @@ The developer already queries project scope at task start (added in QRM4-BUG-008
 
 ## Acceptance Criteria
 
-- [ ] `quorum.md` "Commit Cadence Per Subtask" table updated to include architect review step
-- [ ] `quorum.md` contains new "Architect Ticket Review" subsection describing the review flow
-- [ ] `quorum.md` Architect role section includes ticket design review responsibility
-- [ ] `quorum.md` Architect "What You Produce" includes project-scope design notes
-- [ ] `quorum.md` Team Lead role section includes project-scope synthesis after code review
-- [ ] `quorum.md` Team Lead "Context Management" includes project-scope synthesis instruction
-- [ ] Architect prompt template (`role-prompt-templates.ts`) includes design notes storage instruction
-- [ ] Team Lead prompt template (`role-prompt-templates.ts`) includes project synthesis storage instruction
-- [ ] No changes to moderator prompt, developer prompt, or any application code
-- [ ] No changes to Context Store, MCP tools, or agent infrastructure
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes
+- [x] `quorum.md` "Commit Cadence Per Subtask" table updated to include architect review step
+- [x] `quorum.md` contains new "Architect Ticket Review" subsection describing the review flow
+- [x] `quorum.md` Architect role section includes ticket design review responsibility
+- [x] `quorum.md` Architect "What You Produce" includes project-scope design notes
+- [x] `quorum.md` Team Lead role section includes project-scope synthesis after code review
+- [x] `quorum.md` Team Lead "Context Management" includes project-scope synthesis instruction
+- [x] Architect prompt template (`role-prompt-templates.ts`) includes design notes storage instruction
+- [x] Team Lead prompt template (`role-prompt-templates.ts`) includes project synthesis storage instruction
+- [x] No changes to moderator prompt, developer prompt, or any application code
+- [x] No changes to Context Store, MCP tools, or agent infrastructure
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes
 
 ## Dependencies and References
 
@@ -192,3 +192,26 @@ The developer already queries project scope at task start (added in QRM4-BUG-008
 - **Prompt templates:** `libs/common/src/prompts/role-prompt-templates.ts`
 - **Orchestration config:** workspace `quorum.md`
 - **Note:** Like QRM4-BUG-008, this is a behavioral change via prompts and workflow config. Effectiveness should be validated in the next ticket cycle (QRM4-003 or QRM4-004) by observing whether the architect stores design notes and whether the team lead stores project synthesis.
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-03
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `quorum.md` | Modified | Updated Commit Cadence table to 4-step flow (added Architect review step), added "Architect Ticket Review" subsection, added responsibility #5 and design notes output to Architect role, added project-scope synthesis to Team Lead code review responsibility, added Context Management section to Team Lead role |
+| `libs/common/src/prompts/role-prompt-templates.ts` | Modified | Added ticket design notes storage instruction to Architect Context Management section, added project-scope synthesis instruction to Team Lead Context Management section |
+
+### Deviations from Ticket Spec
+
+- None — implementation matches the ticket specification exactly.
+
+### Verification
+
+- `npm run build` — 4 webpack compilations successful
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 473 tests passing across 38 suites (0 new tests — no application code changed)
