@@ -127,17 +127,17 @@ After the code changes:
 
 ## Acceptance Criteria
 
-- [ ] `MessageBroker` constructor accepts `BootstrapContextService` as a dependency
-- [ ] The TODO comment block at lines 64-70 of `message-broker.service.ts` is removed
-- [ ] `BootstrapContextService.assemble(correlationId)` is called after safeguard checks pass and before `agent.handle()`
-- [ ] Bootstrap assembly failure is non-fatal — caught, logged as a warning with `correlationId`, and delivery proceeds without bootstrap context
-- [ ] `request.bootstrapContext` is set only when `assemble()` returns non-null
-- [ ] When `assemble()` returns `null` (disabled or empty store), `request.bootstrapContext` remains `undefined` (backward-compatible)
-- [ ] No module wiring changes needed (verified: `BootstrapContextService` is already in `MessagingModule.providers`)
-- [ ] Existing tests in `message-broker.service.spec.ts` updated to provide a mock `BootstrapContextService` and continue to pass
-- [ ] `npm run build` passes with zero errors
-- [ ] `npm run lint` passes with zero errors, zero warnings
-- [ ] `npm run test` passes with all existing tests still green
+- [x] `MessageBroker` constructor accepts `BootstrapContextService` as a dependency
+- [x] The TODO comment block at lines 64-70 of `message-broker.service.ts` is removed
+- [x] `BootstrapContextService.assemble(correlationId)` is called after safeguard checks pass and before `agent.handle()`
+- [x] Bootstrap assembly failure is non-fatal — caught, logged as a warning with `correlationId`, and delivery proceeds without bootstrap context
+- [x] `request.bootstrapContext` is set only when `assemble()` returns non-null
+- [x] When `assemble()` returns `null` (disabled or empty store), `request.bootstrapContext` remains `undefined` (backward-compatible)
+- [x] No module wiring changes needed (verified: `BootstrapContextService` is already in `MessagingModule.providers`)
+- [x] Existing tests in `message-broker.service.spec.ts` updated to provide a mock `BootstrapContextService` and continue to pass
+- [x] `npm run build` passes with zero errors
+- [x] `npm run lint` passes with zero errors, zero warnings
+- [x] `npm run test` passes with all existing tests still green
 
 ## Dependencies and References
 
@@ -163,3 +163,22 @@ After the code changes:
 | `tickets/QRM4-001-extend-invoke-request-bootstrap-context.md` | Predecessor — type foundation |
 | `tickets/QRM4-002-bootstrap-context-assembly-service.md` | Predecessor — assembly service |
 | `docs/message-broker.md` | Broker architecture reference |
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-03
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/messaging/message-broker.service.ts` | Modified | Injected `BootstrapContextService` as third constructor param; replaced TODO comment (lines 64-70) with non-fatal `assemble(correlationId)` call that attaches bootstrap context to the request before delivery |
+| `apps/mcp-server/src/messaging/message-broker.service.spec.ts` | Modified | Added `mockBootstrapService` (returns `null` by default), provided in both `TestingModule` blocks (main beforeEach and timeout test), reset mock in `beforeEach` |
+
+### Verification
+
+- `npm run build` — all 4 apps compiled successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 473 tests passing across 38 suites (0 new tests, 0 regressions)
