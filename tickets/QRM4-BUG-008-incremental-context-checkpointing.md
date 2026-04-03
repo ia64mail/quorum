@@ -99,16 +99,36 @@ QA could benefit similarly but is lower priority — QA tasks are shorter and le
 
 ## Acceptance Criteria
 
-- [ ] System preamble `agent` scope description mentions checkpointing and retry recovery
-- [ ] System preamble includes "Progress Checkpointing" guideline
-- [ ] Developer prompt Context Management section includes agent-scope query on start
-- [ ] Developer prompt instructs checkpointing after research phase
-- [ ] Developer prompt instructs checkpointing after implementation milestones
-- [ ] No code changes to Context Store, MCP tools, or agent infrastructure
-- [ ] No changes to architect, teamlead, or QA prompts (scope limited to developer + preamble)
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes
+- [x] System preamble `agent` scope description mentions checkpointing and retry recovery
+- [x] System preamble includes "Progress Checkpointing" guideline
+- [x] Developer prompt Context Management section includes agent-scope query on start
+- [x] Developer prompt instructs checkpointing after research phase
+- [x] Developer prompt instructs checkpointing after implementation milestones
+- [x] No code changes to Context Store, MCP tools, or agent infrastructure
+- [x] No changes to architect, teamlead, or QA prompts (scope limited to developer + preamble)
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes
+
+## Implementation Notes
+
+**Status:** Accepted ✅
+
+**Files modified:**
+- `libs/common/src/prompts/role-prompt-templates.ts` — prompt-only changes (no code logic changes)
+
+**Changes made:**
+1. `SYSTEM_PREAMBLE` — expanded `agent` scope description (line 57) to include checkpointing and retry recovery guidance
+2. `SYSTEM_PREAMBLE` — added new `## Progress Checkpointing` section (lines 68-73) under General Guidelines with three actionable bullets (After research, After each step, On retry)
+3. Developer template (`AgentRole.developer`) — replaced Context Management section with 7 bullets including agent-scope query on start, checkpoint after research, checkpoint after milestones, and retained conversation-scope storage for reviewers
+
+**Deviations from ticket:** None — implementation matches all four specified changes exactly.
+
+**Verification results:**
+- `npm run build` — all 4 apps compiled successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 38 suites, 469 tests, all passing
+- No changes to architect, teamlead, QA, moderator, or productowner templates confirmed via diff
 
 ## Dependencies and References
 

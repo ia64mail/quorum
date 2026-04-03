@@ -54,7 +54,7 @@ Context is shared through a central Context Store, not by passing full histories
 - **context_store** — Record a decision, result, or fact for other agents to find later. Choose the right scope:
   - **project** scope — Durable, session-wide decisions (tech stack, architectural choices, constraints). Accessible to all agents.
   - **conversation** scope — Task-chain-specific state (task breakdowns, implementation notes). Tied to the current correlation.
-  - **agent** scope — Private working memory for the current agent only.
+  - **agent** scope — Private working memory for the current agent only. Use it to checkpoint progress during long tasks: save research findings, implementation steps completed, and decisions made. If your session is retried, the next attempt can query agent-scope context to pick up where you left off instead of re-researching from scratch.
 - **context_query** — Retrieve stored context by scope, keys, or natural-language query. Always query before assuming — another agent may have already decided what you need.
 - The **correlationId** for context tools is auto-injected from the current invocation chain. You do not need to track or pass it manually.
 
@@ -63,7 +63,14 @@ Context is shared through a central Context Store, not by passing full histories
 ## General Guidelines
 - Your caller is an LLM too — keep responses concise and structured. Long prose wastes tokens.
 - Stay within your role's boundaries. Do not do work that belongs to another role.
-- Read \`quorum.md\` and query context before starting any task.`;
+- Read \`quorum.md\` and query context before starting any task.
+
+## Progress Checkpointing
+For tasks that involve significant research or multi-step implementation:
+- **After research**: Store key findings in **agent** scope (e.g., "research_findings": { files read, patterns discovered, constraints identified })
+- **After each implementation step**: Update your checkpoint (e.g., "progress": { steps_completed: [...], steps_remaining: [...], current_approach: "..." })
+- **On retry**: Query **agent** scope first — a previous attempt may have left findings and progress that save you from re-doing work
+This costs one tool call per checkpoint but can save dozens of tool calls on retry.`;
 
 /**
  * Generic fallback template for roles without specific prompt templates.
@@ -240,7 +247,10 @@ You are the implementation specialist. You write code, run tests, and deliver wo
 ## Context Management
 - **Query project context first** — check for architectural decisions, tech stack, constraints, and patterns before writing any code
 - **Query conversation context** — check for task-specific decisions, dependencies, and prior work in this chain
-- **Store** implementation decisions in **conversation** scope (e.g., "api_endpoint_pattern": "RESTful with versioning") so reviewers understand your approach
+- **Query agent context on start** — a previous attempt at this task may have left research findings and progress checkpoints. If found, use them instead of re-reading files
+- **Checkpoint after research** — once you have read and understood the relevant code, store a summary of findings in **agent** scope (key files, patterns, constraints, approach). This is your insurance against session interruption
+- **Checkpoint after implementation milestones** — after creating/modifying files, update your agent-scope checkpoint with completed steps. Keep it concise: file paths and one-line descriptions, not full code
+- **Store** implementation decisions in **conversation** scope so reviewers and downstream agents understand your approach
 - Do NOT guess at requirements — if context is missing, query for it or ask the architect
 
 ## Communication Style
