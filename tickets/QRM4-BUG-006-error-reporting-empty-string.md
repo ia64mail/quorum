@@ -102,16 +102,36 @@ Update `invocation-handler.service.spec.ts` to verify the failure log includes `
 
 ## Acceptance Criteria
 
-- [ ] `errors: []` produces `error: message.subtype` (not `""`)
-- [ ] `errors: undefined` still produces `error: message.subtype`
-- [ ] `errors: ['msg']` still produces `error: "msg"`
-- [ ] `ExecuteResult` failure branch includes optional `numTurns`
-- [ ] `processMessage()` failure return includes `numTurns` from SDK result
-- [ ] `logResult()` failure path logs `turns=N` (or `turns=?` when unavailable)
-- [ ] Existing tests updated and passing
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes
+- [x] `errors: []` produces `error: message.subtype` (not `""`)
+- [x] `errors: undefined` still produces `error: message.subtype`
+- [x] `errors: ['msg']` still produces `error: "msg"`
+- [x] `ExecuteResult` failure branch includes optional `numTurns`
+- [x] `processMessage()` failure return includes `numTurns` from SDK result
+- [x] `logResult()` failure path logs `turns=N` (or `turns=?` when unavailable)
+- [x] Existing tests updated and passing
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes
+
+## Implementation Notes
+
+**Status:** Accepted ✅ — reviewed at commit `fe0aeb3`
+
+**Files modified (5):**
+- `apps/agent/src/llm/claude-code.service.ts` — `??` → `||` on line 152; added `numTurns: message.num_turns` to failure return
+- `apps/agent/src/llm/claude-code.types.ts` — added optional `numTurns?: number` to `ExecuteResult` failure branch with JSDoc
+- `apps/agent/src/connection/invocation-handler.service.ts` — added `turns=${result.numTurns ?? '?'}` to failure log template
+- `apps/agent/src/llm/claude-code.service.spec.ts` — 4 test additions/updates: empty array → subtype, undefined → subtype, single error preserved, numTurns in error result
+- `apps/agent/src/connection/invocation-handler.service.spec.ts` — 2 test additions/updates: failure log includes `turns=20`, absent numTurns logs `turns=?`
+
+**Deviations:** None — implementation matches ticket spec exactly.
+
+**Verification results:**
+- `npm run build` — ✅ 4 apps compiled successfully
+- `npm run lint` — ✅ 0 errors, 0 warnings
+- `npm run test` — ✅ 38 suites, 473 tests passed
+
+**Review findings:** None. All acceptance criteria verified against code. No bugs, no convention violations, no integration issues.
 
 ## Dependencies and References
 
