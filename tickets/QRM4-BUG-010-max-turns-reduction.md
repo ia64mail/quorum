@@ -100,14 +100,41 @@ maxTurns?: number;
 
 ## Acceptance Criteria
 
-- [ ] `ClaudeCodeService` does not pass `maxTurns` to the SDK when `params.maxTurns` is `undefined`
-- [ ] `ClaudeCodeService` passes `maxTurns` through when explicitly set in `ExecuteParams`
-- [ ] Developer role's `disallowedTools` includes `TodoWrite`
-- [ ] Other roles' `disallowedTools` are unchanged
-- [ ] Developer prompt template includes verification chaining guidance
-- [ ] `ExecuteParams.maxTurns` JSDoc updated
-- [ ] Tests updated and passing for both `ClaudeCodeService` and `RolePermissionService`
-- [ ] `npm run build`, `npm run lint`, `npm run test` pass
+- [x] `ClaudeCodeService` does not pass `maxTurns` to the SDK when `params.maxTurns` is `undefined`
+- [x] `ClaudeCodeService` passes `maxTurns` through when explicitly set in `ExecuteParams`
+- [x] Developer role's `disallowedTools` includes `TodoWrite`
+- [x] Other roles' `disallowedTools` are unchanged
+- [x] Developer prompt template includes verification chaining guidance
+- [x] `ExecuteParams.maxTurns` JSDoc updated
+- [x] Tests updated and passing for both `ClaudeCodeService` and `RolePermissionService`
+- [x] `npm run build`, `npm run lint`, `npm run test` pass
+
+## Implementation Notes
+
+**Status:** Accepted ✅
+
+**Files modified:**
+- `apps/agent/src/llm/claude-code.service.ts` — removed hardcoded `maxTurns: 20` fallback, replaced with conditional spread
+- `apps/agent/src/config/role-tool-profiles.ts` — added `'TodoWrite'` to developer `disallowedTools`
+- `libs/common/src/prompts/role-prompt-templates.ts` — added `## Verification` section to developer prompt with chained build/lint/test guidance
+- `apps/agent/src/llm/claude-code.types.ts` — updated `maxTurns` JSDoc to document SDK-default behavior and BUG-007 forward reference
+- `apps/agent/src/llm/claude-code.service.spec.ts` — replaced test 7 (was asserting `maxTurns === 20`) with two tests: omission when undefined, passthrough when explicit
+- `apps/agent/src/config/role-tool-profiles.spec.ts` — updated developer profile length assertion (3→4), added `TodoWrite` assertion
+- `apps/agent/src/config/role-permission.service.spec.ts` — added explicit `TodoWrite` inclusion test for developer role
+
+**Changes made:**
+1. `ClaudeCodeService` — `maxTurns: params.maxTurns ?? 20` → `...(params.maxTurns !== undefined ? { maxTurns: params.maxTurns } : {})`. When `maxTurns` is unset, the key is absent from SDK options, letting the SDK use its own internal default. When BUG-007 wires per-role budgets through the broker, `InvocationHandler` will pass `maxTurns` explicitly and the conditional spread will include it.
+2. Developer `disallowedTools` — added `'TodoWrite'` to the spread of `COMMON_DISALLOWED_TOOLS`. Mechanical enforcement (not prompt-only) prevents ~6 wasted turns per implementation cycle. Other roles unchanged.
+3. Developer prompt — inserted `## Verification` subsection before `## Constraints` with `npm run build && npm run lint && npm run test` chaining guidance. Prompt-only (not mechanical) since single-step verification is sometimes legitimate.
+4. `ExecuteParams.maxTurns` JSDoc — replaced "Defaults to 20" with SDK-default semantics and BUG-007 cross-reference.
+
+**Deviations from ticket:** None — implementation matches all four specified changes exactly.
+
+**Verification results:**
+- `npm run build` — all 4 apps compiled successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 38 suites, 475 tests, all passing
+- Other roles' `disallowedTools` unchanged (architect, teamlead, qa, productowner profiles untouched)
 
 ## Dependencies and References
 

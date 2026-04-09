@@ -34,7 +34,7 @@ type DeployableRole = (typeof DEPLOYABLE_AGENT_ROLES)[number];
  */
 export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
   developer: {
-    disallowedTools: [...COMMON_DISALLOWED_TOOLS],
+    disallowedTools: [...COMMON_DISALLOWED_TOOLS, 'TodoWrite'],
     deniedBashCommands: ['git push --force', 'git push -f', 'rm -rf /'],
   },
 

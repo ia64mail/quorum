@@ -25,7 +25,9 @@ export interface ExecuteParams {
    *  write path guards). Operates alongside `disallowedTools` — those remove
    *  tools entirely; this inspects individual invocations at runtime. */
   canUseTool?: CanUseTool;
-  /** Maximum conversation turns before the session stops. Defaults to 20. */
+  /** Maximum conversation turns before the session stops. When undefined,
+   *  the SDK uses its own internal default. Set explicitly via InvokeRequest
+   *  when per-role turn budgets are configured (see BUG-007). */
   maxTurns?: number;
   /** Optional controller for cancelling the execution from outside. */
   abortController?: AbortController;

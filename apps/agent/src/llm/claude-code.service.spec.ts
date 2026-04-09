@@ -315,8 +315,8 @@ describe('ClaudeCodeService', () => {
     );
 
     const mcpServers = {
-      'my-server': { type: 'sse' as const, url: 'http://localhost:3000' },
-    };
+      'my-server': { type: 'sdk' as const, name: 'my-server', instance: {} },
+    } as unknown as ExecuteParams['mcpServers'];
 
     await service.execute({ ...baseParams, mcpServers });
 
@@ -334,8 +334,8 @@ describe('ClaudeCodeService', () => {
     expect(callArgs.options.mcpServers).toBe(mcpServers);
   });
 
-  // 7. Default maxTurns
-  it('should default maxTurns to 20 when not specified', async () => {
+  // 7. maxTurns omitted when undefined (BUG-010)
+  it('should not pass maxTurns to the SDK when not specified', async () => {
     mockQuery.mockReturnValue(
       generateMessages([initMessage(), successResult()]),
     );
@@ -346,7 +346,22 @@ describe('ClaudeCodeService', () => {
     const callArgs = mockQuery.mock.calls[0][0] as {
       options: Record<string, unknown>;
     };
-    expect(callArgs.options.maxTurns).toBe(20);
+    expect(callArgs.options).not.toHaveProperty('maxTurns');
+  });
+
+  // 7a. Explicit maxTurns is passed through (BUG-010)
+  it('should pass maxTurns through when explicitly set', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({ ...baseParams, maxTurns: 60 });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.maxTurns).toBe(60);
   });
 
   // 8. Graceful shutdown
