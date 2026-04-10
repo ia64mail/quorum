@@ -3,7 +3,11 @@ import type {
   CanUseTool,
   PermissionResult,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { InvokeRequest, InvokeResponse } from '@app/common';
+import type {
+  BootstrapContext,
+  InvokeRequest,
+  InvokeResponse,
+} from '@app/common';
 import { RolePermissionService, type ToolGuardResult } from '../config';
 import { ClaudeCodeService } from '../llm';
 import type { ExecuteResult } from '../llm/claude-code.types';
@@ -96,11 +100,56 @@ export class InvocationHandler {
   }
 
   private buildPrompt(request: InvokeRequest): string {
-    let prompt = `Task: ${request.action}`;
+    let prompt = '';
+
+    // Bootstrap context (prepended before task)
+    const bootstrapSection = this.renderBootstrapContext(
+      request.bootstrapContext,
+    );
+    if (bootstrapSection) {
+      prompt += bootstrapSection + '\n\n';
+    }
+
+    // Task action (existing)
+    prompt += `Task: ${request.action}`;
+
+    // Caller-provided context (existing)
     if (request.context && Object.keys(request.context).length > 0) {
       prompt += `\n\nAdditional context:\n${JSON.stringify(request.context, null, 2)}`;
     }
+
     return prompt;
+  }
+
+  private renderBootstrapContext(
+    ctx: BootstrapContext | undefined,
+  ): string | null {
+    if (!ctx) return null;
+
+    const projectEntries = Object.entries(ctx.project);
+    const conversationEntries = Object.entries(ctx.conversation);
+
+    if (projectEntries.length === 0 && conversationEntries.length === 0) {
+      return null;
+    }
+
+    const lines: string[] = ['## Prior Decisions'];
+
+    if (projectEntries.length > 0) {
+      lines.push('', '### Project Context');
+      for (const [key, value] of projectEntries) {
+        lines.push(`- ${key}: ${JSON.stringify(value)}`);
+      }
+    }
+
+    if (conversationEntries.length > 0) {
+      lines.push('', '### Conversation Context');
+      for (const [key, value] of conversationEntries) {
+        lines.push(`- ${key}: ${JSON.stringify(value)}`);
+      }
+    }
+
+    return lines.join('\n');
   }
 
   private logResult(request: InvokeRequest, result: ExecuteResult): void {
