@@ -1,0 +1,104 @@
+# QRM4-BUG-012: Moderator Prompt Caching and Cost Tracking
+
+## Summary
+
+The terminal moderator (raw Anthropic SDK path) sends the full system prompt on every API call without prompt caching, and its costs are invisible — not tracked, not displayed in the activity feed. Agent costs are visible via the Claude Code SDK's `total_cost_usd`, but the moderator's per-turn API spend is a blind spot.
+
+## Problem Statement
+
+Two related gaps in the terminal moderator's LLM integration:
+
+**1. No prompt caching.** The moderator's `processWithLoop()` makes up to 10 `messages.create()` calls per user turn. Each call re-sends the full system prompt (~4-8KB: SYSTEM_PREAMBLE + moderator template + quorum.md). The Anthropic SDK supports `cache_control` on system prompt blocks, but we pass the prompt as a plain string with no cache directives. After the first call, subsequent calls could read the system prompt from cache at 1/10th the input token cost.
+
+**2. No cost visibility.** The `Message` object returned by `messages.create()` includes a `usage` field with `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, and `cache_read_input_tokens`. This data is returned by `AnthropicService.chat()` but never inspected — `processWithLoop()` only reads `response.content` and `response.stop_reason`. Meanwhile, agent costs are fully visible in the activity feed (e.g., `← developer (1m13s, $0.43)`), and in session reports. The moderator shows "—" for cost.
+
+**Risks of not doing it:**
+- Paying full input token price on 9 out of 10 rounds per user turn — pure waste
+- No visibility into the largest per-session API consumer (moderator makes the most calls)
+- Session cost reports undercount total spend
+
+## Design Context
+
+The terminal moderator uses the raw `@anthropic-ai/sdk` (v0.73.0) — not the Claude Code SDK — because it's a pure orchestrator, not a code-writing agent. The SDK's `messages.create()` accepts the `system` parameter in two forms:
+
+1. **String** (current): `system: "prompt text"` — no caching possible
+2. **Array of content blocks**: `system: [{ type: "text", text: "...", cache_control: { type: "ephemeral" } }]` — enables caching
+
+The Claude Code SDK (agent path) already handles prompt caching internally — no changes needed there.
+
+## Implementation Details
+
+### Part 1: Prompt caching
+
+In `apps/terminal/src/llm/anthropic.service.ts`, change the `system` parameter from a plain string to an array with a single `cache_control` breakpoint:
+
+```typescript
+system: [
+  {
+    type: 'text' as const,
+    text: params.system,
+    cache_control: { type: 'ephemeral' },
+  },
+],
+```
+
+This caches the entire system prompt (preamble + moderator template + quorum.md) as a single block. The content is effectively static for the entire session — quorum.md is loaded once at startup and never reloaded. The default TTL is 5 minutes, which comfortably covers a multi-round tool loop and consecutive user turns.
+
+No need to split into multiple blocks — the entire system prompt is session-static.
+
+### Part 2: Cost tracking with hardcoded pricing
+
+Add a pricing utility that converts token counts from `response.usage` to USD. Hardcode per-model rates as constants since the Anthropic SDK does not expose pricing information.
+
+Create `apps/terminal/src/llm/pricing.ts` with:
+- A `MODEL_PRICING` map keyed by model ID string, with `inputPerMToken`, `outputPerMToken`, `cacheReadPerMToken`, and `cacheWritePerMToken` rates
+- Include at minimum: `claude-sonnet-4-5-20250929` and `claude-opus-4-6` (the two models currently used)
+- A `calculateCostUsd(model: string, usage: Usage): number` function
+- A fallback for unknown models — log a warning and return 0 rather than crashing
+
+The `Usage` type from the SDK includes:
+- `input_tokens` — standard input pricing
+- `output_tokens` — standard output pricing
+- `cache_creation_input_tokens` — charged at cache write rate (1.25× input)
+- `cache_read_input_tokens` — charged at cache read rate (0.1× input)
+
+### Part 3: Accumulate and display per-turn cost
+
+In `apps/terminal/src/chat/chat.service.ts`, modify `processWithLoop()`:
+
+1. Accumulate `response.usage` across all rounds in the loop (sum token counts)
+2. After the loop completes, call `calculateCostUsd()` with accumulated usage
+3. Return the cost alongside the response text — adjust the return type or add a side-channel (e.g., store on `this` and read after `processWithLoop()` returns)
+4. Display the moderator's per-turn cost after its response, matching the existing activity feed style — e.g., `Moderator ($0.12): "Here's what happened..."`
+
+The exact display format should integrate naturally with the existing activity feed. The key data to show is the USD cost; optionally include token breakdown for debug-level logging.
+
+### Part 4: Pricing comment in .env.example
+
+Add a comment in `.env.example` next to `ANTHROPIC_MODEL` reminding that pricing constants are hardcoded and linked to this model selection:
+
+```env
+# NOTE: Token pricing for moderator cost tracking is hardcoded per model
+# in apps/terminal/src/llm/pricing.ts — update if changing ANTHROPIC_MODEL
+ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
+```
+
+## Acceptance Criteria
+
+- [ ] `AnthropicService.chat()` sends the system prompt as a content block array with `cache_control: { type: "ephemeral" }`
+- [ ] `processWithLoop()` accumulates `response.usage` across all rounds
+- [ ] Moderator per-turn cost (USD) is displayed in the terminal after each moderator response
+- [ ] Hardcoded pricing constants exist for `claude-sonnet-4-5-20250929` and `claude-opus-4-6`
+- [ ] Unknown model falls back gracefully (warning log, $0.00 cost) rather than crashing
+- [ ] `.env.example` contains a comment linking `ANTHROPIC_MODEL` to the hardcoded pricing file
+- [ ] `npm run build` compiles successfully
+- [ ] `npm run lint` passes
+- [ ] `npm run test` — all existing tests pass, no regressions
+
+## Dependencies and References
+
+- **Files to modify:** `apps/terminal/src/llm/anthropic.service.ts`, `apps/terminal/src/chat/chat.service.ts`, `.env.example`
+- **Files to create:** `apps/terminal/src/llm/pricing.ts`
+- **Related ticket:** QRM4-BUG-005 (moderator activity feed) — established the display format this ticket extends
+- **Anthropic docs:** Prompt caching — `cache_control: { type: "ephemeral" }` on system content blocks
+- **SDK type:** `Usage` from `@anthropic-ai/sdk/resources/messages/messages`
