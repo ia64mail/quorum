@@ -25,11 +25,19 @@ const mockGetTools = jest.fn();
 const mockCallTool = jest.fn();
 const mockConfig = {
   terminal: { workspaceDir: '/test/workspace' },
+  anthropic: { model: 'claude-sonnet-4-5-20250929' },
 } as unknown as TerminalConfigService;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const defaultUsage = {
+  input_tokens: 100,
+  output_tokens: 50,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+};
 
 function textResponse(text: string) {
   return {
@@ -38,6 +46,7 @@ function textResponse(text: string) {
     role: 'assistant',
     content: [{ type: 'text', text }],
     stop_reason: 'end_turn',
+    usage: { ...defaultUsage },
   };
 }
 
@@ -59,6 +68,7 @@ function toolUseResponse(
       input: t.input,
     })),
     stop_reason: 'tool_use',
+    usage: { ...defaultUsage },
   };
 }
 
@@ -97,9 +107,14 @@ describe('ChatService', () => {
   });
 
   /** Access private processWithLoop() via reflection. */
-  function callProcessWithLoop(): Promise<string> {
+  function callProcessWithLoop(): Promise<{
+    text: string;
+    costUsd: number;
+  }> {
     return (
-      service as unknown as { processWithLoop(): Promise<string> }
+      service as unknown as {
+        processWithLoop(): Promise<{ text: string; costUsd: number }>;
+      }
     ).processWithLoop();
   }
 
@@ -123,7 +138,8 @@ describe('ChatService', () => {
 
       const result = await callProcessWithLoop();
 
-      expect(result).toBe('Hello! How can I help?');
+      expect(result.text).toBe('Hello! How can I help?');
+      expect(result.costUsd).toBeGreaterThanOrEqual(0);
     });
   });
 
@@ -146,7 +162,7 @@ describe('ChatService', () => {
       simulateTurn('What auth pattern should we use?');
       const result = await callProcessWithLoop();
 
-      expect(result).toBe('Based on context, use JWT.');
+      expect(result.text).toBe('Based on context, use JWT.');
       expect(mockCallTool).toHaveBeenCalledTimes(1);
       expect(mockChat).toHaveBeenCalledTimes(2);
     });
@@ -176,7 +192,7 @@ describe('ChatService', () => {
       simulateTurn('Do multiple things');
       const result = await callProcessWithLoop();
 
-      expect(result).toBe('Done');
+      expect(result.text).toBe('Done');
       expect(mockCallTool).toHaveBeenCalledTimes(2);
     });
   });
@@ -357,7 +373,7 @@ describe('ChatService', () => {
       simulateTurn('Do something');
       const result = await callProcessWithLoop();
 
-      expect(result).toBe('I handled the tool failure gracefully.');
+      expect(result.text).toBe('I handled the tool failure gracefully.');
     });
 
     it('should mark tool result as error when MCP returns isError', async () => {
@@ -372,7 +388,7 @@ describe('ChatService', () => {
       simulateTurn('Do something');
       const result = await callProcessWithLoop();
 
-      expect(result).toBe('Noted the error.');
+      expect(result.text).toBe('Noted the error.');
     });
   });
 
@@ -631,6 +647,7 @@ describe('ChatService', () => {
           { type: 'tool_use', id: 'tu_1', name: 'some_tool', input: {} },
         ],
         stop_reason: 'tool_use',
+        usage: { ...defaultUsage },
       };
 
       for (let i = 0; i < 9; i++) {
@@ -644,8 +661,8 @@ describe('ChatService', () => {
       simulateTurn('Do many things');
       const result = await callProcessWithLoop();
 
-      expect(result).toContain('Partial progress');
-      expect(result).toContain('maximum of 10 rounds');
+      expect(result.text).toContain('Partial progress');
+      expect(result.text).toContain('maximum of 10 rounds');
     });
 
     it('should return user-friendly message when max rounds exceeded with no text', async () => {
@@ -657,7 +674,7 @@ describe('ChatService', () => {
       simulateTurn('Do many things');
       const result = await callProcessWithLoop();
 
-      expect(result).toContain('tool execution limit');
+      expect(result.text).toContain('tool execution limit');
     });
   });
 });

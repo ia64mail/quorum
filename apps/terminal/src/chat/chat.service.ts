@@ -9,7 +9,8 @@ import {
   mapMcpToolsToAnthropic,
   formatToolResult,
 } from '@app/common';
-import { AnthropicService } from '../llm';
+import { AnthropicService, calculateCostUsd } from '../llm';
+import type { TokenUsage } from '../llm';
 import { McpClientService } from '../connection';
 import { StdinLockService } from '../clarification';
 import { TerminalConfigService } from '../config';
@@ -322,8 +323,9 @@ export class ChatService {
     this.messages.push({ role: 'user', content: trimmed });
 
     try {
-      const response = await this.processWithLoop();
-      process.stdout.write(`\nModerator: ${response}\n\n`);
+      const { text, costUsd } = await this.processWithLoop();
+      const costTag = costUsd > 0 ? ` ($${costUsd.toFixed(2)})` : '';
+      process.stdout.write(`\nModerator${costTag}: ${text}\n\n`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Chat processing failed: ${message}`);
@@ -335,8 +337,18 @@ export class ChatService {
     prompt();
   }
 
-  private async processWithLoop(): Promise<string> {
+  private async processWithLoop(): Promise<{
+    text: string;
+    costUsd: number;
+  }> {
     const tools = mapMcpToolsToAnthropic(this.mcpClient.getTools());
+
+    const totalUsage: TokenUsage = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    };
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const response = await this.anthropic.chat({
@@ -345,10 +357,24 @@ export class ChatService {
         tools,
       });
 
+      // Accumulate token usage across all rounds
+      totalUsage.input_tokens += response.usage.input_tokens;
+      totalUsage.output_tokens += response.usage.output_tokens;
+      totalUsage.cache_creation_input_tokens =
+        (totalUsage.cache_creation_input_tokens ?? 0) +
+        (response.usage.cache_creation_input_tokens ?? 0);
+      totalUsage.cache_read_input_tokens =
+        (totalUsage.cache_read_input_tokens ?? 0) +
+        (response.usage.cache_read_input_tokens ?? 0);
+
       this.messages.push({ role: 'assistant', content: response.content });
 
       if (response.stop_reason !== 'tool_use') {
-        return this.extractText(response.content);
+        const costUsd = calculateCostUsd(
+          this.config.anthropic.model,
+          totalUsage,
+        );
+        return { text: this.extractText(response.content), costUsd };
       }
 
       const toolUseBlocks = response.content.filter(
@@ -366,6 +392,8 @@ export class ChatService {
       });
     }
 
+    const costUsd = calculateCostUsd(this.config.anthropic.model, totalUsage);
+
     const lastAssistant = this.messages
       .filter((m) => m.role === 'assistant')
       .pop();
@@ -374,10 +402,16 @@ export class ChatService {
       : '';
 
     if (accumulatedText) {
-      return `${accumulatedText}\n\n[Note: Tool loop reached maximum of ${MAX_TOOL_ROUNDS} rounds]`;
+      return {
+        text: `${accumulatedText}\n\n[Note: Tool loop reached maximum of ${MAX_TOOL_ROUNDS} rounds]`,
+        costUsd,
+      };
     }
 
-    return `I wasn't able to complete the request within the tool execution limit. Please try rephrasing or breaking the task into smaller steps.`;
+    return {
+      text: `I wasn't able to complete the request within the tool execution limit. Please try rephrasing or breaking the task into smaller steps.`,
+      costUsd,
+    };
   }
 
   private extractText(content: ContentBlock[]): string {

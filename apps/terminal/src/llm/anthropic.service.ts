@@ -19,7 +19,13 @@ export class AnthropicService {
     return this.client.messages.create({
       model: this.config.anthropic.model,
       max_tokens: this.config.anthropic.maxTokens,
-      system: params.system,
+      system: [
+        {
+          type: 'text' as const,
+          text: params.system,
+          cache_control: { type: 'ephemeral' as const },
+        },
+      ],
       messages: params.messages,
       ...(params.tools?.length ? { tools: params.tools } : {}),
     });

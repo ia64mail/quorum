@@ -74,7 +74,13 @@ describe('AnthropicService', () => {
     expect(mockCreate).toHaveBeenCalledWith({
       model: 'claude-sonnet-4-5-20250929',
       max_tokens: 4096,
-      system: 'You are a helpful assistant.',
+      system: [
+        {
+          type: 'text',
+          text: 'You are a helpful assistant.',
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [{ role: 'user', content: 'Hello' }],
     });
     expect(result).toBe(mockResponse);

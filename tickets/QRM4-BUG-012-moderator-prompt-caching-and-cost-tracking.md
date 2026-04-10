@@ -85,15 +85,15 @@ ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 
 ## Acceptance Criteria
 
-- [ ] `AnthropicService.chat()` sends the system prompt as a content block array with `cache_control: { type: "ephemeral" }`
-- [ ] `processWithLoop()` accumulates `response.usage` across all rounds
-- [ ] Moderator per-turn cost (USD) is displayed in the terminal after each moderator response
-- [ ] Hardcoded pricing constants exist for `claude-sonnet-4-5-20250929` and `claude-opus-4-6`
-- [ ] Unknown model falls back gracefully (warning log, $0.00 cost) rather than crashing
-- [ ] `.env.example` contains a comment linking `ANTHROPIC_MODEL` to the hardcoded pricing file
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` — all existing tests pass, no regressions
+- [x] `AnthropicService.chat()` sends the system prompt as a content block array with `cache_control: { type: "ephemeral" }`
+- [x] `processWithLoop()` accumulates `response.usage` across all rounds
+- [x] Moderator per-turn cost (USD) is displayed in the terminal after each moderator response
+- [x] Hardcoded pricing constants exist for `claude-sonnet-4-5-20250929` and `claude-opus-4-6`
+- [x] Unknown model falls back gracefully (warning log, $0.00 cost) rather than crashing
+- [x] `.env.example` contains a comment linking `ANTHROPIC_MODEL` to the hardcoded pricing file
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` — all existing tests pass, no regressions
 
 ## Dependencies and References
 
@@ -102,3 +102,24 @@ ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 - **Related ticket:** QRM4-BUG-005 (moderator activity feed) — established the display format this ticket extends
 - **Anthropic docs:** Prompt caching — `cache_control: { type: "ephemeral" }` on system content blocks
 - **SDK type:** `Usage` from `@anthropic-ai/sdk/resources/messages/messages`
+
+## Implementation Notes
+
+**Status:** ✅ Accepted
+
+**Files modified:**
+- `apps/terminal/src/llm/anthropic.service.ts` — System prompt now sent as content block array with `cache_control: { type: 'ephemeral' }`
+- `apps/terminal/src/chat/chat.service.ts` — `processWithLoop()` returns `{ text, costUsd }`, accumulates usage across rounds, `handleInput()` displays `Moderator ($X.XX): ...` format
+- `.env.example` — Comment linking `ANTHROPIC_MODEL` to `pricing.ts`
+
+**Files created:**
+- `apps/terminal/src/llm/pricing.ts` — `MODEL_PRICING` map, `TokenUsage` interface, `calculateCostUsd()` function with unknown-model fallback
+- `apps/terminal/src/llm/index.ts` — Barrel re-export for `calculateCostUsd` and `TokenUsage`
+
+**Test updates:**
+- `anthropic.service.spec.ts` — System parameter assertion updated from string to content block array format
+- `chat.service.spec.ts` — Added `defaultUsage` helper, `usage` field to mock responses, updated `callProcessWithLoop` return type and assertions for `{ text, costUsd }` shape, added `mockConfig.anthropic.model`
+
+**Deviations:** None — implementation matches ticket specification exactly.
+
+**Verification:** `npm run build` (4/4 webpack builds), `npm run lint` (clean), `npm run test` (477/477 pass, 38/38 suites)
