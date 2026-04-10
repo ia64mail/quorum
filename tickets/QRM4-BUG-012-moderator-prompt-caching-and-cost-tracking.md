@@ -24,7 +24,14 @@ The terminal moderator uses the raw `@anthropic-ai/sdk` (v0.73.0) — not the Cl
 1. **String** (current): `system: "prompt text"` — no caching possible
 2. **Array of content blocks**: `system: [{ type: "text", text: "...", cache_control: { type: "ephemeral" } }]` — enables caching
 
-The Claude Code SDK (agent path) already handles prompt caching internally — no changes needed there.
+The Claude Code SDK (agent path) already handles prompt caching internally — no changes needed there. However, there are known upstream issues that likely degrade caching effectiveness for Quorum's agent path specifically:
+
+- **[anthropics/claude-agent-sdk-typescript#247](https://github.com/anthropics/claude-agent-sdk-typescript/issues/247):** Prompt caching fails when MCP servers are configured — server configs are not serializable, invalidating the cache on every resume query. Quorum agents pass `mcpServers` on every `query()` call (`invocation-handler.service.ts:73`), so caching may be partially or fully broken in practice.
+- **[anthropics/claude-agent-sdk-typescript#192](https://github.com/anthropics/claude-agent-sdk-typescript/issues/192):** A random UUID in the built-in Bash tool description changes between `query()` calls, busting the cache. Caching works *within* a single agentic loop but not across separate `invoke_agent` invocations.
+- **[anthropics/claude-agent-sdk-typescript#188](https://github.com/anthropics/claude-agent-sdk-typescript/issues/188):** The SDK defaults to `ephemeral_1h` (1-hour TTL) instead of `ephemeral` (5-minute TTL). Cache writes at 1-hour cost 2× the input rate vs 1.25× for 5-minute — a cost surprise.
+- **[anthropics/claude-agent-sdk-typescript#89](https://github.com/anthropics/claude-agent-sdk-typescript/issues/89):** No user-facing API to control cache breakpoints. The SDK places `cache_control` on every system prompt block, risking 400 errors when >4 blocks exist.
+
+These are upstream SDK limitations — not actionable in Quorum today, but worth tracking for future optimization once the SDK exposes cache control or fixes these issues.
 
 ## Implementation Details
 
