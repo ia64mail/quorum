@@ -41,6 +41,7 @@ services:
       <<: *shared-env
       APP_NAME: mcp-server
       PORT: 3000
+      LOG_LEVEL: debug
       ENABLE_TEST_ENDPOINTS: "true"
       MCP_WORKSPACE_DIR: /mnt/quorum/workspace
     volumes:

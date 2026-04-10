@@ -98,13 +98,32 @@ and content may not match your search query.
 
 ## Acceptance Criteria
 
-- [ ] `InMemoryStore.search()` matches against item key in addition to serialized value
-- [ ] Existing search behavior (value substring matching) unchanged
-- [ ] `context_query` handler logs scope, mode, id, query, and result count at DEBUG level
-- [ ] Moderator prompt or `quorum.md` includes get-all guidance for post-failure checkpoint discovery
-- [ ] New test: search matches on key when value doesn't contain the query
-- [ ] New test: search returns empty when neither key nor value match
-- [ ] `npm run build`, `npm run lint`, `npm run test` pass
+- [x] `InMemoryStore.search()` matches against item key in addition to serialized value
+- [x] Existing search behavior (value substring matching) unchanged
+- [x] `context_query` handler logs scope, mode, id, query, and result count at DEBUG level
+- [x] Moderator prompt or `quorum.md` includes get-all guidance for post-failure checkpoint discovery
+- [x] New test: search matches on key when value doesn't contain the query
+- [x] New test: search returns empty when neither key nor value match
+- [x] `npm run build`, `npm run lint`, `npm run test` pass
+
+## Implementation Notes
+
+**Implemented 2026-04-09.** All three root causes addressed:
+
+### 1. Key-inclusive search (`in-memory-store.ts:209-210`)
+Extended `search()` to build a combined searchable string from `item.key` and `JSON.stringify(item.value)` before matching. A search for "QRM4-003" now matches key `QRM4-003-implementation` even when the value JSON doesn't contain that term. Existing value-only matches are unaffected — the key is simply prepended with a space separator.
+
+### 2. context_query DEBUG logging (`mcp.service.ts:318-347`)
+Added `this.logger.debug()` calls inside each mode branch (keys, search, get-all). Each log line includes: scope, mode, id (or `_` for project), query/keys (where applicable), and result count. Also set `LOG_LEVEL: debug` on the mcp-server service in `docker-compose.yml` so these entries are captured in the JSON log files.
+
+### 3. Moderator failure recovery guidance (`role-prompt-templates.ts`, moderator template)
+Added a "Failure Recovery" section to the moderator prompt template instructing it to use `mode=get-all` on both conversation and agent scopes (with the same correlationId) when an agent invocation fails. Explains why search may miss checkpoints and advises checking for completed status before retrying.
+
+### Tests (`in-memory-store.spec.ts`)
+- **Key match**: Stores `QRM4-003-implementation` with value `{status: "complete", commit: "da92f8a"}`, searches for "QRM4-003" — returns the item.
+- **No match**: Same setup, searches for "totally-unrelated" — returns empty.
+
+**Verification:** 38 suites, 477 tests pass. Build and lint clean.
 
 ## Dependencies and References
 

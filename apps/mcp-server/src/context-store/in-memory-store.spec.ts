@@ -360,6 +360,43 @@ describe('InMemoryStore', () => {
       );
       expect(results).toHaveLength(0);
     });
+
+    it('should match against item key when value does not contain query', async () => {
+      await store.set({
+        scope: ContextScope.conversation,
+        key: 'QRM4-003-implementation',
+        value: { status: 'complete', commit: 'da92f8a' },
+        id: 'conv-1',
+      });
+
+      const results = await store.search(
+        ContextScope.conversation,
+        'QRM4-003',
+        'conv-1',
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0].key).toBe('QRM4-003-implementation');
+      expect(results[0].value).toEqual({
+        status: 'complete',
+        commit: 'da92f8a',
+      });
+    });
+
+    it('should return empty when neither key nor value match', async () => {
+      await store.set({
+        scope: ContextScope.conversation,
+        key: 'QRM4-003-implementation',
+        value: { status: 'complete' },
+        id: 'conv-1',
+      });
+
+      const results = await store.search(
+        ContextScope.conversation,
+        'totally-unrelated',
+        'conv-1',
+      );
+      expect(results).toHaveLength(0);
+    });
   });
 
   describe('getStats', () => {

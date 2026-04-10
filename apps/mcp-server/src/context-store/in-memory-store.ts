@@ -207,7 +207,8 @@ export class InMemoryStore
       }
 
       const serialized = JSON.stringify(item.value);
-      if (serialized.toLowerCase().includes(lowerQuery)) {
+      const searchable = `${item.key} ${serialized}`.toLowerCase();
+      if (searchable.includes(lowerQuery)) {
         const tokens = this.estimateTokens(item.value);
         if (tokens > tokenBudget) {
           break;
