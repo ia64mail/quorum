@@ -50,6 +50,29 @@ The hard enforcement layer should **warn, not fail** — failing the invocation 
 
 ## Implementation Details
 
+### Part 0: Project convention in quorum.md
+
+Add a **Commit Message Convention** subsection to the `## Codebase Conventions` section of `quorum.md`. This establishes a project-wide rule that every commit message starts with the ticket ID, making `git log --grep=QRM4-005` a reliable way for agents (and humans) to locate all work related to a ticket.
+
+Current git history illustrates the problem: some commits bury the ticket ID mid-message (`fix moderator prompt caching and cost tracking (QRM4-BUG-012)`), some omit it entirely (`Improve InMemoryStore search functionality`), and some use inconsistent formats. Agents searching history with `git log --grep` get incomplete results.
+
+Add the following to `quorum.md` under `## Codebase Conventions`:
+
+```markdown
+### Commit Messages
+- **Prefix every commit with the ticket ID**: `QRMX-NNN: <concise description>`
+- For bug tickets: `QRMX-BUG-NNN: <concise description>`
+- When no ticket applies (e.g. ad-hoc fixes during session): `QRMX(no-ticket): <description>`
+- Keep the description concise — what changed and why, not how
+- Multiple logical units → separate commits, each with the same ticket prefix
+- Examples:
+  - `QRM4-005: add bootstrap context unit tests`
+  - `QRM4-BUG-012: fix moderator prompt caching`
+  - `QRM4(no-ticket): fix typo in docker-compose healthcheck`
+```
+
+This convention lives in `quorum.md` because it's a **project rule** that applies to all agents and human contributors, not just prompt-injected guidance. The prompt instructions in Part 1 reinforce it.
+
 ### Part 1: Prompt instructions
 
 Add commit requirements to the role prompt templates in `libs/common/src/prompts/role-prompt-templates.ts`. Each role that modifies files should include an instruction to commit before returning.
@@ -61,9 +84,9 @@ Suggested prompt addition:
 ## Git Discipline
 
 When you modify files during a task, commit your changes before completing the invocation.
-Use a concise, descriptive commit message that references the ticket or task context.
-Format: `<role>(<ticket>): <what changed>`
-Example: `developer(QRM4-005): add bootstrap context unit tests`
+Follow the commit message convention from quorum.md — always prefix with the ticket ID:
+Format: `QRMX-NNN: <concise description>`
+Example: `QRM4-005: add bootstrap context unit tests`
 
 If you created or modified multiple logical units, use separate commits.
 Do not commit if you only read files or queried context without making changes.
@@ -115,6 +138,7 @@ This part is **out of scope** for this ticket — noted here for context and fut
 
 | File | Change |
 |------|--------|
+| `quorum.md` | Add `### Commit Messages` subsection under `## Codebase Conventions` |
 | `libs/common/src/prompts/role-prompt-templates.ts` | Add git discipline section to `SYSTEM_PREAMBLE` |
 | `libs/common/src/prompts/role-prompt-templates.spec.ts` | Update snapshot/assertion tests if preamble content is validated |
 | `apps/agent/src/connection/invocation-handler.service.ts` | Add `checkUncommittedChanges()` method, call after `execute()` returns |
@@ -122,8 +146,9 @@ This part is **out of scope** for this ticket — noted here for context and fut
 
 ## Acceptance Criteria
 
+- [ ] `quorum.md` has a `### Commit Messages` convention under `## Codebase Conventions` requiring ticket-ID-prefixed commits
 - [x] `SYSTEM_PREAMBLE` in role prompt templates includes git commit instructions for agents that modify files
-- [x] Commit message format is specified in the prompt (role + ticket + description)
+- [ ] Commit message format in the prompt references the `quorum.md` convention (ticket ID prefix)
 - [x] `InvocationHandler` checks `git status --porcelain` after agent execution completes
 - [x] Uncommitted changes are logged as a warning with the list of affected files
 - [x] The check never fails or blocks the invocation — warning only
