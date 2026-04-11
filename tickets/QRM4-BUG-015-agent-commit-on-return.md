@@ -122,15 +122,15 @@ This part is **out of scope** for this ticket — noted here for context and fut
 
 ## Acceptance Criteria
 
-- [ ] `SYSTEM_PREAMBLE` in role prompt templates includes git commit instructions for agents that modify files
-- [ ] Commit message format is specified in the prompt (role + ticket + description)
-- [ ] `InvocationHandler` checks `git status --porcelain` after agent execution completes
-- [ ] Uncommitted changes are logged as a warning with the list of affected files
-- [ ] The check never fails or blocks the invocation — warning only
-- [ ] The check handles non-git workspaces gracefully (no crash if git is unavailable)
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` — all existing tests pass, no regressions
+- [x] `SYSTEM_PREAMBLE` in role prompt templates includes git commit instructions for agents that modify files
+- [x] Commit message format is specified in the prompt (role + ticket + description)
+- [x] `InvocationHandler` checks `git status --porcelain` after agent execution completes
+- [x] Uncommitted changes are logged as a warning with the list of affected files
+- [x] The check never fails or blocks the invocation — warning only
+- [x] The check handles non-git workspaces gracefully (no crash if git is unavailable)
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` — all existing tests pass, no regressions
 
 ## Dependencies and References
 
@@ -139,3 +139,24 @@ This part is **out of scope** for this ticket — noted here for context and fut
 - **Git identity config:** `docker-compose.yml` (lines 10-13) — `GIT_AUTHOR_NAME: Quorum Agent`
 - **Observed in:** Run 10 (`logs/sessions/2026-04-10-qrm4-run10.md`) — 0 commits across 7 invocations
 - **Related:** Run 10 Issue #2 (no user confirmation pauses) — deferred, observe next runs
+
+## Implementation Notes
+
+**Status:** Accepted ✅ — All 9/9 acceptance criteria verified.
+
+**Commit:** `da0e928`
+
+**Files modified:**
+| File | Change |
+|------|--------|
+| `libs/common/src/prompts/role-prompt-templates.ts` | Added `## Git Discipline` section to `SYSTEM_PREAMBLE` with commit instructions, message format, multi-commit guidance, and read-only skip rule |
+| `libs/common/src/prompts/role-prompt-templates.spec.ts` | 3 new tests: commit instructions present, commit format specified, no-commit-for-reads instruction |
+| `apps/agent/src/connection/invocation-handler.service.ts` | Added `checkUncommittedChanges()` private method using `promisify(exec)` + `git status --porcelain`. Injected `AgentConfigService` for `workspaceDir`. Called after `logResult()` in `handle()` |
+| `apps/agent/src/connection/invocation-handler.service.spec.ts` | 7 new tests: git status called, warning on dirty, no warning on clean, git unavailable, non-git repo, success despite dirty, check on failed invocations |
+
+**Deviations:** None — implementation matches ticket spec exactly.
+
+**Verification results:**
+- `npm run build`: 4 bundles compiled successfully
+- `npm run lint`: 0 errors, 0 warnings
+- `npm run test`: 39 suites, 537 tests, all pass (10 new tests total)
