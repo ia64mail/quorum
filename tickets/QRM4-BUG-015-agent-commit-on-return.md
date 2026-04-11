@@ -146,9 +146,9 @@ This part is **out of scope** for this ticket — noted here for context and fut
 
 ## Acceptance Criteria
 
-- [ ] `quorum.md` has a `### Commit Messages` convention under `## Codebase Conventions` requiring ticket-ID-prefixed commits
+- [x] `quorum.md` has a `### Commit Messages` convention under `## Codebase Conventions` requiring ticket-ID-prefixed commits
 - [x] `SYSTEM_PREAMBLE` in role prompt templates includes git commit instructions for agents that modify files
-- [ ] Commit message format in the prompt references the `quorum.md` convention (ticket ID prefix)
+- [x] Commit message format in the prompt references the `quorum.md` convention (ticket ID prefix)
 - [x] `InvocationHandler` checks `git status --porcelain` after agent execution completes
 - [x] Uncommitted changes are logged as a warning with the list of affected files
 - [x] The check never fails or blocks the invocation — warning only
@@ -167,9 +167,9 @@ This part is **out of scope** for this ticket — noted here for context and fut
 
 ## Implementation Notes
 
-**Status:** Accepted ✅ — All 9/9 acceptance criteria verified.
+**Status:** Accepted ✅ — All 10/10 acceptance criteria verified.
 
-**Commit:** `da0e928`
+**Commit 1:** `da0e928` — Initial implementation (Parts 1 & 2)
 
 **Files modified:**
 | File | Change |
@@ -178,6 +178,14 @@ This part is **out of scope** for this ticket — noted here for context and fut
 | `libs/common/src/prompts/role-prompt-templates.spec.ts` | 3 new tests: commit instructions present, commit format specified, no-commit-for-reads instruction |
 | `apps/agent/src/connection/invocation-handler.service.ts` | Added `checkUncommittedChanges()` private method using `promisify(exec)` + `git status --porcelain`. Injected `AgentConfigService` for `workspaceDir`. Called after `logResult()` in `handle()` |
 | `apps/agent/src/connection/invocation-handler.service.spec.ts` | 7 new tests: git status called, warning on dirty, no warning on clean, git unavailable, non-git repo, success despite dirty, check on failed invocations |
+
+**Commit 2:** `caba7e4` — Follow-up (Parts 0 & prompt alignment)
+
+| File | Change |
+|------|--------|
+| `quorum.md` | Added `### Commit Messages` subsection under `## Codebase Conventions` with ticket-ID-prefix convention, bug ticket format, no-ticket format, and examples |
+| `libs/common/src/prompts/role-prompt-templates.ts` | Updated `## Git Discipline` to reference quorum.md convention, changed format from `<role>(<ticket>)` to `QRMX-NNN: <concise description>` |
+| `libs/common/src/prompts/role-prompt-templates.spec.ts` | Updated test assertions to match new format |
 
 **Deviations:** None — implementation matches ticket spec exactly.
 
