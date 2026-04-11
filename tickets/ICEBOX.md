@@ -38,3 +38,24 @@ Switch the terminal's `AnthropicService` from `messages.create()` (blocking, ful
 - Tool results still feed back into the next round as before
 
 **Discovered:** Terminal UX analysis, 2026-03-28
+
+### 3. Agent Session Resume via Correlation ID
+
+Reuse Claude Code SDK sessions across sequential invocations of the same agent role within a correlation chain. The SDK supports `resume` and `persistSession` parameters that Quorum currently ignores (`claude-code.service.ts:39` hardcodes `persistSession: false`). Resuming would cache the system prompt and prior conversation turns, avoiding cold-start overhead (re-reading `quorum.md`, re-discovering codebase, re-querying Context Store).
+
+**Estimated savings:** 20-30% per agent on roles with 3+ sequential invocations (e.g., teamlead had 4 invocations in Run 10 at $2.91 total).
+
+**Blocked by upstream SDK issues:**
+- [claude-agent-sdk#247](https://github.com/anthropics/claude-agent-sdk-typescript/issues/247) — MCP server configs are non-serializable, busting the cache on every `query()` call. Resume would pay cache write cost again with no reads until this is fixed.
+- [claude-agent-sdk#192](https://github.com/anthropics/claude-agent-sdk-typescript/issues/192) — Random UUID in Bash tool description invalidates cache between `query()` calls.
+
+**Implementation sketch:**
+- Maintain a `Map<correlationId:role, sessionId>` in `InvocationHandler`
+- Enable `persistSession: true` for agent sessions
+- Pass `resume: previousSessionId` on subsequent invocations of the same role+correlation
+- Frame new tasks clearly ("Previous task complete. New task:") to prevent cross-task contamination
+- Only works for sequential invocations — parallel dispatches of the same role get separate sessions
+
+**Prerequisite:** Upstream fix for SDK #247. Monitor the issue and re-evaluate when resolved.
+
+**Discovered:** Run 10 cost analysis, 2026-04-10 — [QRM4-BUG-013](QRM4-BUG-013-moderator-conversation-caching.md)
