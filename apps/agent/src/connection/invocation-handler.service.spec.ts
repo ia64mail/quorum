@@ -1,23 +1,31 @@
 import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import * as childProcess from 'node:child_process';
 import { AgentRole } from '@app/common';
 import type { InvokeRequest } from '@app/common';
-import { RolePermissionService } from '../config';
+import { AgentConfigService, RolePermissionService } from '../config';
 import { ClaudeCodeService } from '../llm';
 import type { ExecuteResult } from '../llm/claude-code.types';
 import { RolePromptService } from '../prompts';
 import { McpToolBridgeService } from './mcp-tool-bridge.service';
 import { InvocationHandler, toCanUseTool } from './invocation-handler.service';
 
+jest.mock('node:child_process');
+
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
+const mockExec = childProcess.exec as unknown as jest.Mock;
 const mockExecute = jest.fn<Promise<ExecuteResult>, [unknown]>();
 const mockCreateBridge = jest.fn();
 const mockGetDisallowedTools = jest.fn();
 const mockGetToolGuardHook = jest.fn();
 const mockGetSystemPrompt = jest.fn();
+
+const mockConfig = {
+  agent: { workspaceDir: '/mnt/quorum/workspace' },
+} as unknown as AgentConfigService;
 
 let logSpy: jest.SpyInstance;
 let warnSpy: jest.SpyInstance;
@@ -62,6 +70,20 @@ describe('InvocationHandler', () => {
     mockGetDisallowedTools.mockReturnValue(['AskUserQuestion']);
     mockGetToolGuardHook.mockReturnValue(() => ({ allowed: true }));
 
+    // Default: git status returns clean (no uncommitted changes)
+    mockExec.mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        cb: (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void,
+      ) => {
+        cb(null, { stdout: '', stderr: '' });
+      },
+    );
+
     logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
     warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     jest.spyOn(Logger.prototype, 'error').mockImplementation();
@@ -85,6 +107,7 @@ describe('InvocationHandler', () => {
           provide: RolePromptService,
           useValue: { getSystemPrompt: mockGetSystemPrompt },
         },
+        { provide: AgentConfigService, useValue: mockConfig },
       ],
     }).compile();
 
@@ -499,6 +522,134 @@ describe('InvocationHandler', () => {
       const call = mockExecute.mock.calls[0][0] as { prompt: string };
       expect(call.prompt).toContain(
         '- auth-pattern: {"type":"JWT","expiry":"24h"}',
+      );
+    });
+  });
+  describe('uncommitted changes check', () => {
+    it('should run git status --porcelain after execution completes', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExec).toHaveBeenCalledWith(
+        'git status --porcelain',
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
+      );
+    });
+
+    it('should log a warning when uncommitted changes exist', async () => {
+      mockExecute.mockResolvedValue(successResult);
+      mockExec.mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          cb(null, { stdout: ' M src/app.ts\n?? new-file.ts\n', stderr: '' });
+        },
+      );
+
+      await handler.handle(baseRequest);
+
+      const warnMessage = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Uncommitted changes after invocation'),
+      )?.[0] as string;
+      expect(warnMessage).toBeDefined();
+      expect(warnMessage).toContain('correlationId=corr-123');
+      expect(warnMessage).toContain('M src/app.ts');
+      expect(warnMessage).toContain('new-file.ts');
+    });
+
+    it('should not log a warning when workspace is clean', async () => {
+      mockExecute.mockResolvedValue(successResult);
+      // Default mock returns empty stdout
+
+      await handler.handle(baseRequest);
+
+      const warnMessage = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Uncommitted changes after invocation'),
+      );
+      expect(warnMessage).toBeUndefined();
+    });
+
+    it('should not fail or block the invocation when git is unavailable', async () => {
+      mockExecute.mockResolvedValue(successResult);
+      mockExec.mockImplementation(
+        (_cmd: string, _opts: unknown, cb: (err: Error | null) => void) => {
+          cb(new Error('git: command not found'));
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result).toEqual({
+        success: true,
+        result: 'Here is my design.',
+        totalCostUsd: 0.0123,
+        durationMs: 5000,
+      });
+    });
+
+    it('should not fail or block the invocation when workspace is not a git repo', async () => {
+      mockExecute.mockResolvedValue(successResult);
+      mockExec.mockImplementation(
+        (_cmd: string, _opts: unknown, cb: (err: Error | null) => void) => {
+          cb(new Error('fatal: not a git repository'));
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result).toEqual({
+        success: true,
+        result: 'Here is my design.',
+        totalCostUsd: 0.0123,
+        durationMs: 5000,
+      });
+    });
+
+    it('should still return success even when uncommitted changes are detected', async () => {
+      mockExecute.mockResolvedValue(successResult);
+      mockExec.mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          cb(null, { stdout: ' M dirty-file.ts\n', stderr: '' });
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result).toEqual({
+        success: true,
+        result: 'Here is my design.',
+        totalCostUsd: 0.0123,
+        durationMs: 5000,
+      });
+    });
+
+    it('should check for uncommitted changes even on failed invocations', async () => {
+      mockExecute.mockResolvedValue(failureResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExec).toHaveBeenCalledWith(
+        'git status --porcelain',
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
       );
     });
   });

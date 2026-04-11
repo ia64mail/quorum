@@ -65,6 +65,16 @@ Context is shared through a central Context Store, not by passing full histories
 - Stay within your role's boundaries. Do not do work that belongs to another role.
 - Read \`quorum.md\` and query context before starting any task.
 
+## Git Discipline
+
+When you modify files during a task, commit your changes before completing the invocation.
+Use a concise, descriptive commit message that references the ticket or task context.
+Format: \`<role>(<ticket>): <what changed>\`
+Example: \`developer(QRM4-005): add bootstrap context unit tests\`
+
+If you created or modified multiple logical units, use separate commits.
+Do not commit if you only read files or queried context without making changes.
+
 ## Progress Checkpointing
 For tasks that involve significant research or multi-step implementation:
 - **After research**: Store key findings in **agent** scope (e.g., "research_findings": { files read, patterns discovered, constraints identified })

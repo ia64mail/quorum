@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import type {
   CanUseTool,
   PermissionResult,
@@ -8,11 +10,17 @@ import type {
   InvokeRequest,
   InvokeResponse,
 } from '@app/common';
-import { RolePermissionService, type ToolGuardResult } from '../config';
+import {
+  AgentConfigService,
+  RolePermissionService,
+  type ToolGuardResult,
+} from '../config';
 import { ClaudeCodeService } from '../llm';
 import type { ExecuteResult } from '../llm/claude-code.types';
 import { RolePromptService } from '../prompts';
 import { McpToolBridgeService } from './mcp-tool-bridge.service';
+
+const execAsync = promisify(exec);
 
 /**
  * Adapts the synchronous {@link ToolGuardResult} from the role guard hook
@@ -58,6 +66,7 @@ export class InvocationHandler {
     private readonly bridge: McpToolBridgeService,
     private readonly permissions: RolePermissionService,
     private readonly promptService: RolePromptService,
+    private readonly config: AgentConfigService,
   ) {}
 
   async handle(request: InvokeRequest): Promise<InvokeResponse> {
@@ -76,6 +85,7 @@ export class InvocationHandler {
       });
 
       this.logResult(request, result);
+      await this.checkUncommittedChanges(request.correlationId);
 
       return result.success
         ? {
@@ -150,6 +160,26 @@ export class InvocationHandler {
     }
 
     return lines.join('\n');
+  }
+
+  private async checkUncommittedChanges(
+    correlationId: string,
+  ): Promise<boolean> {
+    try {
+      const { stdout } = await execAsync('git status --porcelain', {
+        cwd: this.config.agent.workspaceDir,
+      });
+      if (stdout.trim()) {
+        this.logger.warn(
+          `Uncommitted changes after invocation: correlationId=${correlationId}\n${stdout.trim()}`,
+        );
+        return true;
+      }
+      return false;
+    } catch {
+      // git not available or not a repo — skip silently
+      return false;
+    }
   }
 
   private logResult(request: InvokeRequest, result: ExecuteResult): void {
