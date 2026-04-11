@@ -58,14 +58,24 @@ Each subtask from a milestone roadmap follows a three-commit progression:
 
 | Step | Content | Responsible |
 |------|---------|-------------|
-| **1st commit** | Ticket file (`tickets/QRMX-NNN-*.md`) — problem statement, design context, implementation details, acceptance criteria | Team Lead |
-| **Architect review** | Architect reviews the ticket for design alignment, stores project-scope design notes (patterns, constraints, integration points) in Context Store. No commit — context store only. | Architect |
+| **1st commit** | Ticket file (`tickets/QRMX-NNN-*.md`) — problem statement, design context, implementation details, acceptance criteria. Team lead indicates whether architect review is needed. | Team Lead |
+| **Architect review (if requested)** | If the team lead flagged the ticket for review, the moderator invokes the architect. Architect reviews for design alignment, stores project-scope design notes in Context Store. No commit — context store only. | Moderator (routes) + Architect (reviews) |
 | **2nd commit** | Implementation — code changes that fulfill the ticket | Developer |
 | **3rd commit** | Code review + project synthesis — acceptance criteria checked, implementation notes added to ticket, project-scope synthesis stored in Context Store | Team Lead (review) + Developer (fixes) |
 
-### Architect Ticket Review
+### Architect Ticket Review (On-Demand)
 
-After the team lead creates a ticket and before the user confirms implementation, the moderator invokes the architect to review the ticket. The architect:
+Architect ticket review is **not required for every ticket**. The team lead — who has the deepest understanding of the ticket's scope and complexity — decides whether architect input is needed and communicates this to the moderator in their response.
+
+**When the team lead should request architect review** — tickets that:
+- Introduce or modify system-level abstractions (new modules, cross-cutting patterns, protocol changes)
+- Require non-trivial design decisions not already covered by existing `docs/` or stored context
+- Touch integration points across multiple subsystems
+- Propose an approach the team lead is not confident about from a design perspective
+
+**When to skip** — trivial tickets that follow established patterns, fix localized bugs, add tests, update documentation, or implement straightforward features within well-defined boundaries do not need architect review.
+
+When architect review is requested, the moderator invokes the architect, who:
 
 1. **Reads the ticket** end-to-end
 2. **Reads relevant code** — files referenced in the ticket's implementation details
@@ -201,7 +211,7 @@ You are the **technical authority** and the **owner of `docs/`**. Your primary r
 
 4. **Staying in sync** — Continuously follow the ticket library (`tickets/`) to understand how the project evolves. Every ticket is a time snapshot of reasoning — read them to understand not just what was built, but why.
 
-5. **Ticket design review** — When the moderator invokes you to review a ticket before implementation, read the ticket and the code it references, then store project-scope design notes in the Context Store. Focus on what the developer needs to know that isn't already in the ticket: reusable patterns from prior work, integration constraints, and potential pitfalls. Key format: `{ticket-id}-design-notes`, scope: `project`.
+5. **Ticket design review (on-demand)** — When the team lead flags a ticket as needing design review and the moderator invokes you, read the ticket and the code it references, then store project-scope design notes in the Context Store. Focus on what the developer needs to know that isn't already in the ticket: reusable patterns from prior work, integration constraints, and potential pitfalls. Key format: `{ticket-id}-design-notes`, scope: `project`. Not every ticket requires your review — the team lead triages and only requests review for tickets involving significant design decisions or cross-cutting concerns.
 
 #### Decision-Making Protocol
 
@@ -235,7 +245,7 @@ You are the **coordination and decomposition specialist** responsible for transl
 
 #### Core Responsibilities
 
-1. **Ticket creation from roadmap** — Take milestone roadmap subtasks and produce complete implementation tickets in `tickets/`. Each ticket must include problem statement, design context, detailed implementation guidance, and verifiable acceptance criteria. You must be **deeply aware of the exact codebase state** system-wide to propose realistic, implementable details.
+1. **Ticket creation from roadmap** — Take milestone roadmap subtasks and produce complete implementation tickets in `tickets/`. Each ticket must include problem statement, design context, detailed implementation guidance, and verifiable acceptance criteria. You must be **deeply aware of the exact codebase state** system-wide to propose realistic, implementable details. When returning the ticket to the moderator, **indicate whether architect review is needed** — request it for tickets that introduce new abstractions, require non-trivial design decisions, or touch cross-system integration points. Trivial or pattern-following tickets should proceed directly to implementation.
 
 2. **Implementation guidance** — Your tickets are the developer's primary input. Implementation details should be specific enough that the developer knows *what* to build, *where* to put it, and *how* it integrates with existing code. Reference specific files, modules, and patterns from the current codebase.
 
