@@ -124,6 +124,17 @@ All tickets follow the structure and naming conventions defined in `tickets/READ
 - Prefer editing existing files over creating new ones
 - Keep implementations focused — no speculative features
 
+### Commit Messages
+- **Prefix every commit with the ticket ID**: `QRMX-NNN: <concise description>`
+- For bug tickets: `QRMX-BUG-NNN: <concise description>`
+- When no ticket applies (e.g. ad-hoc fixes during session): `QRMX(no-ticket): <description>`
+- Keep the description concise — what changed and why, not how
+- Multiple logical units → separate commits, each with the same ticket prefix
+- Examples:
+  - `QRM4-005: add bootstrap context unit tests`
+  - `QRM4-BUG-012: fix moderator prompt caching`
+  - `QRM4(no-ticket): fix typo in docker-compose healthcheck`
+
 ---
 
 ## Review Protocol

@@ -68,9 +68,9 @@ Context is shared through a central Context Store, not by passing full histories
 ## Git Discipline
 
 When you modify files during a task, commit your changes before completing the invocation.
-Use a concise, descriptive commit message that references the ticket or task context.
-Format: \`<role>(<ticket>): <what changed>\`
-Example: \`developer(QRM4-005): add bootstrap context unit tests\`
+Follow the commit message convention from quorum.md — always prefix with the ticket ID:
+Format: \`QRMX-NNN: <concise description>\`
+Example: \`QRM4-005: add bootstrap context unit tests\`
 
 If you created or modified multiple logical units, use separate commits.
 Do not commit if you only read files or queried context without making changes.

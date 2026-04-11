@@ -103,10 +103,10 @@ describe('getRolePromptTemplate', () => {
       );
     });
 
-    it('should specify commit message format with role and ticket', () => {
-      expect(SYSTEM_PREAMBLE).toContain('<role>(<ticket>): <what changed>');
+    it('should specify commit message format with ticket ID prefix', () => {
+      expect(SYSTEM_PREAMBLE).toContain('QRMX-NNN: <concise description>');
       expect(SYSTEM_PREAMBLE).toContain(
-        'developer(QRM4-005): add bootstrap context unit tests',
+        'QRM4-005: add bootstrap context unit tests',
       );
     });
 
