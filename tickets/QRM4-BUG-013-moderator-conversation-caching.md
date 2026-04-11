@@ -201,16 +201,32 @@ At Opus rates: ~24.5k × $15/MTok + ~70k × $1.5/MTok = $0.37 + $0.11 = **~$0.48
 
 ## Acceptance Criteria
 
-- [ ] `AnthropicService.chat()` injects `cache_control: { type: 'ephemeral' }` on the last content block of the last user message before each API call
-- [ ] `AnthropicService.chat()` injects `cache_control: { type: 'ephemeral' }` on the last tool in the tools array
-- [ ] Neither injection mutates the caller's `messages` or `tools` arrays
-- [ ] String-format user content (initial message) is handled correctly — converted to content block array with cache_control
-- [ ] The existing system prompt caching (BUG-012) continues to work alongside the new breakpoints
-- [ ] Total cache_control breakpoints per request does not exceed 4 (API limit)
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` — all existing tests pass, no regressions
-- [ ] Updated `anthropic.service.spec.ts` tests verify cache_control injection on messages and tools
+- [x] `AnthropicService.chat()` injects `cache_control: { type: 'ephemeral' }` on the last content block of the last user message before each API call
+- [x] `AnthropicService.chat()` injects `cache_control: { type: 'ephemeral' }` on the last tool in the tools array
+- [x] Neither injection mutates the caller's `messages` or `tools` arrays
+- [x] String-format user content (initial message) is handled correctly — converted to content block array with cache_control
+- [x] The existing system prompt caching (BUG-012) continues to work alongside the new breakpoints
+- [x] Total cache_control breakpoints per request does not exceed 4 (API limit)
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` — all existing tests pass, no regressions
+- [x] Updated `anthropic.service.spec.ts` tests verify cache_control injection on messages and tools
+
+## Implementation Notes
+
+**Status:** Complete ✅ — Accepted after code review
+
+**Files modified:**
+- `apps/terminal/src/llm/anthropic.service.ts` — Added tool definition caching (lines 21-31) and conversation message caching (lines 33-73). Extracted shared `CACHE_CONTROL` constant. Refactored system prompt to use same constant.
+- `apps/terminal/src/llm/anthropic.service.spec.ts` — Restructured from 5 tests to 15 tests. Extracted shared `mockResponse` and `getCallArgs()` helpers. Added dedicated sections for system prompt caching, tool definition caching, conversation message caching (string + array), mutation safety (tools + messages), edge cases, and breakpoint count verification.
+
+**Deviations from ticket:** None. Implementation follows the ticket's design precisely — shallow cloning at each mutation point, reverse loop for last-user-message detection, string-to-block conversion, `Record<string,unknown>` cast for union narrowing.
+
+**Verification results:**
+- `npm run build`: 4 apps compiled successfully
+- `npm run lint`: Zero errors, zero warnings
+- `npm run test`: 527 tests, 39 suites, all pass
+- Breakpoint count: Verified at most 3 per request (system + tools + last user message), under the API limit of 4
 
 ## Dependencies and References
 
