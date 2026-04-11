@@ -81,16 +81,39 @@ Add tests to `in-memory-store.spec.ts` in the existing `describe('search')` bloc
 
 ## Acceptance Criteria
 
-- [ ] `InMemoryStore.search()` splits multi-word queries into whitespace-delimited terms
-- [ ] All terms must match somewhere in the searchable text (AND semantics)
-- [ ] Single-word queries continue to work identically (no regression)
-- [ ] Empty or whitespace-only queries return 0 results
-- [ ] New test: multi-word query matches items where terms appear across key and value
-- [ ] New test: partial term match (not all terms present) returns 0 results
-- [ ] New test: whitespace variations (leading, trailing, multiple spaces) are handled
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` — all existing tests pass, no regressions
+- [x] `InMemoryStore.search()` splits multi-word queries into whitespace-delimited terms
+- [x] All terms must match somewhere in the searchable text (AND semantics)
+- [x] Single-word queries continue to work identically (no regression)
+- [x] Empty or whitespace-only queries return 0 results
+- [x] New test: multi-word query matches items where terms appear across key and value
+- [x] New test: partial term match (not all terms present) returns 0 results
+- [x] New test: whitespace variations (leading, trailing, multiple spaces) are handled
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` — all existing tests pass, no regressions
+
+## Implementation Notes
+
+**Status:** Accepted ✅
+**Commit:** `5aab9ce`
+**Reviewed:** 2026-04-11
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/context-store/in-memory-store.ts` | Replaced `searchable.includes(lowerQuery)` with term-based AND matching: `lowerQuery.split(/\s+/).filter(Boolean)` → `terms.every(t => searchable.includes(t))` with `terms.length > 0` guard |
+| `apps/mcp-server/src/context-store/in-memory-store.spec.ts` | Added 5 test cases: multi-word AND matching, partial-term rejection, cross key/value matching, whitespace variations, empty query handling |
+
+### Deviations
+
+None. Implementation matches ticket specification exactly.
+
+### Verification Results
+
+- `npm run build` — passes
+- `npm run lint` — passes (0 errors, 0 warnings)
+- `npm run test` — 516 tests, 39 suites, 0 failures (+5 new tests from 511 baseline)
 
 ## Dependencies and References
 
