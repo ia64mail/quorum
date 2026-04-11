@@ -44,6 +44,10 @@ services:
       LOG_LEVEL: debug
       ENABLE_TEST_ENDPOINTS: "true"
       MCP_WORKSPACE_DIR: /mnt/quorum/workspace
+      # Bootstrap context injection (QRM4)
+      BOOTSTRAP_ENABLED: ${BOOTSTRAP_ENABLED:-true}
+      BOOTSTRAP_MAX_TOKENS: ${BOOTSTRAP_MAX_TOKENS:-1000}
+      BOOTSTRAP_PROJECT_RATIO: ${BOOTSTRAP_PROJECT_RATIO:-0.6}
     volumes:
       - ./logs:/app/logs
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw

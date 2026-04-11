@@ -7,7 +7,7 @@ When multiple AI agents collaborate, context management becomes critical. Each a
 - **Over-share**: Pass full conversation histories, exhausting context windows
 - **Under-share**: Lose important decisions made by other agents
 
-Quorum solves this with a **pull-based context model**: agents receive minimal bootstrap context on invocation (task description + correlation ID), then query the Context Store for what they need and store their decisions for others.
+Quorum solves this with a **pull-based context model**: agents receive a task description, correlation ID, and automatic bootstrap context (project-scope and conversation-scope decisions assembled by the broker), then query the Context Store for additional detail as needed and store their decisions for others.
 
 This document describes the MCP API that exposes context management to agents. For storage backend implementation, see [Context Store](context-store.md). For overall architecture, see [System Design](system-design.md#context-management).
 
@@ -289,6 +289,67 @@ sequenceDiagram
     D->>MCP: context_summarize("xyz", maxTokens=2000, preserveKeys=["critical_decision"])
     MCP->>D: {preservedKeys: [...], summarizedKeys: [...], droppedKeys: [...]}
 ```
+
+### Pattern 4: Bootstrap Context Injection
+
+Automatic context injection on every `invoke_agent` call — agents start with relevant decisions instead of querying from scratch.
+
+**Trigger:** Automatic — the Message Broker injects bootstrap context before delivering every invocation (when enabled).
+
+**Flow:**
+
+```mermaid
+sequenceDiagram
+    participant TL as TeamLead
+    participant B as MessageBroker
+    participant BCS as BootstrapContextService
+    participant CS as ContextStore
+    participant D as Developer
+
+    TL->>B: invoke_agent(developer, "implement QRM-042")
+
+    B->>BCS: assemble(correlationId)
+    BCS->>CS: getAll(project)
+    CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+    BCS->>CS: getAll(conversation, correlationId)
+    CS-->>BCS: {taskBreakdown: [...], constraints: [...]}
+    Note over BCS: Apply token budget (greedy, newer items first)
+    BCS-->>B: BootstrapContext
+
+    B->>B: request.bootstrapContext = assembled context
+    B->>D: handle(request)
+
+    Note over D: buildPrompt() renders "## Prior Decisions"<br/>with ### Project Context and ### Conversation Context
+
+    D->>D: Starts work with decisions already in prompt
+    D->>CS: context_query(...) for additional detail if needed
+```
+
+**How it works:**
+
+The broker calls `BootstrapContextService.assemble(correlationId)` after safeguard checks pass. The service queries `ContextStore.getAll()` for project-scope items (always) and conversation-scope items (when a `correlationId` is present). A token budget (`BOOTSTRAP_MAX_TOKENS`, default 1000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.6). Items are selected via greedy bin-packing in reverse insertion order (newer items preferred). Unused project budget reclaims to the conversation allocation.
+
+The assembled `BootstrapContext` is attached to `request.bootstrapContext`. On the agent side, `InvocationHandler.buildPrompt()` renders it as a `## Prior Decisions` section (with `### Project Context` and `### Conversation Context` subsections) prepended before the task description. The `meta` field (item count, estimated tokens, scopes queried) is not rendered — it is internal bookkeeping.
+
+**Configuration:**
+
+| Environment Variable | Default | Purpose |
+|---------------------|---------|---------|
+| `BOOTSTRAP_ENABLED` | `true` | Master toggle — `false` disables assembly entirely |
+| `BOOTSTRAP_MAX_TOKENS` | `1000` | Total token budget for the bootstrap payload |
+| `BOOTSTRAP_PROJECT_RATIO` | `0.6` | Fraction of budget for project-scope items |
+
+These are configured in `docker-compose.yml` on the `mcp-server` service. The config factory is in `apps/mcp-server/src/config/bootstrap.config.ts`.
+
+**Error handling:** Assembly is non-fatal. If it fails, the broker logs a warning and delivers the invocation without bootstrap context.
+
+**Relationship to other patterns:**
+
+- **Pattern 1 (Decision Recording)** feeds bootstrap injection — decisions stored via `context_store` are what bootstrap assembles and injects
+- **Pattern 2 (Task Handoff)** is less necessary for common decisions — agents no longer start blind. However, agents still use explicit `context_query` for targeted lookups, detailed searches, or agent-scope data that bootstrap does not cover
+- **Pattern 3 (Context Compaction)** remains relevant when stored context exceeds the bootstrap token budget
+
+> **Details:** See [Message Broker — Context Integration](message-broker.md#context-integration) for the broker-side implementation and sequence diagram.
 
 ## Agent Identity
 

@@ -335,6 +335,173 @@ describe('InvocationHandler', () => {
       expect(warnMessage).toContain('turns=?');
     });
   });
+
+  describe('bootstrap context rendering', () => {
+    it('should render project context before Task line when bootstrapContext is present', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: { 'tech-stack': 'NestJS' },
+          conversation: {},
+          meta: {
+            itemCount: 1,
+            estimatedTokens: 10,
+            scopesQueried: ['project'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('## Prior Decisions');
+      expect(call.prompt).toContain('### Project Context');
+      expect(call.prompt).toContain('- tech-stack: "NestJS"');
+      // Prior Decisions must appear before Task:
+      const priorIdx = call.prompt.indexOf('## Prior Decisions');
+      const taskIdx = call.prompt.indexOf('Task:');
+      expect(priorIdx).toBeLessThan(taskIdx);
+    });
+
+    it('should render conversation context when present', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: { 'tech-stack': 'NestJS' },
+          conversation: { 'task-notes': 'use JWT' },
+          meta: {
+            itemCount: 2,
+            estimatedTokens: 20,
+            scopesQueried: ['project', 'conversation'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('### Project Context');
+      expect(call.prompt).toContain('### Conversation Context');
+      expect(call.prompt).toContain('- task-notes: "use JWT"');
+    });
+
+    it('should omit project subsection when project scope is empty', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: {},
+          conversation: { 'task-notes': 'data' },
+          meta: {
+            itemCount: 1,
+            estimatedTokens: 5,
+            scopesQueried: ['project', 'conversation'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('### Conversation Context');
+      expect(call.prompt).not.toContain('### Project Context');
+    });
+
+    it('should omit conversation subsection when conversation scope is empty', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: { 'tech-stack': 'NestJS' },
+          conversation: {},
+          meta: {
+            itemCount: 1,
+            estimatedTokens: 10,
+            scopesQueried: ['project'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('### Project Context');
+      expect(call.prompt).not.toContain('### Conversation Context');
+    });
+
+    it('should not render meta into prompt', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: { a: '1' },
+          conversation: {},
+          meta: {
+            itemCount: 5,
+            estimatedTokens: 200,
+            scopesQueried: ['project', 'conversation'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).not.toContain('itemCount');
+      expect(call.prompt).not.toContain('estimatedTokens');
+      expect(call.prompt).not.toContain('scopesQueried');
+    });
+
+    it('should produce unchanged prompt when bootstrapContext is absent', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toMatch(/^Task:/);
+      expect(call.prompt).not.toContain('## Prior Decisions');
+    });
+
+    it('should produce unchanged prompt when bootstrapContext has empty scopes', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: {},
+          conversation: {},
+          meta: {
+            itemCount: 0,
+            estimatedTokens: 0,
+            scopesQueried: ['project'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toMatch(/^Task:/);
+      expect(call.prompt).not.toContain('## Prior Decisions');
+    });
+
+    it('should JSON-stringify complex values', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: { 'auth-pattern': { type: 'JWT', expiry: '24h' } },
+          conversation: {},
+          meta: {
+            itemCount: 1,
+            estimatedTokens: 15,
+            scopesQueried: ['project'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain(
+        '- auth-pattern: {"type":"JWT","expiry":"24h"}',
+      );
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
