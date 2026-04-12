@@ -43,7 +43,9 @@ export class ClaudeCodeService implements OnApplicationShutdown {
             ...process.env,
             ANTHROPIC_API_KEY: this.config.anthropic.apiKey,
           },
-          maxTurns: params.maxTurns ?? 20,
+          ...(params.maxTurns !== undefined
+            ? { maxTurns: params.maxTurns }
+            : {}),
           abortController: controller,
           hooks: createObservabilityHooks(this.logger),
           debugFile: '/tmp/sdk-debug.log',
@@ -149,9 +151,10 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         }
         return {
           success: false,
-          error: message.errors?.join('; ') ?? message.subtype,
+          error: message.errors?.join('; ') || message.subtype,
           durationMs: message.duration_ms,
           totalCostUsd: message.total_cost_usd,
+          numTurns: message.num_turns,
         };
 
       default:

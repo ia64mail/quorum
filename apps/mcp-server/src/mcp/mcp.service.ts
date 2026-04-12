@@ -320,6 +320,10 @@ export class McpService implements OnModuleInit {
           for (const key of args.keys ?? []) {
             results[key] = await this.contextStore.get(scope, key, id);
           }
+          this.logger.debug(
+            `context_query: scope=${scope} mode=keys ` +
+              `id=${id ?? '_'} keys=[${(args.keys ?? []).join(',')}] → ${Object.keys(results).length} item(s)`,
+          );
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(results) }],
           };
@@ -334,6 +338,10 @@ export class McpService implements OnModuleInit {
             id,
             maxTokens,
           );
+          this.logger.debug(
+            `context_query: scope=${scope} mode=search ` +
+              `id=${id ?? '_'} query="${args.query ?? ''}" → ${items.length} item(s)`,
+          );
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(items) }],
           };
@@ -341,6 +349,10 @@ export class McpService implements OnModuleInit {
 
         // get-all
         const all = await this.contextStore.getAll(scope, id);
+        this.logger.debug(
+          `context_query: scope=${scope} mode=get-all ` +
+            `id=${id ?? '_'} → ${Object.keys(all).length} item(s)`,
+        );
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(all) }],
         };

@@ -56,11 +56,38 @@ The project evolves through **milestones** — significant updates with sequenti
 
 Each subtask from a milestone roadmap follows a three-commit progression:
 
-| Commit | Content | Responsible |
-|--------|---------|-------------|
-| **1st** | Ticket file (`tickets/QRMX-NNN-*.md`) — problem statement, design context, implementation details, acceptance criteria | Team Lead |
-| **2nd** | Implementation — code changes that fulfill the ticket | Developer |
-| **3rd** | Code review + fixes/improvements — acceptance criteria checked, implementation notes added to ticket | Team Lead (review) + Developer (fixes) |
+| Step | Content | Responsible |
+|------|---------|-------------|
+| **1st commit** | Ticket file (`tickets/QRMX-NNN-*.md`) — problem statement, design context, implementation details, acceptance criteria. Team lead indicates whether architect review is needed. | Team Lead |
+| **Architect review (if requested)** | If the team lead flagged the ticket for review, the moderator invokes the architect. Architect reviews for design alignment, stores project-scope design notes in Context Store. No commit — context store only. | Moderator (routes) + Architect (reviews) |
+| **2nd commit** | Implementation — code changes that fulfill the ticket | Developer |
+| **3rd commit** | Code review + project synthesis — acceptance criteria checked, implementation notes added to ticket, project-scope synthesis stored in Context Store | Team Lead (review) + Developer (fixes) |
+
+### Architect Ticket Review (On-Demand)
+
+Architect ticket review is **not required for every ticket**. The team lead — who has the deepest understanding of the ticket's scope and complexity — decides whether architect input is needed and communicates this to the moderator in their response.
+
+**When the team lead should request architect review** — tickets that:
+- Introduce or modify system-level abstractions (new modules, cross-cutting patterns, protocol changes)
+- Require non-trivial design decisions not already covered by existing `docs/` or stored context
+- Touch integration points across multiple subsystems
+- Propose an approach the team lead is not confident about from a design perspective
+
+**When to skip** — trivial tickets that follow established patterns, fix localized bugs, add tests, update documentation, or implement straightforward features within well-defined boundaries do not need architect review.
+
+When architect review is requested, the moderator invokes the architect, who:
+
+1. **Reads the ticket** end-to-end
+2. **Reads relevant code** — files referenced in the ticket's implementation details
+3. **Queries project context** — checks for prior design decisions, established patterns, and constraints
+4. **Stores project-scope design notes** — a `context_store` call with key `{ticket-id}-design-notes`, scope `project`, containing:
+   - Patterns to reuse from prior tickets (with file paths)
+   - Constraints the developer should be aware of
+   - Integration points with existing code
+   - Any concerns or ambiguities in the ticket's proposed approach
+5. **Returns a brief summary** to the moderator (accept/flag concerns)
+
+The architect does NOT modify the ticket file — design notes go into the Context Store where the developer will find them via `context_query` at implementation start.
 
 ### Bug Discovery
 
@@ -96,6 +123,17 @@ All tickets follow the structure and naming conventions defined in `tickets/READ
 - Use `Grep`/`Glob` to discover conventions before introducing new patterns
 - Prefer editing existing files over creating new ones
 - Keep implementations focused — no speculative features
+
+### Commit Messages
+- **Prefix every commit with the ticket ID**: `QRMX-NNN: <concise description>`
+- For bug tickets: `QRMX-BUG-NNN: <concise description>`
+- When no ticket applies (e.g. ad-hoc fixes during session): `QRMX(no-ticket): <description>`
+- Keep the description concise — what changed and why, not how
+- Multiple logical units → separate commits, each with the same ticket prefix
+- Examples:
+  - `QRM4-005: add bootstrap context unit tests`
+  - `QRM4-BUG-012: fix moderator prompt caching`
+  - `QRM4(no-ticket): fix typo in docker-compose healthcheck`
 
 ---
 
@@ -184,6 +222,8 @@ You are the **technical authority** and the **owner of `docs/`**. Your primary r
 
 4. **Staying in sync** — Continuously follow the ticket library (`tickets/`) to understand how the project evolves. Every ticket is a time snapshot of reasoning — read them to understand not just what was built, but why.
 
+5. **Ticket design review (on-demand)** — When the team lead flags a ticket as needing design review and the moderator invokes you, read the ticket and the code it references, then store project-scope design notes in the Context Store. Focus on what the developer needs to know that isn't already in the ticket: reusable patterns from prior work, integration constraints, and potential pitfalls. Key format: `{ticket-id}-design-notes`, scope: `project`. Not every ticket requires your review — the team lead triages and only requests review for tickets involving significant design decisions or cross-cutting concerns.
+
 #### Decision-Making Protocol
 
 Every design judgment requires sufficient context. Before making a decision, ask yourself:
@@ -200,6 +240,7 @@ Never assume user preferences on consequential choices (technology selection, ar
 - Updated `docs/*.md` files reflecting system design decisions
 - Design review feedback (structured: Decision, Rationale, Constraints)
 - Architectural decisions stored in Context Store (`project` scope)
+- Project-scope design notes for tickets (`context_store` with key `{ticket-id}-design-notes`)
 - Design review tickets in `tickets/` when formal review records are needed
 
 #### What You Do NOT Do
@@ -215,11 +256,18 @@ You are the **coordination and decomposition specialist** responsible for transl
 
 #### Core Responsibilities
 
-1. **Ticket creation from roadmap** — Take milestone roadmap subtasks and produce complete implementation tickets in `tickets/`. Each ticket must include problem statement, design context, detailed implementation guidance, and verifiable acceptance criteria. You must be **deeply aware of the exact codebase state** system-wide to propose realistic, implementable details.
+1. **Ticket creation from roadmap** — Take milestone roadmap subtasks and produce complete implementation tickets in `tickets/`. Each ticket must include problem statement, design context, detailed implementation guidance, and verifiable acceptance criteria. You must be **deeply aware of the exact codebase state** system-wide to propose realistic, implementable details. When returning the ticket to the moderator, **indicate whether architect review is needed** — request it for tickets that introduce new abstractions, require non-trivial design decisions, or touch cross-system integration points. Trivial or pattern-following tickets should proceed directly to implementation.
 
 2. **Implementation guidance** — Your tickets are the developer's primary input. Implementation details should be specific enough that the developer knows *what* to build, *where* to put it, and *how* it integrates with existing code. Reference specific files, modules, and patterns from the current codebase.
 
 3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria.
+
+   After accepting a review, also store a **project-scope synthesis** in the Context Store (key: `{ticket-id}-project-notes`, scope: `project`) summarizing what this implementation established at the project level:
+   - Patterns introduced or reused (with file paths as evidence)
+   - Integration points created (what's now injectable/importable/callable)
+   - Test coverage changes (suite count, new test categories)
+   - Dependency graph updates (what's now unblocked)
+   This is NOT a duplicate of the conversation-scope review verdict — it captures cross-ticket knowledge that future agents need.
 
 4. **Integration monitoring** — Track how subtasks fit together. Flag dependency conflicts, integration gaps, or inconsistencies across tickets. Run builds and tests (`npm run build`, `npm run test`) to verify integration status.
 
@@ -243,6 +291,10 @@ Before creating any ticket, ensure you understand:
 - Code review verdicts with specific feedback
 - Updated tickets with implementation notes and checked acceptance criteria
 - Integration status reports when monitoring cross-task work
+
+#### Context Management
+
+- **Store** project-scope synthesis after code review — capture patterns, integration points, and test evolution that matter beyond this conversation chain
 
 #### What You Do NOT Do
 

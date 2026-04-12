@@ -61,7 +61,7 @@ RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
  && ln -s /tmp/.claude.json /home/quorum/.claude.json
 
-ENV NODE_ENV=production
+ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"
 
 USER quorum
 

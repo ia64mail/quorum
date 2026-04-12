@@ -4,6 +4,7 @@ import type { InvokeRequest } from '@app/common';
 import { AgentRegistry } from '../registry/agent-registry.service';
 import { MockConnection } from '../registry/mock-connection';
 import { McpServerConfigService } from '../config';
+import { BootstrapContextService } from './bootstrap-context.service';
 import { MessageBroker } from './message-broker.service';
 
 function makeRequest(overrides: Partial<InvokeRequest> = {}): InvokeRequest {
@@ -28,12 +29,19 @@ describe('MessageBroker', () => {
     context: { defaultMaxTokens: 2000, tokenCharRatio: 4 },
   };
 
+  const mockBootstrapService = {
+    assemble: jest.fn().mockResolvedValue(null),
+  };
+
   beforeEach(async () => {
+    mockBootstrapService.assemble.mockResolvedValue(null);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AgentRegistry,
         MessageBroker,
         { provide: McpServerConfigService, useValue: mockConfig },
+        { provide: BootstrapContextService, useValue: mockBootstrapService },
       ],
     }).compile();
 
@@ -160,6 +168,7 @@ describe('MessageBroker', () => {
           AgentRegistry,
           MessageBroker,
           { provide: McpServerConfigService, useValue: shortConfig },
+          { provide: BootstrapContextService, useValue: mockBootstrapService },
         ],
       }).compile();
 
@@ -223,6 +232,88 @@ describe('MessageBroker', () => {
 
       expect(response.success).toBe(false);
       expect(response.error).toBe('Agent developer not registered');
+    });
+  });
+
+  describe('bootstrap context integration', () => {
+    it('should attach bootstrap context to request when assemble returns non-null', async () => {
+      const bootstrapCtx = {
+        project: { 'tech-stack': 'NestJS' },
+        conversation: { 'task-notes': 'use JWT' },
+        meta: {
+          itemCount: 2,
+          estimatedTokens: 20,
+          scopesQueried: ['project', 'conversation'] as const,
+        },
+      };
+      mockBootstrapService.assemble.mockResolvedValue(bootstrapCtx);
+
+      let capturedRequest: InvokeRequest | undefined;
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async (req) => {
+        capturedRequest = req;
+        return { success: true, result: 'done' };
+      };
+      registry.register(connection);
+
+      await broker.invoke(makeRequest());
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest!.bootstrapContext).toEqual(bootstrapCtx);
+      expect(mockBootstrapService.assemble).toHaveBeenCalledWith('corr-1');
+    });
+
+    it('should not set bootstrapContext when assemble returns null', async () => {
+      mockBootstrapService.assemble.mockResolvedValue(null);
+
+      let capturedRequest: InvokeRequest | undefined;
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async (req) => {
+        capturedRequest = req;
+        return { success: true, result: 'done' };
+      };
+      registry.register(connection);
+
+      await broker.invoke(makeRequest());
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest!.bootstrapContext).toBeUndefined();
+    });
+
+    it('should deliver without bootstrap context when assemble throws', async () => {
+      mockBootstrapService.assemble.mockRejectedValue(new Error('store down'));
+
+      let capturedRequest: InvokeRequest | undefined;
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async (req) => {
+        capturedRequest = req;
+        return { success: true, result: 'done' };
+      };
+      registry.register(connection);
+
+      const response = await broker.invoke(makeRequest());
+
+      expect(response.success).toBe(true);
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest!.bootstrapContext).toBeUndefined();
+    });
+
+    it('should not call assemble when safeguard rejects (depth exceeded)', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      registry.register(connection);
+      mockBootstrapService.assemble.mockClear();
+
+      await broker.invoke(makeRequest({ depth: 5 }));
+
+      expect(mockBootstrapService.assemble).not.toHaveBeenCalled();
+    });
+
+    it('should not call assemble when safeguard rejects (agent not registered)', async () => {
+      mockBootstrapService.assemble.mockClear();
+
+      await broker.invoke(makeRequest({ target: AgentRole.developer }));
+
+      expect(mockBootstrapService.assemble).not.toHaveBeenCalled();
     });
   });
 });

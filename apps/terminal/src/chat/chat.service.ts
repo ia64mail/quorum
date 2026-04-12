@@ -9,12 +9,167 @@ import {
   mapMcpToolsToAnthropic,
   formatToolResult,
 } from '@app/common';
-import { AnthropicService } from '../llm';
+import { AnthropicService, calculateCostUsd } from '../llm';
+import type { TokenUsage } from '../llm';
 import { McpClientService } from '../connection';
 import { StdinLockService } from '../clarification';
 import { TerminalConfigService } from '../config';
 
 const MAX_TOOL_ROUNDS = 10;
+const TRUNCATE_ACTION = 80;
+const TRUNCATE_RESULT = 150;
+
+// ---------------------------------------------------------------------------
+// Activity Feed Formatting
+// ---------------------------------------------------------------------------
+
+export function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max) + '...';
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Safely extract a string from an unknown value. */
+function str(value: unknown, fallback = '?'): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean')
+    return String(value);
+  return fallback;
+}
+
+export function formatBeforeLine(
+  name: string,
+  input: Record<string, unknown>,
+): string {
+  switch (name) {
+    case 'invoke_agent': {
+      const target = str(input.target);
+      const action = truncate(oneLine(str(input.action, '')), TRUNCATE_ACTION);
+      return `  \u2192 invoke_agent \u2192 ${target}: "${action}"`;
+    }
+    case 'context_query': {
+      const scope = str(input.scope);
+      const mode = str(input.mode);
+      return `  \u2192 context_query: ${scope} scope, mode=${mode}`;
+    }
+    case 'context_store': {
+      const scope = str(input.scope);
+      const key = str(input.key);
+      return `  \u2192 context_store: ${scope} scope, key=${key}`;
+    }
+    case 'context_summarize': {
+      const id = str(input.correlationId);
+      return `  \u2192 context_summarize: correlationId=${id}`;
+    }
+    case 'context_stats':
+      return `  \u2192 context_stats`;
+    default:
+      return `  \u2192 ${name}`;
+  }
+}
+
+export function formatAfterLine(
+  name: string,
+  input: Record<string, unknown>,
+  resultText: string,
+  isError: boolean,
+  durationMs?: number,
+): string {
+  switch (name) {
+    case 'invoke_agent': {
+      const target = str(input.target);
+      const parts: string[] = [];
+      if (durationMs !== undefined) parts.push(formatDuration(durationMs));
+
+      // Try to parse structured response for cost and result text
+      let displayText = resultText;
+      try {
+        const parsed = JSON.parse(resultText) as Record<string, unknown>;
+        if (typeof parsed.totalCostUsd === 'number') {
+          parts.push(`$${parsed.totalCostUsd.toFixed(2)}`);
+        }
+        if (parsed.success === false) {
+          const errMsg = str(parsed.error, resultText);
+          return `  \u2190 ${target} (${parts.join(', ')}): failed \u2014 ${truncate(oneLine(errMsg), TRUNCATE_RESULT)}`;
+        }
+        if (typeof parsed.result === 'string') {
+          displayText = parsed.result;
+        }
+      } catch {
+        // Not JSON — use raw text
+      }
+
+      const meta = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+      if (isError) {
+        return `  \u2190 ${target}${meta}: failed \u2014 ${truncate(oneLine(displayText), TRUNCATE_RESULT)}`;
+      }
+      return `  \u2190 ${target}${meta}: "${truncate(oneLine(displayText), TRUNCATE_RESULT)}"`;
+    }
+    case 'context_query': {
+      if (isError)
+        return `  \u2190 error: ${truncate(oneLine(resultText), TRUNCATE_RESULT)}`;
+      try {
+        const parsed = JSON.parse(resultText) as unknown;
+        if (Array.isArray(parsed))
+          return `  \u2190 ${parsed.length} items returned`;
+        if (typeof parsed === 'object' && parsed !== null)
+          return `  \u2190 ${Object.keys(parsed).length} items returned`;
+      } catch {
+        // fall through
+      }
+      return `  \u2190 results returned`;
+    }
+    case 'context_store':
+      return isError
+        ? `  \u2190 error: ${truncate(oneLine(resultText), TRUNCATE_RESULT)}`
+        : `  \u2190 stored`;
+    case 'context_summarize': {
+      if (isError)
+        return `  \u2190 error: ${truncate(oneLine(resultText), TRUNCATE_RESULT)}`;
+      try {
+        const parsed = JSON.parse(resultText) as Record<string, unknown>;
+        const preserved = Array.isArray(parsed.preservedKeys)
+          ? parsed.preservedKeys.length
+          : '?';
+        const total =
+          (Array.isArray(parsed.preservedKeys)
+            ? parsed.preservedKeys.length
+            : 0) +
+          (Array.isArray(parsed.summarizedKeys)
+            ? parsed.summarizedKeys.length
+            : 0) +
+          (Array.isArray(parsed.droppedKeys) ? parsed.droppedKeys.length : 0);
+        return `  \u2190 ${preserved}/${total} keys preserved`;
+      } catch {
+        return `  \u2190 summarized`;
+      }
+    }
+    case 'context_stats': {
+      if (isError)
+        return `  \u2190 error: ${truncate(oneLine(resultText), TRUNCATE_RESULT)}`;
+      try {
+        const parsed = JSON.parse(resultText) as Record<string, unknown>;
+        const items = str(parsed.itemCount);
+        const tokens = str(parsed.estimatedTokens);
+        return `  \u2190 ${items} items, ~${tokens} tokens`;
+      } catch {
+        return `  \u2190 stats returned`;
+      }
+    }
+    default:
+      return isError
+        ? `  \u2190 error: ${truncate(oneLine(resultText), TRUNCATE_RESULT)}`
+        : `  \u2190 done`;
+  }
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${Math.round(ms / 1000)}s`;
+}
 
 export const TERMINAL_MODERATOR_PROMPT = `${SYSTEM_PREAMBLE}
 
@@ -168,8 +323,9 @@ export class ChatService {
     this.messages.push({ role: 'user', content: trimmed });
 
     try {
-      const response = await this.processWithLoop();
-      process.stdout.write(`\nModerator: ${response}\n\n`);
+      const { text, costUsd } = await this.processWithLoop();
+      const costTag = costUsd > 0 ? ` ($${costUsd.toFixed(2)})` : '';
+      process.stdout.write(`\nModerator${costTag}: ${text}\n\n`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Chat processing failed: ${message}`);
@@ -181,8 +337,18 @@ export class ChatService {
     prompt();
   }
 
-  private async processWithLoop(): Promise<string> {
+  private async processWithLoop(): Promise<{
+    text: string;
+    costUsd: number;
+  }> {
     const tools = mapMcpToolsToAnthropic(this.mcpClient.getTools());
+
+    const totalUsage: TokenUsage = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    };
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const response = await this.anthropic.chat({
@@ -191,10 +357,24 @@ export class ChatService {
         tools,
       });
 
+      // Accumulate token usage across all rounds
+      totalUsage.input_tokens += response.usage.input_tokens;
+      totalUsage.output_tokens += response.usage.output_tokens;
+      totalUsage.cache_creation_input_tokens =
+        (totalUsage.cache_creation_input_tokens ?? 0) +
+        (response.usage.cache_creation_input_tokens ?? 0);
+      totalUsage.cache_read_input_tokens =
+        (totalUsage.cache_read_input_tokens ?? 0) +
+        (response.usage.cache_read_input_tokens ?? 0);
+
       this.messages.push({ role: 'assistant', content: response.content });
 
       if (response.stop_reason !== 'tool_use') {
-        return this.extractText(response.content);
+        const costUsd = calculateCostUsd(
+          this.config.anthropic.model,
+          totalUsage,
+        );
+        return { text: this.extractText(response.content), costUsd };
       }
 
       const toolUseBlocks = response.content.filter(
@@ -212,6 +392,8 @@ export class ChatService {
       });
     }
 
+    const costUsd = calculateCostUsd(this.config.anthropic.model, totalUsage);
+
     const lastAssistant = this.messages
       .filter((m) => m.role === 'assistant')
       .pop();
@@ -220,10 +402,16 @@ export class ChatService {
       : '';
 
     if (accumulatedText) {
-      return `${accumulatedText}\n\n[Note: Tool loop reached maximum of ${MAX_TOOL_ROUNDS} rounds]`;
+      return {
+        text: `${accumulatedText}\n\n[Note: Tool loop reached maximum of ${MAX_TOOL_ROUNDS} rounds]`,
+        costUsd,
+      };
     }
 
-    return `I wasn't able to complete the request within the tool execution limit. Please try rephrasing or breaking the task into smaller steps.`;
+    return {
+      text: `I wasn't able to complete the request within the tool execution limit. Please try rephrasing or breaking the task into smaller steps.`,
+      costUsd,
+    };
   }
 
   private extractText(content: ContentBlock[]): string {
@@ -246,12 +434,17 @@ export class ChatService {
     content: string;
     is_error?: boolean;
   }> {
-    try {
-      const args = this.augmentArgs(
-        block.name,
-        block.input as Record<string, unknown>,
-      );
+    const args = this.augmentArgs(
+      block.name,
+      block.input as Record<string, unknown>,
+    );
 
+    // Activity feed: → line
+    process.stdout.write(formatBeforeLine(block.name, args) + '\n');
+
+    const start = Date.now();
+
+    try {
       this.logger.log(`Calling tool: ${block.name}`, {
         correlationId: this.currentCorrelationId,
       });
@@ -261,6 +454,13 @@ export class ChatService {
         isError?: boolean;
       };
       const { text, isError } = formatToolResult(mcpResult);
+      const durationMs = Date.now() - start;
+
+      // Activity feed: ← line
+      process.stdout.write(
+        formatAfterLine(block.name, args, text || '', isError, durationMs) +
+          '\n',
+      );
 
       return {
         type: 'tool_result',
@@ -270,9 +470,16 @@ export class ChatService {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const durationMs = Date.now() - start;
       this.logger.warn(`Tool ${block.name} failed: ${message}`, {
         correlationId: this.currentCorrelationId,
       });
+
+      // Activity feed: ← error line
+      process.stdout.write(
+        formatAfterLine(block.name, args, message, true, durationMs) + '\n',
+      );
+
       return {
         type: 'tool_result',
         tool_use_id: block.id,

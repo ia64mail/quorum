@@ -23,6 +23,12 @@ lerna-debug.log*
 .temp
 .tmp
 
+# Quorum context (not part of codebase)
+quorum.context
+
+# Draft tickets (not ready for commit)
+tickets/tmp/
+
 # JetBrains IDEs (IntelliJ, WebStorm, etc.)
 .idea/**
 !.idea/runConfigurations/

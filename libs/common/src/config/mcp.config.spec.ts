@@ -6,6 +6,7 @@ describe('mcpConfig', () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     delete process.env.MCP_SERVER_URL;
+    delete process.env.MCP_REQUEST_TIMEOUT_MS;
   });
 
   afterEach(() => {
@@ -26,5 +27,16 @@ describe('mcpConfig', () => {
   it('should throw for invalid URL', () => {
     process.env.MCP_SERVER_URL = 'not-a-url';
     expect(() => mcpConfig()).toThrow();
+  });
+
+  it('should return default request timeout when not set', () => {
+    const result = mcpConfig();
+    expect(result.requestTimeoutMs).toBe(1_800_000);
+  });
+
+  it('should override request timeout from env var', () => {
+    process.env.MCP_REQUEST_TIMEOUT_MS = '600000';
+    const result = mcpConfig();
+    expect(result.requestTimeoutMs).toBe(600_000);
   });
 });

@@ -57,6 +57,11 @@ describe('RolePermissionService', () => {
       const tools = service.getDisallowedTools();
       expect(tools).toEqual(ROLE_TOOL_PROFILES.developer.disallowedTools);
     });
+
+    it('should include TodoWrite in developer disallowedTools (BUG-010)', async () => {
+      const service = await createService(AgentRole.developer);
+      expect(service.getDisallowedTools()).toContain('TodoWrite');
+    });
   });
 
   describe('getToolGuardHook', () => {

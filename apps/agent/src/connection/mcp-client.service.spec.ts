@@ -53,7 +53,7 @@ const mockConfig = {
     callbackUrl: 'http://architect:3002',
   },
   app: { port: 3002, nodeEnv: 'test' },
-  mcp: { serverUrl: 'http://mcp-server:3000' },
+  mcp: { serverUrl: 'http://mcp-server:3000', requestTimeoutMs: 1_800_000 },
   anthropic: { apiKey: 'test-key', model: 'claude-sonnet-4-5-20250929' },
 };
 
@@ -158,10 +158,11 @@ describe('McpClientService', () => {
       await service.connectAndRegister();
       await service.callTool('invoke_agent', { target: 'developer' });
 
-      expect(mockCallTool).toHaveBeenCalledWith({
-        name: 'invoke_agent',
-        arguments: { target: 'developer' },
-      });
+      expect(mockCallTool).toHaveBeenCalledWith(
+        { name: 'invoke_agent', arguments: { target: 'developer' } },
+        undefined,
+        { timeout: 1_800_000 },
+      );
     });
   });
 

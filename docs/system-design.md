@@ -266,14 +266,16 @@ Multi-agent collaboration creates a context management challenge: passing full c
 ### Core Principle
 
 Agents don't receive full context on invocation. Instead, they:
-1. Receive minimal bootstrap context (task description + correlation ID)
-2. Query the Context Store for what they need via `context_query`
+1. Receive a task description, correlation ID, and automatic bootstrap context — project-scope and conversation-scope decisions injected by the Message Broker via `BootstrapContextService.assemble()` (see [Message Broker — Context Integration](message-broker.md#context-integration))
+2. Query the Context Store for additional detail via `context_query` (targeted lookups, agent-scope data, or items beyond the bootstrap token budget)
 3. Store their decisions for others via `context_store`
 
 ```mermaid
 graph LR
     A[Architect] -->|"context_store(project, auth=JWT)"| CS[(Context Store)]
-    CS -->|"context_query(project, auth)"| D[Developer]
+    CS -->|"bootstrap injection"| B[Message Broker]
+    B -->|"request.bootstrapContext"| D[Developer]
+    CS -->|"context_query(project, auth)"| D
 ```
 
 ### Context Scopes
@@ -421,7 +423,6 @@ graph LR
 ## Future Considerations
 
 - **QA/ProductOwner deployment**: Roles are fully defined (permissions, prompts, timeouts) but not yet added as Docker Compose services
-- **Bootstrap context injection**: Message Broker should query Context Store for recent decisions and attach to invocation requests (TODO in broker)
 - **LLM-based context summarization**: Replace POC truncation with semantic summarization in `context_summarize`
 - **Scaling**: Kubernetes deployment for multi-host scenarios
 - **Persistent context backend**: PostgreSQL + pgvector or OpenSearch to replace file-based persistence (see [Context Store](context-store.md) for evolution plan)

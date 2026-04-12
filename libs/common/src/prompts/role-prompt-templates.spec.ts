@@ -95,6 +95,26 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('quorum.md');
       expect(SYSTEM_PREAMBLE).toContain('read it at the start of any task');
     });
+
+    it('should include a Git Discipline section with commit instructions', () => {
+      expect(SYSTEM_PREAMBLE).toContain('## Git Discipline');
+      expect(SYSTEM_PREAMBLE).toContain(
+        'commit your changes before completing the invocation',
+      );
+    });
+
+    it('should specify commit message format with ticket ID prefix', () => {
+      expect(SYSTEM_PREAMBLE).toContain('QRMX-NNN: <concise description>');
+      expect(SYSTEM_PREAMBLE).toContain(
+        'QRM4-005: add bootstrap context unit tests',
+      );
+    });
+
+    it('should instruct agents not to commit when only reading', () => {
+      expect(SYSTEM_PREAMBLE).toContain(
+        'Do not commit if you only read files or queried context without making changes',
+      );
+    });
   });
 
   describe('specific templates', () => {

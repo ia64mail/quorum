@@ -40,6 +40,10 @@ libs/
 docs/             # Project documentation — living reference for system architecture
 tickets/          # Ticket library — implementation timeline knowledge base (see tickets/README.md)
 logs/             # Docker JSON logs (bind-mounted, gitignored) — {role}-{timestamp}.jsonl
+  sessions/       # Written session reports — analysis of Docker run logs
+tools/            # Developer tooling scripts
+  entropy-report/ # Source code entropy/complexity analysis
+  session-report/ # Session log parser (parse-logs.mjs) + report writing guide
 ```
 
 ### Ticket Library
@@ -59,6 +63,7 @@ Tickets complement `docs/` — documentation describes the current system; ticke
 | [docs/context-store.md](docs/context-store.md) | Context Store implementation, InMemoryStore, file persistence |
 | [docs/claude-code-sdk.md](docs/claude-code-sdk.md) | Claude Code SDK integration, tool bridge, permissions, hardening |
 | [tickets/README.md](tickets/README.md) | Ticket library conventions and structure guide |
+| [tools/session-report/SESSION-REPORT.md](tools/session-report/SESSION-REPORT.md) | Session log parser and report writing guide |
 
 ## Build Commands
 

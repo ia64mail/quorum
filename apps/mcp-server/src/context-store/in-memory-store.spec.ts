@@ -360,6 +360,106 @@ describe('InMemoryStore', () => {
       );
       expect(results).toHaveLength(0);
     });
+
+    it('should match against item key when value does not contain query', async () => {
+      await store.set({
+        scope: ContextScope.conversation,
+        key: 'QRM4-003-implementation',
+        value: { status: 'complete', commit: 'da92f8a' },
+        id: 'conv-1',
+      });
+
+      const results = await store.search(
+        ContextScope.conversation,
+        'QRM4-003',
+        'conv-1',
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0].key).toBe('QRM4-003-implementation');
+      expect(results[0].value).toEqual({
+        status: 'complete',
+        commit: 'da92f8a',
+      });
+    });
+
+    it('should match multi-word queries using AND semantics', async () => {
+      await store.set({
+        scope: ContextScope.project,
+        key: 'qrm4-status-report',
+        value: { milestone: 'QRM4', status: 'complete' },
+      });
+
+      const results = await store.search(
+        ContextScope.project,
+        'QRM4 milestone',
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0].key).toBe('qrm4-status-report');
+    });
+
+    it('should return empty when not all terms match (AND semantics)', async () => {
+      const results = await store.search(
+        ContextScope.project,
+        'QRM4 nonexistent',
+      );
+      expect(results).toHaveLength(0);
+    });
+
+    it('should match terms across key and value', async () => {
+      await store.set({
+        scope: ContextScope.conversation,
+        key: 'QRM4-006-task-breakdown',
+        value: { description: 'configuration and documentation' },
+        id: 'conv-1',
+      });
+
+      const results = await store.search(
+        ContextScope.conversation,
+        'QRM4-006 configuration documentation',
+        'conv-1',
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0].key).toBe('QRM4-006-task-breakdown');
+    });
+
+    it('should handle whitespace variations in query', async () => {
+      await store.set({
+        scope: ContextScope.project,
+        key: 'qrm4-status-report',
+        value: { milestone: 'QRM4', status: 'complete' },
+      });
+
+      const results = await store.search(
+        ContextScope.project,
+        '  QRM4   milestone  ',
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0].key).toBe('qrm4-status-report');
+    });
+
+    it('should return empty for empty or whitespace-only query', async () => {
+      const emptyResults = await store.search(ContextScope.project, '');
+      expect(emptyResults).toHaveLength(0);
+
+      const whitespaceResults = await store.search(ContextScope.project, '   ');
+      expect(whitespaceResults).toHaveLength(0);
+    });
+
+    it('should return empty when neither key nor value match', async () => {
+      await store.set({
+        scope: ContextScope.conversation,
+        key: 'QRM4-003-implementation',
+        value: { status: 'complete' },
+        id: 'conv-1',
+      });
+
+      const results = await store.search(
+        ContextScope.conversation,
+        'totally-unrelated',
+        'conv-1',
+      );
+      expect(results).toHaveLength(0);
+    });
   });
 
   describe('getStats', () => {

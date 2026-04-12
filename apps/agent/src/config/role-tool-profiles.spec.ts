@@ -55,8 +55,9 @@ describe('ROLE_TOOL_PROFILES', () => {
   describe('developer', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.developer];
 
-    it('should have no additional disallowed tools beyond common', () => {
-      expect(profile.disallowedTools).toHaveLength(3); // AskUserQuestion, Config, ExitPlanMode
+    it('should disallow common tools plus TodoWrite (BUG-010)', () => {
+      expect(profile.disallowedTools).toHaveLength(4); // AskUserQuestion, Config, ExitPlanMode, TodoWrite
+      expect(profile.disallowedTools).toContain('TodoWrite');
     });
 
     it('should not have allowedWritePaths', () => {

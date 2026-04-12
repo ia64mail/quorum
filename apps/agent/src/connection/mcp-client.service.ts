@@ -46,7 +46,9 @@ export class McpClientService implements OnApplicationShutdown {
     name: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.client.callTool({ name, arguments: args });
+    return this.client.callTool({ name, arguments: args }, undefined, {
+      timeout: this.config.mcp.requestTimeoutMs,
+    });
   }
 
   async onApplicationShutdown(_signal?: string): Promise<void> {
@@ -85,7 +87,14 @@ export class McpClientService implements OnApplicationShutdown {
 
   private async connect(): Promise<void> {
     const serverUrl = `${this.config.mcp.serverUrl}/mcp`;
-    this.transport = new StreamableHTTPClientTransport(new URL(serverUrl));
+    const timeoutMs = this.config.mcp.requestTimeoutMs;
+    this.transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
+      fetch: (url, init) => {
+        const signals: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
+        if (init?.signal) signals.push(init.signal);
+        return fetch(url, { ...init, signal: AbortSignal.any(signals) });
+      },
+    });
     this.client = new Client({
       name: `${this.config.agent.role}-agent`,
       version: '0.1.0',

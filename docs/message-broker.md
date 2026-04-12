@@ -46,6 +46,7 @@ interface InvokeRequest {
   target: AgentRole;
   action: string;              // Natural-language task description
   context?: Record<string, unknown>;
+  bootstrapContext?: BootstrapContext;  // Injected by broker — project + conversation context
   wait: boolean;
   depth: number;               // 0-based, incremented at each hop
 }
@@ -56,6 +57,8 @@ interface InvokeResponse {
   error?: string;              // Present on failure
 }
 ```
+
+> The `BootstrapContext` and `BootstrapContextMeta` types are defined in `libs/common/src/messaging/invoke.types.ts`.
 
 ### AgentRole Constants
 
@@ -247,6 +250,70 @@ Rejected: Agent qa not registered [correlationId=abc-123]
 
 ## Context Integration
 
-The broker currently passes only the `context` field from the `InvokeRequest` to the target agent. A planned enhancement will have the broker query the Context Store for recent conversation decisions and attach them as bootstrap context before delivery — implementing the pull-based context model described in [Context Management](context-management.md).
+The broker automatically injects relevant context from the Context Store into every invocation request before delivery. This implements the pull-based context model described in [Context Management](context-management.md), reducing the need for agents to query for common decisions at task start.
 
-> **Note:** See [Context Management](context-management.md) for the MCP API design, and [Context Store](context-store.md) for storage backend implementation details.
+### Bootstrap Context Assembly
+
+Before delivering an invocation, the broker calls `BootstrapContextService.assemble(correlationId)` to gather project-scope and conversation-scope decisions from the Context Store. The assembled `BootstrapContext` is attached to `request.bootstrapContext`.
+
+**Assembly flow:**
+
+1. **Check enabled** — if `BOOTSTRAP_ENABLED=false`, assembly returns `null` immediately (zero overhead)
+2. **Calculate budgets** — split `BOOTSTRAP_MAX_TOKENS` between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO`
+3. **Fetch project items** — always queries `ContextStore.getAll(project)` for architectural decisions, tech stack, constraints
+4. **Fetch conversation items** — queries `ContextStore.getAll(conversation, correlationId)` when a `correlationId` is present; skipped otherwise
+5. **Apply token budget** — greedy bin-packing over items in reverse insertion order (newer items preferred), using `Math.ceil(JSON.stringify(value).length / 4)` as the token estimate
+6. **Reclaim unused budget** — unused project budget flows to the conversation allocation
+7. **Empty check** — if both scopes are empty after budgeting, returns `null` (no `bootstrapContext` field set)
+
+**Configuration:**
+
+| Environment Variable | Default | Purpose |
+|---------------------|---------|---------|
+| `BOOTSTRAP_ENABLED` | `true` | Master toggle — when `false`, assembly returns `null` |
+| `BOOTSTRAP_MAX_TOKENS` | `1000` | Total token budget for the assembled bootstrap payload |
+| `BOOTSTRAP_PROJECT_RATIO` | `0.6` | Fraction of budget allocated to project-scope items (remainder goes to conversation) |
+
+These are set in `docker-compose.yml` on the `mcp-server` service and read by the config factory in `apps/mcp-server/src/config/bootstrap.config.ts`.
+
+### Error Handling
+
+Bootstrap context assembly is **non-fatal**. If `assemble()` throws, the broker logs a warning and proceeds with delivery — the agent receives the invocation without bootstrap context. This ensures that a Context Store failure never blocks agent-to-agent communication.
+
+### Agent-Side Rendering
+
+On the agent side, `InvocationHandler.buildPrompt()` (in `apps/agent/src/connection/invocation-handler.service.ts`) renders the bootstrap context as a `## Prior Decisions` section prepended before the `Task:` line. The section contains `### Project Context` and `### Conversation Context` subsections with key-value entries formatted as `- key: JSON.stringify(value)`. Empty scopes are omitted. The `meta` field (item count, estimated tokens, scopes queried) is internal bookkeeping and is not rendered into the prompt.
+
+When `bootstrapContext` is absent or both scopes are empty, the prompt is identical to the pre-bootstrap behavior — full backward compatibility.
+
+### Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant C as Caller Agent
+    participant B as MessageBroker
+    participant BCS as BootstrapContextService
+    participant CS as ContextStore
+    participant A as Target Agent
+
+    C->>B: invoke(request)
+    Note over B: Safeguards pass (depth, circular, availability)
+
+    B->>BCS: assemble(correlationId)
+    BCS->>CS: getAll(project)
+    CS-->>BCS: project items
+    BCS->>CS: getAll(conversation, correlationId)
+    CS-->>BCS: conversation items
+    BCS-->>B: BootstrapContext (or null)
+
+    alt Bootstrap context assembled
+        B->>B: request.bootstrapContext = result
+    end
+
+    B->>A: handle(request, timeout)
+    Note over A: buildPrompt() renders "## Prior Decisions" section
+    A-->>B: InvokeResponse
+    B-->>C: InvokeResponse
+```
+
+> **Note:** See [Context Management](context-management.md) for the MCP API design (including Pattern 4: Bootstrap Context Injection), and [Context Store](context-store.md) for storage backend implementation details.

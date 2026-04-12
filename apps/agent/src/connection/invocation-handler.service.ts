@@ -1,14 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import type {
   CanUseTool,
   PermissionResult,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { InvokeRequest, InvokeResponse } from '@app/common';
-import { RolePermissionService, type ToolGuardResult } from '../config';
+import type {
+  BootstrapContext,
+  InvokeRequest,
+  InvokeResponse,
+} from '@app/common';
+import {
+  AgentConfigService,
+  RolePermissionService,
+  type ToolGuardResult,
+} from '../config';
 import { ClaudeCodeService } from '../llm';
 import type { ExecuteResult } from '../llm/claude-code.types';
 import { RolePromptService } from '../prompts';
 import { McpToolBridgeService } from './mcp-tool-bridge.service';
+
+const execAsync = promisify(exec);
 
 /**
  * Adapts the synchronous {@link ToolGuardResult} from the role guard hook
@@ -54,6 +66,7 @@ export class InvocationHandler {
     private readonly bridge: McpToolBridgeService,
     private readonly permissions: RolePermissionService,
     private readonly promptService: RolePromptService,
+    private readonly config: AgentConfigService,
   ) {}
 
   async handle(request: InvokeRequest): Promise<InvokeResponse> {
@@ -72,10 +85,21 @@ export class InvocationHandler {
       });
 
       this.logResult(request, result);
+      await this.checkUncommittedChanges(request.correlationId);
 
       return result.success
-        ? { success: true, result: result.result }
-        : { success: false, error: result.error };
+        ? {
+            success: true,
+            result: result.result,
+            totalCostUsd: result.totalCostUsd,
+            durationMs: result.durationMs,
+          }
+        : {
+            success: false,
+            error: result.error,
+            totalCostUsd: result.totalCostUsd,
+            durationMs: result.durationMs,
+          };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(
@@ -86,11 +110,76 @@ export class InvocationHandler {
   }
 
   private buildPrompt(request: InvokeRequest): string {
-    let prompt = `Task: ${request.action}`;
+    let prompt = '';
+
+    // Bootstrap context (prepended before task)
+    const bootstrapSection = this.renderBootstrapContext(
+      request.bootstrapContext,
+    );
+    if (bootstrapSection) {
+      prompt += bootstrapSection + '\n\n';
+    }
+
+    // Task action (existing)
+    prompt += `Task: ${request.action}`;
+
+    // Caller-provided context (existing)
     if (request.context && Object.keys(request.context).length > 0) {
       prompt += `\n\nAdditional context:\n${JSON.stringify(request.context, null, 2)}`;
     }
+
     return prompt;
+  }
+
+  private renderBootstrapContext(
+    ctx: BootstrapContext | undefined,
+  ): string | null {
+    if (!ctx) return null;
+
+    const projectEntries = Object.entries(ctx.project);
+    const conversationEntries = Object.entries(ctx.conversation);
+
+    if (projectEntries.length === 0 && conversationEntries.length === 0) {
+      return null;
+    }
+
+    const lines: string[] = ['## Prior Decisions'];
+
+    if (projectEntries.length > 0) {
+      lines.push('', '### Project Context');
+      for (const [key, value] of projectEntries) {
+        lines.push(`- ${key}: ${JSON.stringify(value)}`);
+      }
+    }
+
+    if (conversationEntries.length > 0) {
+      lines.push('', '### Conversation Context');
+      for (const [key, value] of conversationEntries) {
+        lines.push(`- ${key}: ${JSON.stringify(value)}`);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  private async checkUncommittedChanges(
+    correlationId: string,
+  ): Promise<boolean> {
+    try {
+      const { stdout } = await execAsync('git status --porcelain', {
+        cwd: this.config.agent.workspaceDir,
+      });
+      if (stdout.trim()) {
+        this.logger.warn(
+          `Uncommitted changes after invocation: correlationId=${correlationId}\n${stdout.trim()}`,
+        );
+        return true;
+      }
+      return false;
+    } catch {
+      // git not available or not a repo — skip silently
+      return false;
+    }
   }
 
   private logResult(request: InvokeRequest, result: ExecuteResult): void {
@@ -104,6 +193,7 @@ export class InvocationHandler {
     } else {
       this.logger.warn(
         `Invocation failed: ${base} error="${result.error}" ` +
+          `turns=${result.numTurns ?? '?'} ` +
           `cost=$${result.totalCostUsd.toFixed(4)} duration=${result.durationMs}ms`,
       );
     }

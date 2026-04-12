@@ -137,7 +137,7 @@ describe('ClaudeCodeService', () => {
   });
 
   // 2. Error result
-  it('should map an error result with joined errors string', async () => {
+  it('should map an error result with joined errors string and numTurns', async () => {
     mockQuery.mockReturnValue(
       generateMessages([
         initMessage(),
@@ -155,6 +155,72 @@ describe('ClaudeCodeService', () => {
       error: 'Max turns reached; Budget exceeded',
       durationMs: 500,
       totalCostUsd: 0.02,
+      numTurns: 20,
+    });
+  });
+
+  // 2a. Empty errors array falls through to subtype (QRM4-BUG-006)
+  it('should use subtype when errors is an empty array', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), errorResult('error_max_turns', [])]),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'error_max_turns',
+      durationMs: 500,
+      totalCostUsd: 0.02,
+      numTurns: 20,
+    });
+  });
+
+  // 2b. Undefined errors falls through to subtype
+  it('should use subtype when errors is undefined', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([
+        initMessage(),
+        {
+          type: 'result',
+          subtype: 'error_max_turns',
+          errors: undefined,
+          duration_ms: 500,
+          total_cost_usd: 0.02,
+          num_turns: 20,
+          session_id: 'sess-1',
+        },
+      ]),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'error_max_turns',
+      durationMs: 500,
+      totalCostUsd: 0.02,
+      numTurns: 20,
+    });
+  });
+
+  // 2c. Single error in array is preserved
+  it('should use single error string when errors has one element', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([
+        initMessage(),
+        errorResult('error_max_turns', ['Max turns reached']),
+      ]),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Max turns reached',
+      durationMs: 500,
+      totalCostUsd: 0.02,
+      numTurns: 20,
     });
   });
 
@@ -249,8 +315,8 @@ describe('ClaudeCodeService', () => {
     );
 
     const mcpServers = {
-      'my-server': { type: 'sse' as const, url: 'http://localhost:3000' },
-    };
+      'my-server': { type: 'sdk' as const, name: 'my-server', instance: {} },
+    } as unknown as ExecuteParams['mcpServers'];
 
     await service.execute({ ...baseParams, mcpServers });
 
@@ -268,8 +334,8 @@ describe('ClaudeCodeService', () => {
     expect(callArgs.options.mcpServers).toBe(mcpServers);
   });
 
-  // 7. Default maxTurns
-  it('should default maxTurns to 20 when not specified', async () => {
+  // 7. maxTurns omitted when undefined (BUG-010)
+  it('should not pass maxTurns to the SDK when not specified', async () => {
     mockQuery.mockReturnValue(
       generateMessages([initMessage(), successResult()]),
     );
@@ -280,7 +346,22 @@ describe('ClaudeCodeService', () => {
     const callArgs = mockQuery.mock.calls[0][0] as {
       options: Record<string, unknown>;
     };
-    expect(callArgs.options.maxTurns).toBe(20);
+    expect(callArgs.options).not.toHaveProperty('maxTurns');
+  });
+
+  // 7a. Explicit maxTurns is passed through (BUG-010)
+  it('should pass maxTurns through when explicitly set', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({ ...baseParams, maxTurns: 60 });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.maxTurns).toBe(60);
   });
 
   // 8. Graceful shutdown
