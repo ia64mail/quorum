@@ -27,16 +27,28 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     } catch (err) {
       // Graceful fallback: if resume was requested and the session is missing,
       // retry without resume so the agent starts a fresh session.
-      if (params.resume) {
+      // Skip the retry when the controller was aborted (shutdown in progress)
+      // — retrying would fail immediately and the result wouldn't be used.
+      if (params.resume && !controller.signal.aborted) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn(
           `Session resume failed (sessionId=${params.resume}): ${msg} — retrying fresh`,
         );
-        return await this.executeQuery(
-          { ...params, resume: undefined },
-          params.abortController ?? new AbortController(),
-          Date.now(),
-        );
+        try {
+          return await this.executeQuery(
+            { ...params, resume: undefined },
+            controller,
+            Date.now(),
+          );
+        } catch (retryErr) {
+          return {
+            success: false,
+            error:
+              retryErr instanceof Error ? retryErr.message : String(retryErr),
+            durationMs: Date.now() - start,
+            totalCostUsd: 0,
+          };
+        }
       }
       return {
         success: false,
