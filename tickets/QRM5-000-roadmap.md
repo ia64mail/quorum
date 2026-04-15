@@ -432,7 +432,7 @@ Add OpenSearch as a Docker container with the index mapping, hybrid search pipel
 Add Ollama as a Docker container with `mxbai-embed-large` and create the NestJS embedding service.
 
 **Key decisions:**
-- Ollama container with model pre-pulled via entrypoint script or init container
+- Ollama model pre-pulled via **init container** (`ollama-init` service in docker-compose): starts `ollama serve`, pulls `mxbai-embed-large` into shared `ollama-data` volume, then exits. Runtime `ollama` container depends on `ollama-init` with `condition: service_completed_successfully` and uses stock entrypoint.
 - `OllamaClient` service — HTTP client wrapping `POST /api/embed`
 - `EmbeddingService` — higher-level service handling asymmetric embedding (document vs query prefix)
 - Health check: `GET /api/tags` verifies Ollama is running; model availability checked on init
@@ -456,6 +456,8 @@ Add Ollama as a Docker container with `mxbai-embed-large` and create the NestJS 
 - `apps/mcp-server/src/embedding/ollama-client.service.ts` — HTTP client
 - `apps/mcp-server/src/embedding/embedding.service.ts` — document/query embedding with prefix handling
 - `apps/mcp-server/src/embedding/embedding.module.ts` — module wiring
+
+> **Note:** Ollama auto-detects NVIDIA GPUs and uses CUDA with no code or config changes. To enable GPU acceleration, add `runtime: nvidia` and `NVIDIA_VISIBLE_DEVICES` to the Ollama service in docker-compose (requires NVIDIA Container Toolkit on the host). Not required for QRM5 — CPU inference at ~150–300ms per embedding is sufficient for the async pipeline — but available as a drop-in optimization if bulk workloads grow.
 
 **Depends on:** —
 
