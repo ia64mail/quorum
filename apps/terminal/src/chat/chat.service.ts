@@ -48,7 +48,8 @@ export function formatBeforeLine(
     case 'invoke_agent': {
       const target = str(input.target);
       const action = truncate(oneLine(str(input.action, '')), TRUNCATE_ACTION);
-      return `  \u2192 invoke_agent \u2192 ${target}: "${action}"`;
+      const resume = input.sessionId ? ' (resume)' : '';
+      return `  \u2192 invoke_agent \u2192 ${target}${resume}: "${action}"`;
     }
     case 'context_query': {
       const scope = str(input.scope);

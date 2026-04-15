@@ -862,6 +862,17 @@ describe('formatBeforeLine', () => {
     );
   });
 
+  it('should show (resume) when sessionId is present', () => {
+    const line = formatBeforeLine('invoke_agent', {
+      target: 'architect',
+      action: 'clarify auth tokens',
+      sessionId: 'sess-arch-1',
+    });
+    expect(line).toBe(
+      '  \u2192 invoke_agent \u2192 architect (resume): "clarify auth tokens"',
+    );
+  });
+
   it('should truncate long action text', () => {
     const longAction = 'a'.repeat(100);
     const line = formatBeforeLine('invoke_agent', {
