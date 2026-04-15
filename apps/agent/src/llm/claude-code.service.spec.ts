@@ -452,6 +452,57 @@ describe('ClaudeCodeService', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
+  it('should not retry when controller is aborted during resume', async () => {
+    const controller = new AbortController();
+
+    mockQuery.mockReturnValueOnce(
+      (async function* () {
+        controller.abort();
+        throw new Error('aborted');
+      })(),
+    );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-stale',
+      abortController: controller,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('aborted');
+    }
+    // Should NOT retry — abort means shutdown, not a stale session
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('should return error when retry itself fails', async () => {
+    mockQuery
+      .mockReturnValueOnce(
+        // eslint-disable-next-line require-yield
+        (async function* () {
+          throw new Error('Session not found');
+        })(),
+      )
+      .mockReturnValueOnce(
+        // eslint-disable-next-line require-yield
+        (async function* () {
+          throw new Error('API outage');
+        })(),
+      );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-stale',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('API outage');
+    }
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
+
   // 9. Graceful shutdown
   it('should abort all active controllers on shutdown', async () => {
     const controller1 = new AbortController();
