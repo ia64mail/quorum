@@ -233,6 +233,8 @@ export class ChatService {
   private systemPrompt = TERMINAL_MODERATOR_PROMPT;
   private messages: MessageParam[] = [];
   private currentCorrelationId = '';
+  /** Tracks the most recent SDK session ID per agent role for session resume. */
+  private readonly agentSessions = new Map<string, string>();
 
   constructor(
     private readonly anthropic: AnthropicService,
@@ -456,6 +458,11 @@ export class ChatService {
       const { text, isError } = formatToolResult(mcpResult);
       const durationMs = Date.now() - start;
 
+      // Track session IDs from invoke_agent responses for future resume
+      if (block.name === 'invoke_agent' && text) {
+        this.trackAgentSession(args.target as string, text);
+      }
+
       // Activity feed: ← line
       process.stdout.write(
         formatAfterLine(block.name, args, text || '', isError, durationMs) +
@@ -494,11 +501,16 @@ export class ChatService {
     args: Record<string, unknown>,
   ): Record<string, unknown> {
     if (toolName === 'invoke_agent') {
+      const target = args.target as string | undefined;
+      const sessionId =
+        (args.sessionId as string | undefined) ??
+        (target ? this.agentSessions.get(target) : undefined);
       return {
         ...args,
         callerRole: 'moderator',
         correlationId: this.currentCorrelationId,
         depth: 0,
+        ...(sessionId ? { sessionId } : {}),
       };
     }
 
@@ -510,5 +522,18 @@ export class ChatService {
     }
 
     return args;
+  }
+
+  /** Extract and store the sessionId from an invoke_agent response. */
+  private trackAgentSession(target: string, resultText: string): void {
+    try {
+      const parsed = JSON.parse(resultText) as Record<string, unknown>;
+      if (typeof parsed.sessionId === 'string' && parsed.sessionId) {
+        this.agentSessions.set(target, parsed.sessionId);
+        this.logger.debug(`Tracked session for ${target}: ${parsed.sessionId}`);
+      }
+    } catch {
+      // Not JSON — skip session tracking
+    }
   }
 }

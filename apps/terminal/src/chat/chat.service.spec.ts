@@ -228,6 +228,160 @@ describe('ChatService', () => {
     });
   });
 
+  describe('session tracking', () => {
+    it('should track sessionId from invoke_agent response and pass on follow-up', async () => {
+      // First turn: invoke architect, response includes sessionId
+      mockChat
+        .mockResolvedValueOnce(
+          toolUseResponse([
+            {
+              id: 'tu_1',
+              name: 'invoke_agent',
+              input: { target: 'architect', action: 'design auth' },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse('Auth designed'));
+
+      mockCallTool.mockResolvedValue(
+        mcpToolResult(
+          '{"success": true, "result": "designed", "totalCostUsd": 0.05, "sessionId": "sess-arch-1"}',
+        ),
+      );
+
+      simulateTurn('Design auth system');
+      await callProcessWithLoop();
+
+      // Verify session was tracked
+      const sessions = (
+        service as unknown as { agentSessions: Map<string, string> }
+      ).agentSessions;
+      expect(sessions.get('architect')).toBe('sess-arch-1');
+
+      // Second turn: invoke architect again, sessionId should be auto-injected
+      jest.clearAllMocks();
+      mockGetTools.mockReturnValue([]);
+      mockChat
+        .mockResolvedValueOnce(
+          toolUseResponse([
+            {
+              id: 'tu_2',
+              name: 'invoke_agent',
+              input: { target: 'architect', action: 'clarify auth token' },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse('Clarified'));
+
+      mockCallTool.mockResolvedValue(
+        mcpToolResult(
+          '{"success": true, "result": "clarified", "totalCostUsd": 0.03, "sessionId": "sess-arch-1"}',
+        ),
+      );
+
+      simulateTurn('Clarify auth token strategy');
+      await callProcessWithLoop();
+
+      expect(mockCallTool).toHaveBeenCalledWith(
+        'invoke_agent',
+        expect.objectContaining({
+          sessionId: 'sess-arch-1',
+        }),
+      );
+    });
+
+    it('should not inject sessionId for a role with no prior session', async () => {
+      mockChat
+        .mockResolvedValueOnce(
+          toolUseResponse([
+            {
+              id: 'tu_1',
+              name: 'invoke_agent',
+              input: { target: 'developer', action: 'implement feature' },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse('Done'));
+
+      mockCallTool.mockResolvedValue(
+        mcpToolResult('{"success": true, "result": "done"}'),
+      );
+
+      simulateTurn('Implement feature');
+      await callProcessWithLoop();
+
+      // sessionId should not be present in the call
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockCallTool.mock.calls[0][1] as Record<string, unknown>;
+      expect(callArgs.sessionId).toBeUndefined();
+    });
+
+    it('should allow LLM to override sessionId explicitly', async () => {
+      // Pre-populate a session
+      const sessions = (
+        service as unknown as { agentSessions: Map<string, string> }
+      ).agentSessions;
+      sessions.set('architect', 'sess-old');
+
+      mockChat
+        .mockResolvedValueOnce(
+          toolUseResponse([
+            {
+              id: 'tu_1',
+              name: 'invoke_agent',
+              input: {
+                target: 'architect',
+                action: 'fresh review',
+                sessionId: 'sess-specific',
+              },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse('Done'));
+
+      mockCallTool.mockResolvedValue(
+        mcpToolResult('{"success": true, "result": "done"}'),
+      );
+
+      simulateTurn('Review with specific session');
+      await callProcessWithLoop();
+
+      // LLM-provided sessionId should take precedence
+      expect(mockCallTool).toHaveBeenCalledWith(
+        'invoke_agent',
+        expect.objectContaining({
+          sessionId: 'sess-specific',
+        }),
+      );
+    });
+
+    it('should not track session when response has no sessionId', async () => {
+      mockChat
+        .mockResolvedValueOnce(
+          toolUseResponse([
+            {
+              id: 'tu_1',
+              name: 'invoke_agent',
+              input: { target: 'qa', action: 'run tests' },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse('Done'));
+
+      mockCallTool.mockResolvedValue(
+        mcpToolResult('{"success": true, "result": "tests passed"}'),
+      );
+
+      simulateTurn('Run tests');
+      await callProcessWithLoop();
+
+      const sessions = (
+        service as unknown as { agentSessions: Map<string, string> }
+      ).agentSessions;
+      expect(sessions.has('qa')).toBe(false);
+    });
+  });
+
   describe('context_* augmentation', () => {
     it('should default correlationId from current turn', async () => {
       mockChat
