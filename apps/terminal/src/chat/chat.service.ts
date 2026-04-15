@@ -48,7 +48,8 @@ export function formatBeforeLine(
     case 'invoke_agent': {
       const target = str(input.target);
       const action = truncate(oneLine(str(input.action, '')), TRUNCATE_ACTION);
-      return `  \u2192 invoke_agent \u2192 ${target}: "${action}"`;
+      const resume = input.sessionId ? ' (resume)' : '';
+      return `  \u2192 invoke_agent \u2192 ${target}${resume}: "${action}"`;
     }
     case 'context_query': {
       const scope = str(input.scope);
@@ -222,6 +223,13 @@ Agents may invoke you mid-task via \`invoke_agent(moderator, ...)\` when they ne
 - Distill other agents' responses into key points rather than forwarding raw output
 - Be helpful and conversational while staying focused on the task
 
+## Session Resume
+Follow-up invocations to the same agent role automatically resume the prior SDK session — the agent retains its full conversation history, file reads, and reasoning from earlier work. This is handled transparently; you do not need to pass \`sessionId\` yourself.
+
+**When to resume (default — do nothing):** The task continues or refines earlier work with that agent. Examples: "clarify the auth token strategy" after the architect already designed auth; "add error handling to the endpoint you just wrote" to the same developer.
+
+**When to start fresh:** Pass \`sessionId: ""\` in the \`invoke_agent\` call to override auto-resume. Do this when prior session context would be noise or when an independent perspective matters. Examples: assigning a developer to a different ticket; asking the team lead for an independent code review.
+
 ## Constraints
 - Do not bypass the collaboration model by doing specialized work yourself
 - Do not make architectural or implementation decisions — delegate to the appropriate agent
@@ -233,6 +241,8 @@ export class ChatService {
   private systemPrompt = TERMINAL_MODERATOR_PROMPT;
   private messages: MessageParam[] = [];
   private currentCorrelationId = '';
+  /** Tracks the most recent SDK session ID per agent role for session resume. */
+  private readonly agentSessions = new Map<string, string>();
 
   constructor(
     private readonly anthropic: AnthropicService,
@@ -456,6 +466,11 @@ export class ChatService {
       const { text, isError } = formatToolResult(mcpResult);
       const durationMs = Date.now() - start;
 
+      // Track session IDs from invoke_agent responses for future resume
+      if (block.name === 'invoke_agent' && text) {
+        this.trackAgentSession(args.target as string, text);
+      }
+
       // Activity feed: ← line
       process.stdout.write(
         formatAfterLine(block.name, args, text || '', isError, durationMs) +
@@ -494,11 +509,16 @@ export class ChatService {
     args: Record<string, unknown>,
   ): Record<string, unknown> {
     if (toolName === 'invoke_agent') {
+      const target = args.target as string | undefined;
+      const sessionId =
+        (args.sessionId as string | undefined) ??
+        (target ? this.agentSessions.get(target) : undefined);
       return {
         ...args,
         callerRole: 'moderator',
         correlationId: this.currentCorrelationId,
         depth: 0,
+        ...(sessionId ? { sessionId } : {}),
       };
     }
 
@@ -510,5 +530,18 @@ export class ChatService {
     }
 
     return args;
+  }
+
+  /** Extract and store the sessionId from an invoke_agent response. */
+  private trackAgentSession(target: string, resultText: string): void {
+    try {
+      const parsed = JSON.parse(resultText) as Record<string, unknown>;
+      if (typeof parsed.sessionId === 'string' && parsed.sessionId) {
+        this.agentSessions.set(target, parsed.sessionId);
+        this.logger.debug(`Tracked session for ${target}: ${parsed.sessionId}`);
+      }
+    } catch {
+      // Not JSON — skip session tracking
+    }
   }
 }

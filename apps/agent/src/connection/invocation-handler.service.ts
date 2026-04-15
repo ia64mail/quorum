@@ -82,6 +82,7 @@ export class InvocationHandler {
         mcpServers: this.bridge.createBridge(request),
         disallowedTools: this.permissions.getDisallowedTools(),
         canUseTool: toCanUseTool(this.permissions.getToolGuardHook()),
+        resume: request.sessionId,
       });
 
       this.logResult(request, result);
@@ -93,6 +94,7 @@ export class InvocationHandler {
             result: result.result,
             totalCostUsd: result.totalCostUsd,
             durationMs: result.durationMs,
+            sessionId: result.sessionId,
           }
         : {
             success: false,

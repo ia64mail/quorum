@@ -31,6 +31,8 @@ export interface ExecuteParams {
   maxTurns?: number;
   /** Optional controller for cancelling the execution from outside. */
   abortController?: AbortController;
+  /** Resume a persisted session by ID. */
+  resume?: string;
 }
 
 /**

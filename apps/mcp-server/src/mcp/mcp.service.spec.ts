@@ -227,6 +227,66 @@ describe('McpService', () => {
       expect(call.parentRequestId).toBeUndefined();
     });
 
+    it('should pass sessionId to broker when provided', async () => {
+      mockBroker.invoke.mockResolvedValue({
+        success: true,
+        result: 'done',
+        sessionId: 'sess-123',
+      });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      await handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.architect,
+        action: 'design API',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-corr-1',
+        sessionId: 'sess-123',
+      });
+
+      const call = mockBroker.invoke.mock.calls[0][0];
+      expect(call.sessionId).toBe('sess-123');
+    });
+
+    it('should not include sessionId in broker request when not provided', async () => {
+      mockBroker.invoke.mockResolvedValue({ success: true });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      await handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        action: 'implement feature',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-corr-2',
+      });
+
+      const call = mockBroker.invoke.mock.calls[0][0];
+      expect(call.sessionId).toBeUndefined();
+    });
+
+    it('should return sessionId from broker response', async () => {
+      mockBroker.invoke.mockResolvedValue({
+        success: true,
+        result: 'done',
+        sessionId: 'sess-456',
+      });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      const result = await handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.architect,
+        action: 'design API',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-corr-3',
+      });
+
+      const parsed = JSON.parse(textContent(result)) as InvokeResponse;
+      expect(parsed.sessionId).toBe('sess-456');
+    });
+
     it('should pass optional context to broker', async () => {
       mockBroker.invoke.mockResolvedValue({ success: true });
 

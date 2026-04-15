@@ -21,66 +21,35 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     this.activeControllers.add(controller);
 
     const start = Date.now();
-    let sessionId: string | undefined;
-    let messageCount = 0;
 
     try {
-      const prompt = params.mcpServers
-        ? toAsyncIterable(params.prompt)
-        : params.prompt;
-
-      const gen = query({
-        prompt,
-        options: {
-          cwd: this.config.agent.workspaceDir,
-          model: this.config.anthropic.model,
-          systemPrompt: params.systemPrompt,
-          permissionMode: 'default',
-          persistSession: false,
-          settingSources: [],
-          includePartialMessages: false,
-          env: {
-            ...process.env,
-            ANTHROPIC_API_KEY: this.config.anthropic.apiKey,
-          },
-          ...(params.maxTurns !== undefined
-            ? { maxTurns: params.maxTurns }
-            : {}),
-          abortController: controller,
-          hooks: createObservabilityHooks(this.logger),
-          debugFile: '/tmp/sdk-debug.log',
-          stderr: (data: string) => {
-            this.logger.warn(`[subprocess stderr] ${data.trimEnd()}`);
-          },
-          ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
-          ...(params.allowedTools ? { allowedTools: params.allowedTools } : {}),
-          ...(params.disallowedTools
-            ? { disallowedTools: params.disallowedTools }
-            : {}),
-          ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
-        },
-      });
-
-      for await (const message of gen) {
-        messageCount++;
-        const mapped = this.processMessage(message, sessionId);
-        if (mapped) return mapped;
-        if (message.type === 'system' && message.subtype === 'init') {
-          sessionId = message.session_id;
+      return await this.executeQuery(params, controller, start);
+    } catch (err) {
+      // Graceful fallback: if resume was requested and the session is missing,
+      // retry without resume so the agent starts a fresh session.
+      // Skip the retry when the controller was aborted (shutdown in progress)
+      // — retrying would fail immediately and the result wouldn't be used.
+      if (params.resume && !controller.signal.aborted) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `Session resume failed (sessionId=${params.resume}): ${msg} — retrying fresh`,
+        );
+        try {
+          return await this.executeQuery(
+            { ...params, resume: undefined },
+            controller,
+            Date.now(),
+          );
+        } catch (retryErr) {
+          return {
+            success: false,
+            error:
+              retryErr instanceof Error ? retryErr.message : String(retryErr),
+            durationMs: Date.now() - start,
+            totalCostUsd: 0,
+          };
         }
       }
-
-      const elapsed = Date.now() - start;
-      this.logger.error(
-        `SDK generator exhausted after ${messageCount} messages and ${elapsed}ms — no result message received`,
-      );
-      return {
-        success: false,
-        error: 'Generator completed without a result message',
-        durationMs: elapsed,
-        totalCostUsd: 0,
-      };
-    } catch (err) {
       return {
         success: false,
         error: err instanceof Error ? err.message : String(err),
@@ -90,6 +59,70 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     } finally {
       this.activeControllers.delete(controller);
     }
+  }
+
+  private async executeQuery(
+    params: ExecuteParams,
+    controller: AbortController,
+    start: number,
+  ): Promise<ExecuteResult> {
+    let sessionId: string | undefined;
+    let messageCount = 0;
+
+    const prompt = params.mcpServers
+      ? toAsyncIterable(params.prompt)
+      : params.prompt;
+
+    const gen = query({
+      prompt,
+      options: {
+        cwd: this.config.agent.workspaceDir,
+        model: this.config.anthropic.model,
+        systemPrompt: params.systemPrompt,
+        permissionMode: 'default',
+        persistSession: true,
+        settingSources: [],
+        includePartialMessages: false,
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: this.config.anthropic.apiKey,
+        },
+        ...(params.maxTurns !== undefined ? { maxTurns: params.maxTurns } : {}),
+        abortController: controller,
+        hooks: createObservabilityHooks(this.logger),
+        debugFile: '/tmp/sdk-debug.log',
+        stderr: (data: string) => {
+          this.logger.warn(`[subprocess stderr] ${data.trimEnd()}`);
+        },
+        ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
+        ...(params.allowedTools ? { allowedTools: params.allowedTools } : {}),
+        ...(params.disallowedTools
+          ? { disallowedTools: params.disallowedTools }
+          : {}),
+        ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
+        ...(params.resume ? { resume: params.resume } : {}),
+      },
+    });
+
+    for await (const message of gen) {
+      messageCount++;
+      const mapped = this.processMessage(message, sessionId);
+      if (mapped) return mapped;
+      if (message.type === 'system' && message.subtype === 'init') {
+        sessionId = message.session_id;
+      }
+    }
+
+    const elapsed = Date.now() - start;
+    this.logger.error(
+      `SDK generator exhausted after ${messageCount} messages and ${elapsed}ms — no result message received`,
+    );
+    return {
+      success: false,
+      error: 'Generator completed without a result message',
+      durationMs: elapsed,
+      totalCostUsd: 0,
+    };
   }
 
   onApplicationShutdown(): void {

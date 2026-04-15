@@ -115,7 +115,7 @@ describe('InvocationHandler', () => {
   });
 
   describe('success path', () => {
-    it('should return success result from execute()', async () => {
+    it('should return success result with sessionId from execute()', async () => {
       mockExecute.mockResolvedValue(successResult);
 
       const result = await handler.handle(baseRequest);
@@ -125,6 +125,7 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
         totalCostUsd: 0.0123,
         durationMs: 5000,
+        sessionId: 'sess-abc',
       });
     });
   });
@@ -356,6 +357,48 @@ describe('InvocationHandler', () => {
       )?.[0] as string;
       expect(warnMessage).toBeDefined();
       expect(warnMessage).toContain('turns=?');
+    });
+  });
+
+  describe('session resume forwarding', () => {
+    it('should pass request.sessionId as resume to execute()', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        sessionId: 'sess-resume-1',
+      });
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resume: 'sess-resume-1',
+        }),
+      );
+    });
+
+    it('should pass undefined resume when sessionId is absent', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const call = mockExecute.mock.calls[0][0] as { resume: unknown };
+      expect(call.resume).toBeUndefined();
+    });
+
+    it('should include sessionId in success response', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.sessionId).toBe('sess-abc');
+    });
+
+    it('should not include sessionId in failure response', async () => {
+      mockExecute.mockResolvedValue(failureResult);
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.sessionId).toBeUndefined();
     });
   });
 
@@ -595,6 +638,7 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
         totalCostUsd: 0.0123,
         durationMs: 5000,
+        sessionId: 'sess-abc',
       });
     });
 
@@ -613,6 +657,7 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
         totalCostUsd: 0.0123,
         durationMs: 5000,
+        sessionId: 'sess-abc',
       });
     });
 
@@ -638,6 +683,7 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
         totalCostUsd: 0.0123,
         durationMs: 5000,
+        sessionId: 'sess-abc',
       });
     });
 

@@ -28,6 +28,8 @@ export interface InvokeRequest {
   wait: boolean;
   /** Current call depth (0-based, incremented at each hop). */
   depth: number;
+  /** Resume a prior SDK session instead of starting fresh. */
+  sessionId?: string;
 }
 
 /**
@@ -48,6 +50,8 @@ export interface InvokeResponse {
   totalCostUsd?: number;
   /** Wall-clock duration of the invocation in milliseconds. */
   durationMs?: number;
+  /** SDK session ID — enables session resume on follow-up invocations. */
+  sessionId?: string;
 }
 
 /**
