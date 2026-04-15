@@ -456,6 +456,7 @@ describe('ClaudeCodeService', () => {
     const controller = new AbortController();
 
     mockQuery.mockReturnValueOnce(
+      // eslint-disable-next-line require-yield
       (async function* () {
         controller.abort();
         throw new Error('aborted');
