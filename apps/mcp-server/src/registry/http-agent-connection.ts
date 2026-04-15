@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { Agent as UndiciAgent } from 'undici';
 import type { AgentRole, InvokeRequest, InvokeResponse } from '@app/common';
 import { AgentConnection } from './agent-connection.abstract';
 
@@ -16,6 +17,19 @@ export class HttpAgentConnection extends AgentConnection {
   private readonly logger = new Logger(HttpAgentConnection.name);
   readonly role: AgentRole;
   private readonly callbackUrl: string;
+
+  /**
+   * Custom undici dispatcher with extended timeouts.
+   *
+   * Node.js's built-in fetch() uses undici, which enforces a default
+   * headersTimeout of 300s (5 min). Agent invocations (especially developer)
+   * can run for up to 30 minutes. This dispatcher raises both timeouts to
+   * 35 minutes so the AbortController remains the sole timeout authority.
+   */
+  private readonly dispatcher = new UndiciAgent({
+    headersTimeout: 35 * 60_000,
+    bodyTimeout: 35 * 60_000,
+  });
 
   constructor(role: AgentRole, callbackUrl: string) {
     super();
@@ -45,7 +59,8 @@ export class HttpAgentConnection extends AgentConnection {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
         signal: controller.signal,
-      });
+        dispatcher: this.dispatcher,
+      } as RequestInit);
 
       if (!res.ok) {
         const msg = `Agent ${this.role} returned HTTP ${res.status}`;

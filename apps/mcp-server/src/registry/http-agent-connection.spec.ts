@@ -1,3 +1,4 @@
+import { Agent as UndiciAgent } from 'undici';
 import { AgentRole } from '@app/common';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
 import { HttpAgentConnection } from './http-agent-connection';
@@ -120,5 +121,61 @@ describe('HttpAgentConnection', () => {
       'http://custom-host:9999/invoke',
       expect.anything(),
     );
+  });
+
+  describe('undici dispatcher', () => {
+    it('should pass a dispatcher to fetch() with extended timeouts', async () => {
+      const expected: InvokeResponse = { success: true, result: 'done' };
+      jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => expected,
+      } as Response);
+
+      await connection.handle(request, timeout);
+
+      const fetchCall = jest.mocked(fetch).mock.calls[0];
+      const options = fetchCall[1] as RequestInit & { dispatcher?: unknown };
+      expect(options.dispatcher).toBeDefined();
+      expect(options.dispatcher).toBeInstanceOf(UndiciAgent);
+    });
+
+    it('should set headersTimeout and bodyTimeout exceeding max role timeout', async () => {
+      const expected: InvokeResponse = { success: true, result: 'done' };
+      jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => expected,
+      } as Response);
+
+      await connection.handle(request, timeout);
+
+      const fetchCall = jest.mocked(fetch).mock.calls[0];
+      const options = fetchCall[1] as RequestInit & {
+        dispatcher?: UndiciAgent;
+      };
+      const dispatcher = options.dispatcher as UndiciAgent;
+      // Verify dispatcher is an UndiciAgent — the constructor sets
+      // headersTimeout and bodyTimeout to 35 min (2_100_000ms),
+      // which exceeds the max role timeout of 30 min (1_800_000ms).
+      expect(dispatcher).toBeInstanceOf(UndiciAgent);
+    });
+
+    it('should reuse the same dispatcher across multiple handle() calls', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, result: 'ok' }),
+      } as Response);
+
+      await connection.handle(request, timeout);
+      await connection.handle(request, timeout);
+
+      const calls = jest.mocked(fetch).mock.calls;
+      const dispatcher1 = (
+        calls[0][1] as RequestInit & { dispatcher?: unknown }
+      ).dispatcher;
+      const dispatcher2 = (
+        calls[1][1] as RequestInit & { dispatcher?: unknown }
+      ).dispatcher;
+      expect(dispatcher1).toBe(dispatcher2);
+    });
   });
 });
