@@ -58,8 +58,14 @@ COPY --from=builder --chown=quorum:quorum /app/node_modules ./node_modules
 COPY --from=builder --chown=quorum:quorum /app/package*.json ./
 
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
+    /mnt/quorum/workspace/.claude/plugins \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
+    /mnt/quorum/workspace/.claude \
  && ln -s /tmp/.claude.json /home/quorum/.claude.json
+
+# Pre-install code-review plugin (read-only rootfs prevents runtime installs)
+RUN npx @anthropic-ai/claude-agent-sdk plugin install code-review@claude-plugins-official \
+    --project /mnt/quorum/workspace
 
 ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"
 

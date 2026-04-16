@@ -9,11 +9,52 @@ function makeProfile(
   return {
     disallowedTools: [],
     deniedBashCommands: [],
+    allowedSkills: [],
+    plugins: [],
     ...overrides,
   };
 }
 
 describe('createToolGuardHook', () => {
+  // ── Skill filtering (BUG-002) ─────────────────────────────────────
+
+  describe('skill filtering', () => {
+    const hook = createToolGuardHook(
+      makeProfile({ allowedSkills: ['code-review', 'simplify'] }),
+      WORKSPACE,
+    );
+
+    it('should allow an explicitly permitted skill', () => {
+      const result = hook('Skill', { skill: 'code-review' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow another permitted skill', () => {
+      const result = hook('Skill', { skill: 'simplify' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should deny an unpermitted skill', () => {
+      const result = hook('Skill', { skill: 'batch' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("Skill 'batch' not permitted");
+    });
+
+    it('should allow when skill field is missing from input', () => {
+      const result = hook('Skill', {});
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should deny all skills when allowedSkills is empty', () => {
+      const noSkillsHook = createToolGuardHook(
+        makeProfile({ allowedSkills: [] }),
+        WORKSPACE,
+      );
+      const result = noSkillsHook('Skill', { skill: 'simplify' });
+      expect(result.allowed).toBe(false);
+    });
+  });
+
   // ── Bash command filtering ─────────────────────────────────────────
 
   describe('bash filtering', () => {

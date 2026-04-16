@@ -16,7 +16,20 @@ export interface RoleToolProfile {
    * under these workspace-relative path prefixes. Undefined = unrestricted.
    */
   allowedWritePaths?: string[];
+
+  /** Skills the role is permitted to invoke via the Skill tool.
+   *  Empty array = no skills allowed. */
+  allowedSkills: string[];
+
+  /** SDK plugins loaded for this role's agent sessions. */
+  plugins: Array<{ type: 'local'; path: string }>;
 }
+
+/** Pre-installed code-review plugin path (baked into agent image at build time). */
+export const CODE_REVIEW_PLUGIN = {
+  type: 'local' as const,
+  path: '/mnt/quorum/workspace/.claude/plugins/code-review',
+};
 
 /** Tools universally denied for all agent roles. */
 const COMMON_DISALLOWED_TOOLS: string[] = [
@@ -36,6 +49,8 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
   developer: {
     disallowedTools: [...COMMON_DISALLOWED_TOOLS, 'TodoWrite'],
     deniedBashCommands: ['git push --force', 'git push -f', 'rm -rf /'],
+    allowedSkills: ['simplify'],
+    plugins: [],
   },
 
   architect: {
@@ -48,6 +63,8 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
       'npm publish',
     ],
     allowedWritePaths: ['docs/', 'tickets/'],
+    allowedSkills: ['code-review', 'simplify'],
+    plugins: [CODE_REVIEW_PLUGIN],
   },
 
   teamlead: {
@@ -58,11 +75,15 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
       'rm -rf /',
       'npm publish',
     ],
+    allowedSkills: ['code-review', 'simplify'],
+    plugins: [CODE_REVIEW_PLUGIN],
   },
 
   qa: {
     disallowedTools: [...COMMON_DISALLOWED_TOOLS],
     deniedBashCommands: ['git push', 'git commit', 'rm -rf', 'npm publish'],
+    allowedSkills: [],
+    plugins: [],
   },
 
   productowner: {
@@ -75,6 +96,8 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
     ],
     deniedBashCommands: [], // Bash fully disabled at tool level
     allowedWritePaths: ['tickets/'],
+    allowedSkills: [],
+    plugins: [],
   },
 } as const satisfies Record<DeployableRole, RoleToolProfile>;
 
