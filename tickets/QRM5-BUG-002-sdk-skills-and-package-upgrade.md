@@ -256,11 +256,11 @@ This is verification only — no code changes.
 - [x] Architect and teamlead roles can invoke `/code-review` during invocations
 - [x] Developer role can invoke `/simplify` but not `/code-review` (if per-role filtering implemented)
 - [x] QA and productowner roles cannot invoke any skills
-- [ ] Zod v4 `.describe()` metadata visible in debug logs for all bridged tool schemas
+- [ ] Zod v4 `.describe()` metadata visible in debug logs for all bridged tool schemas *(post-deployment)*
 - [x] `npm run build` compiles successfully
 - [x] `npm run lint` passes
 - [x] `npm run test` — all existing tests pass, no regressions
-- [ ] ICEBOX session resume re-evaluated — caching behavior documented post-upgrade
+- [ ] ICEBOX session resume re-evaluated — caching behavior documented post-upgrade *(post-deployment)*
 
 ## Dependencies and References
 
