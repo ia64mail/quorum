@@ -112,6 +112,37 @@ None — implementation matches the ticket's proposed approach exactly.
 - `npm run lint`: Pre-existing `require-yield` error in `apps/agent/src/llm/claude-code.service.spec.ts:459` (unrelated to this change — confirmed identical before and after commit). No new lint errors introduced.
 - `npm run test`: 558 tests pass, 39 suites, 0 failures
 
+### Amendment — undici 8 / Node.js 24 dispatcher incompatibility (2026-04-15)
+
+The original fix introduced a **silent regression**: all agent invocations failed instantly with `"unreachable: fetch failed"` in the first Docker run after rebuild (QRM5 Run 3, `logs/mcp-server-20260416T030145.jsonl`). Every registered agent became unreachable within 1ms of invocation — 5 failures across developer, teamlead, and architect.
+
+**Root cause:** The fix used `global.fetch()` (backed by Node.js 24's bundled `undici@7.18.2`) with an `Agent` dispatcher from the npm `undici@8.1.0` package. The `Dispatcher` protocol changed between undici 7 and 8 — passing an undici 8 `Agent` to undici 7's `fetch()` triggers `"invalid onRequestStart method"`, which surfaces as the generic `"fetch failed"`.
+
+**Why it wasn't caught:** The fix was committed at 13:48 UTC on 2026-04-15, but the last successful Docker run (QRM5 Run 2) started at 13:46 UTC — two minutes *before* the commit. The Docker images were only rebuilt when QRM5-BUG-002 landed, so the dispatcher code ran in Docker for the first time in the broken run.
+
+**Fix:** Import `fetch` from the `undici` npm package instead of using the global built-in, so both `fetch` and `Agent` come from the same `undici@8.x`:
+
+```typescript
+import { Agent as UndiciAgent, fetch as undiciFetch } from 'undici';
+
+// In handle():
+const res = await undiciFetch(url, {
+  ...options,
+  dispatcher: this.dispatcher,
+});
+```
+
+This also removed the `as RequestInit` cast (undici's types include `dispatcher` natively) and added `err.cause` to error messages for better diagnostics.
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `http-agent-connection.ts` | `fetch` → `undiciFetch` (from `undici`); removed `as RequestInit` cast; added `err.cause` to error message |
+| `http-agent-connection.spec.ts` | Mocks `undici`'s `fetch` export instead of `global.fetch`; added test for `cause` in error messages |
+
+**Verification:** `npm run lint` clean, 594/594 tests pass, confirmed `undiciFetch` + undici 8 `Agent` produces `ECONNREFUSED` (correct transport error) instead of `"invalid onRequestStart method"`.
+
 ## Dependencies and References
 
 - **Observed in:** QRM5 Run 1 (`logs/sessions/2026-04-14-qrm5-run1.md`) — developer invocation 4 at 02:30:27
