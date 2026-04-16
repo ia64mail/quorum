@@ -96,7 +96,12 @@ export class McpService implements OnModuleInit {
           target: z
             .enum(INVOCABLE_AGENT_ROLES as unknown as [string, ...string[]])
             .describe('Target agent role to invoke'),
-          action: z.string().describe('Task description for the target agent'),
+          action: z
+            .string()
+            .describe(
+              'Task for the target agent. Use a slash command (e.g. "/code-review") ' +
+                'to invoke a built-in skill directly, or natural language for general tasks',
+            ),
           context: z
             .record(z.string(), z.unknown())
             .optional()

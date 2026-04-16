@@ -123,8 +123,12 @@ export class InvocationHandler {
       prompt += bootstrapSection + '\n\n';
     }
 
-    // Task action (existing)
-    prompt += `Task: ${request.action}`;
+    // Slash-command actions (e.g. "/code-review") are passed verbatim so
+    // the SDK dispatches directly to the skill.  Regular actions get the
+    // "Task: " prefix for the LLM.
+    prompt += request.action.startsWith('/')
+      ? request.action
+      : `Task: ${request.action}`;
 
     // Caller-provided context (existing)
     if (request.context && Object.keys(request.context).length > 0) {

@@ -63,9 +63,9 @@ RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
     /mnt/quorum/workspace/.claude \
  && ln -s /tmp/.claude.json /home/quorum/.claude.json
 
-# Pre-install code-review plugin (read-only rootfs prevents runtime installs)
-RUN npx @anthropic-ai/claude-agent-sdk plugin install code-review@claude-plugins-official \
-    --project /mnt/quorum/workspace
+# Vendor code-review plugin (read-only rootfs prevents runtime installs).
+# Source: https://github.com/anthropics/claude-plugins-official/tree/main/plugins/code-review
+COPY --chown=quorum:quorum docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review
 
 ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"
 

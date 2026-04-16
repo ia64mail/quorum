@@ -215,6 +215,39 @@ describe('InvocationHandler', () => {
       const call = mockExecute.mock.calls[0][0] as { prompt: string };
       expect(call.prompt).not.toContain('Additional context');
     });
+
+    it('should prefix regular actions with "Task: "', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('Task: design auth system');
+    });
+
+    it('should pass slash-command actions verbatim without "Task: " prefix (BUG-002)', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        action: '/code-review\n\nFocus on auth changes',
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('/code-review');
+      expect(call.prompt).toContain('Focus on auth changes');
+      expect(call.prompt).not.toContain('Task: /code-review');
+    });
+
+    it('should pass /simplify skill action verbatim (BUG-002)', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({ ...baseRequest, action: '/simplify' });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('/simplify');
+      expect(call.prompt).not.toContain('Task: ');
+    });
   });
 
   describe('system prompt', () => {

@@ -248,18 +248,18 @@ This is verification only — no code changes.
 
 ## Acceptance Criteria
 
-- [ ] `@anthropic-ai/claude-agent-sdk` upgraded to `^0.2.110`
-- [ ] `@anthropic-ai/sdk` upgraded to `^0.89.0`
-- [ ] `@modelcontextprotocol/sdk` version compatible with upgraded SDK
-- [ ] `settingSources: ['project']` in `ClaudeCodeService` — skills subsystem enabled
-- [ ] `code-review` plugin available in agent containers
-- [ ] Architect and teamlead roles can invoke `/code-review` during invocations
-- [ ] Developer role can invoke `/simplify` but not `/code-review` (if per-role filtering implemented)
-- [ ] QA and productowner roles cannot invoke any skills
+- [x] `@anthropic-ai/claude-agent-sdk` upgraded to `^0.2.110`
+- [x] `@anthropic-ai/sdk` upgraded to `^0.89.0`
+- [x] `@modelcontextprotocol/sdk` version compatible with upgraded SDK
+- [x] `settingSources: ['project']` in `ClaudeCodeService` — skills subsystem enabled
+- [x] `code-review` plugin available in agent containers
+- [x] Architect and teamlead roles can invoke `/code-review` during invocations
+- [x] Developer role can invoke `/simplify` but not `/code-review` (if per-role filtering implemented)
+- [x] QA and productowner roles cannot invoke any skills
 - [ ] Zod v4 `.describe()` metadata visible in debug logs for all bridged tool schemas
-- [ ] `npm run build` compiles successfully
-- [ ] `npm run lint` passes
-- [ ] `npm run test` — all existing tests pass, no regressions
+- [x] `npm run build` compiles successfully
+- [x] `npm run lint` passes
+- [x] `npm run test` — all existing tests pass, no regressions
 - [ ] ICEBOX session resume re-evaluated — caching behavior documented post-upgrade
 
 ## Dependencies and References
@@ -273,3 +273,52 @@ This is verification only — no code changes.
 - **Prior caching tickets:** `tickets/QRM4-BUG-012-moderator-prompt-caching-and-cost-tracking.md`, `tickets/QRM4-BUG-013-moderator-conversation-caching.md`
 - **Security advisory:** GHSA-5474-4w2j-mq4c — addressed by `@anthropic-ai/sdk ^0.81.0`
 - **Plugin deprecation:** `/review` CLI command deprecated in favor of `code-review@claude-plugins-official` plugin
+
+## Implementation Notes
+
+**Status:** Complete (Parts 1–5). Parts 6–7 are post-deployment verification steps.
+
+**Date:** 2026-04-15
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `package.json` | Modified | Bumped `@anthropic-ai/claude-agent-sdk` `^0.2.63` → `^0.2.110`, `@anthropic-ai/sdk` `^0.73.0` → `^0.89.0`, `@modelcontextprotocol/sdk` `^1.26.0` → `^1.29.0` |
+| `package-lock.json` | Modified | Lockfile updated; SDK now declares NestJS/React/Zod/TypeScript as peer dependencies |
+| `apps/agent/src/llm/claude-code.service.ts` | Modified | `settingSources: []` → `settingSources: ['project']`; conditional `plugins` passthrough to SDK `query()` |
+| `apps/agent/src/llm/claude-code.types.ts` | Modified | Added `plugins` field to `ExecuteParams` |
+| `apps/agent/src/llm/claude-code.service.spec.ts` | Modified | Updated `settingSources` assertion; added 2 tests for plugins passthrough (present/absent) |
+| `apps/agent/src/config/role-tool-profiles.ts` | Modified | Added `allowedSkills` and `plugins` to `RoleToolProfile`; added `CODE_REVIEW_PLUGIN` constant; wired per-role skill and plugin access |
+| `apps/agent/src/config/role-tool-profiles.spec.ts` | Modified | Added per-role tests for `allowedSkills` and `plugins` arrays across all 5 roles |
+| `apps/agent/src/config/role-permission.service.ts` | Modified | Added `getPlugins()` method exposing role's plugin list |
+| `apps/agent/src/config/role-permission.service.spec.ts` | Modified | Added 2 tests for `getPlugins()` (with plugins / empty) |
+| `apps/agent/src/config/tool-guard-hook.ts` | Modified | Added `Skill` tool filtering — denies skills not in `allowedSkills`, early-returns before bash/write checks |
+| `apps/agent/src/config/tool-guard-hook.spec.ts` | Modified | Added 5 tests for skill filtering (allow, deny, empty allowlist, missing field) |
+| `apps/agent/src/connection/invocation-handler.service.ts` | Modified | Wired `plugins` from `RolePermissionService` into `execute()` call; slash-command actions (`/code-review`, `/simplify`) now bypass `Task: ` prefix for direct SDK skill dispatch |
+| `apps/agent/src/connection/invocation-handler.service.spec.ts` | Modified | Added 3 tests for plugin integration; added 3 tests for slash-command prompt passthrough |
+| `Dockerfile` | Modified | Created `/mnt/quorum/workspace/.claude/plugins` directory; replaced failing `RUN npx … plugin install` with `COPY` of vendored plugin |
+| `.dockerignore` | Modified | Added `!docker/plugins/**/*.md` and `!docker/plugins/**/*.json` exceptions (global `*.md` exclude was blocking plugin files) |
+| `docker/plugins/code-review/.claude-plugin/plugin.json` | Created | Vendored plugin manifest from `anthropics/claude-plugins-official` |
+| `docker/plugins/code-review/commands/code-review.md` | Created | Vendored skill definition — multi-agent review pipeline with confidence scoring |
+| `docker/plugins/code-review/LICENSE` | Created | Apache 2.0 license from upstream |
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Modified | Updated `invoke_agent` tool's `action` field description to document slash-command support |
+| `libs/common/src/prompts/role-prompt-templates.ts` | Modified | Added "Skill Dispatch" section to moderator prompt with lookup table for review routing |
+
+### Deviations from ticket
+
+- **Plugin installation via `COPY` instead of `RUN npx … plugin install`.** The ticket specified `npx @anthropic-ai/claude-agent-sdk plugin install code-review@claude-plugins-official` at Docker build time. The `claude-agent-sdk` npm package has no `bin` entry — it is a library, not a CLI. The `claude` binary (which does have `plugin install`) is distributed via a native installer, not npm. The fix vendors the plugin files directly from `anthropics/claude-plugins-official` and uses `COPY --chown` in the Dockerfile. This is more deterministic (no network dependency at build time) and matches the SDK's `{ type: 'local', path }` expectation — the path must contain `.claude-plugin/plugin.json`.
+- **`.dockerignore` required exceptions.** The existing `*.md` glob in `.dockerignore` excluded the plugin's `commands/code-review.md` from the Docker build context. Added `!docker/plugins/**/*.md` and `!docker/plugins/**/*.json` to whitelist plugin files.
+
+### Open items (Parts 6–7)
+
+- **Part 6 — Zod v4 `.describe()` verification**: Requires running an actual agent invocation with `debugFile` enabled and checking the debug log for tool schema descriptions. Cannot be verified without a live API key and container deployment.
+- **Part 7 — ICEBOX session resume re-evaluation**: Requires two sequential invocations of the same agent role and comparing `cache_creation_input_tokens` vs `cache_read_input_tokens` in cost breakdown. Deferred to first QRM5 E2E run.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 593 tests passing (35 new + 558 existing), 39 suites, 0 failures
+- `docker build --target agent` — builds successfully; plugin files verified inside image at correct path with `quorum:quorum` ownership
+- `docker build --target default` — builds successfully (no regression)
