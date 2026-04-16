@@ -1,7 +1,24 @@
-import { Agent as UndiciAgent } from 'undici';
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { AgentRole } from '@app/common';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
 import { HttpAgentConnection } from './http-agent-connection';
+
+/**
+ * Mock undici's fetch while keeping the real Agent class.
+ * We use a manual mock with `jest.fn()` inside the factory (hoisted above
+ * imports) and then extract the mock reference via a second import.
+ */
+jest.mock('undici', () => {
+  const actual = jest.requireActual<typeof import('undici')>('undici');
+  return { ...actual, fetch: jest.fn() };
+});
+
+// Import after mock so we get the mocked `fetch` and the real `Agent`.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { Agent: UndiciAgent, fetch: mockFetch } = require('undici') as {
+  Agent: typeof import('undici').Agent;
+  fetch: jest.Mock;
+};
 
 describe('HttpAgentConnection', () => {
   const role = AgentRole.architect;
@@ -21,7 +38,7 @@ describe('HttpAgentConnection', () => {
 
   beforeEach(() => {
     connection = new HttpAgentConnection(role, callbackUrl);
-    jest.restoreAllMocks();
+    mockFetch.mockReset();
   });
 
   it('should have the correct role', () => {
@@ -34,14 +51,14 @@ describe('HttpAgentConnection', () => {
 
   it('should send POST to callbackUrl/invoke and return parsed response', async () => {
     const expected: InvokeResponse = { success: true, result: 'done' };
-    jest.spyOn(global, 'fetch').mockResolvedValue({
+    mockFetch.mockResolvedValue({
       ok: true,
       json: async () => expected,
-    } as Response);
+    });
 
     const result = await connection.handle(request, timeout);
 
-    expect(fetch).toHaveBeenCalledWith(
+    expect(mockFetch).toHaveBeenCalledWith(
       'http://architect:3002/invoke',
       expect.objectContaining({
         method: 'POST',
@@ -53,10 +70,10 @@ describe('HttpAgentConnection', () => {
   });
 
   it('should return error response on HTTP error status', async () => {
-    jest.spyOn(global, 'fetch').mockResolvedValue({
+    mockFetch.mockResolvedValue({
       ok: false,
       status: 500,
-    } as Response);
+    });
 
     const result = await connection.handle(request, timeout);
 
@@ -67,9 +84,7 @@ describe('HttpAgentConnection', () => {
   });
 
   it('should return error response on network failure', async () => {
-    jest
-      .spyOn(global, 'fetch')
-      .mockRejectedValue(new TypeError('fetch failed'));
+    mockFetch.mockRejectedValue(new TypeError('fetch failed'));
 
     const result = await connection.handle(request, timeout);
 
@@ -79,12 +94,26 @@ describe('HttpAgentConnection', () => {
     });
   });
 
+  it('should include cause in error message when available', async () => {
+    const err = new TypeError('fetch failed');
+    (err as any).cause = new Error('connect ECONNREFUSED 172.18.0.4:3002');
+    mockFetch.mockRejectedValue(err);
+
+    const result = await connection.handle(request, timeout);
+
+    expect(result).toEqual({
+      success: false,
+      error:
+        'Agent architect unreachable: fetch failed (connect ECONNREFUSED 172.18.0.4:3002)',
+    });
+  });
+
   it('should return error response on timeout (AbortError)', async () => {
     const abortError = new DOMException(
       'The operation was aborted',
       'AbortError',
     );
-    jest.spyOn(global, 'fetch').mockRejectedValue(abortError);
+    mockFetch.mockRejectedValue(abortError);
 
     const result = await connection.handle(request, timeout);
 
@@ -95,10 +124,10 @@ describe('HttpAgentConnection', () => {
   });
 
   it('should return error response on invalid response body', async () => {
-    jest.spyOn(global, 'fetch').mockResolvedValue({
+    mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ unexpected: 'shape' }),
-    } as Response);
+    });
 
     const result = await connection.handle(request, timeout);
 
@@ -110,14 +139,14 @@ describe('HttpAgentConnection', () => {
 
   it('should append /invoke to callback URL', async () => {
     const conn = new HttpAgentConnection(role, 'http://custom-host:9999');
-    jest.spyOn(global, 'fetch').mockResolvedValue({
+    mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ success: true, result: 'ok' }),
-    } as Response);
+    });
 
     await conn.handle(request, timeout);
 
-    expect(fetch).toHaveBeenCalledWith(
+    expect(mockFetch).toHaveBeenCalledWith(
       'http://custom-host:9999/invoke',
       expect.anything(),
     );
@@ -126,54 +155,48 @@ describe('HttpAgentConnection', () => {
   describe('undici dispatcher', () => {
     it('should pass a dispatcher to fetch() with extended timeouts', async () => {
       const expected: InvokeResponse = { success: true, result: 'done' };
-      jest.spyOn(global, 'fetch').mockResolvedValue({
+      mockFetch.mockResolvedValue({
         ok: true,
         json: async () => expected,
-      } as Response);
+      });
 
       await connection.handle(request, timeout);
 
-      const fetchCall = jest.mocked(fetch).mock.calls[0];
-      const options = fetchCall[1] as RequestInit & { dispatcher?: unknown };
+      const options = mockFetch.mock.calls[0][1] as Record<string, unknown>;
       expect(options.dispatcher).toBeDefined();
       expect(options.dispatcher).toBeInstanceOf(UndiciAgent);
     });
 
     it('should set headersTimeout and bodyTimeout exceeding max role timeout', async () => {
       const expected: InvokeResponse = { success: true, result: 'done' };
-      jest.spyOn(global, 'fetch').mockResolvedValue({
+      mockFetch.mockResolvedValue({
         ok: true,
         json: async () => expected,
-      } as Response);
+      });
 
       await connection.handle(request, timeout);
 
-      const fetchCall = jest.mocked(fetch).mock.calls[0];
-      const options = fetchCall[1] as RequestInit & {
-        dispatcher?: UndiciAgent;
-      };
-      const dispatcher = options.dispatcher as UndiciAgent;
+      const options = mockFetch.mock.calls[0][1] as Record<string, unknown>;
       // Verify dispatcher is an UndiciAgent — the constructor sets
       // headersTimeout and bodyTimeout to 35 min (2_100_000ms),
       // which exceeds the max role timeout of 30 min (1_800_000ms).
-      expect(dispatcher).toBeInstanceOf(UndiciAgent);
+      expect(options.dispatcher).toBeInstanceOf(UndiciAgent);
     });
 
     it('should reuse the same dispatcher across multiple handle() calls', async () => {
-      jest.spyOn(global, 'fetch').mockResolvedValue({
+      mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({ success: true, result: 'ok' }),
-      } as Response);
+      });
 
       await connection.handle(request, timeout);
       await connection.handle(request, timeout);
 
-      const calls = jest.mocked(fetch).mock.calls;
       const dispatcher1 = (
-        calls[0][1] as RequestInit & { dispatcher?: unknown }
+        mockFetch.mock.calls[0][1] as Record<string, unknown>
       ).dispatcher;
       const dispatcher2 = (
-        calls[1][1] as RequestInit & { dispatcher?: unknown }
+        mockFetch.mock.calls[1][1] as Record<string, unknown>
       ).dispatcher;
       expect(dispatcher1).toBe(dispatcher2);
     });
