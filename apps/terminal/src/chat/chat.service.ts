@@ -172,6 +172,37 @@ function formatDuration(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TERMINAL_MODERATOR_PROMPT — the human-facing moderator prompt.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * This is THE prompt used when a human user chats with Quorum through the
+ * terminal. The moderator running with this prompt drives ALL orchestration:
+ * it decides which agent to dispatch, chooses the `action` value (including
+ * slash-command skill dispatch like `/code-review`), handles clarifications,
+ * and synthesizes agent responses back to the user.
+ *
+ * Runtime: raw Anthropic SDK (NOT Claude Code). See `AnthropicService` +
+ * `ChatService.processWithLoop()`.
+ *
+ * ⚠️ NOT the same prompt as `ROLE_PROMPT_TEMPLATES[AgentRole.moderator]` in
+ *    `libs/common/src/prompts/role-prompt-templates.ts`. That template is
+ *    served by `RolePromptService` ONLY when another agent invokes the
+ *    moderator role via `invoke_agent` (agent-to-moderator clarification
+ *    path) — it never reaches the terminal user-facing chat.
+ *
+ * ⚠️ Any behavior change meant to affect dispatch (routing rules, skill
+ *    invocation, failure recovery, session resume) MUST be applied HERE.
+ *    Editing only the libs/common moderator template will silently miss
+ *    the orchestrating moderator. Past regressions caused by this trap:
+ *      - QRM5-BUG-002 (skill dispatch for /code-review)
+ *      - commit 5a5581f (failure recovery guidance)
+ *    Both ended up in the wrong prompt and had to be ported afterwards.
+ *
+ * Keep the section structure in sync with the libs/common moderator template
+ * when both audiences need the same guidance.
+ */
 export const TERMINAL_MODERATOR_PROMPT = `${SYSTEM_PREAMBLE}
 
 ---
@@ -212,6 +243,27 @@ Agents may invoke you mid-task via \`invoke_agent(moderator, ...)\` when they ne
 - **productowner**: Requirements clarification and business context
 - Invoke agents directly — avoid intermediaries when the target is clear
 
+## Skill Dispatch — REQUIRED for Reviews
+Agents have built-in skills activated by setting the \`action\` field to a slash command. When \`action\` starts with \`/\`, the agent dispatches the skill directly — deterministic, no wasted turns, and dramatically better output.
+
+**ALWAYS set \`action\` to \`/code-review\` when dispatching a code review.** Do NOT send a free-form review prompt — the \`/code-review\` skill runs a structured multi-agent review pipeline (parallel CLAUDE.md compliance auditors, bug detector, git-blame history analyzer, confidence scoring). A natural language prompt like "Please review..." produces a shallow manual review instead.
+
+| Intent | Target | action |
+|--------|--------|--------|
+| Architectural review | architect | \`/code-review\\n\\n<focus areas>\` |
+| Integration / code review | teamlead | \`/code-review\\n\\n<focus areas>\` |
+| Self-review before PR | developer | \`/simplify\` |
+| Implementation task | developer | Natural language (no slash) |
+
+**Format:** Start with the slash command, then add a blank line followed by context that steers the review's priorities:
+\`\`\`
+/code-review
+
+QRM5-003, 2 commits (abc1234..def5678). Focus on error handling in HttpAgentConnection and test coverage for the new dispatcher.
+\`\`\`
+
+Use natural language \`action\` only for non-review tasks (implementation, data retrieval, task decomposition).
+
 ## Context Management
 - **Store** session-level decisions in **project** scope (what the user requested, which approach was approved)
 - **Query** project context to check what has been decided before starting new orchestration
@@ -222,6 +274,12 @@ Agents may invoke you mid-task via \`invoke_agent(moderator, ...)\` when they ne
 - Summarize what was done, what was decided, and what comes next
 - Distill other agents' responses into key points rather than forwarding raw output
 - Be helpful and conversational while staying focused on the task
+
+## Failure Recovery
+When an agent invocation fails (especially \`error_max_turns\`), the agent may have stored progress before the failure. To discover checkpoints:
+1. Query **conversation** scope with \`mode=get-all\` (not search) using the same correlationId
+2. Query **agent** scope with \`mode=get-all\` using the same correlationId
+Use \`get-all\` because search requires matching specific terms — the checkpoint key and content may not match your search query. If a checkpoint shows the work is complete (e.g., \`status: "complete"\` with passing verification), do not blindly retry — acknowledge the result.
 
 ## Session Resume
 Follow-up invocations to the same agent role automatically resume the prior SDK session — the agent retains its full conversation history, file reads, and reasoning from earlier work. This is handled transparently; you do not need to pass \`sessionId\` yourself.

@@ -322,3 +322,79 @@ This is verification only — no code changes.
 - `npm run test` — 593 tests passing (35 new + 558 existing), 39 suites, 0 failures
 - `docker build --target agent` — builds successfully; plugin files verified inside image at correct path with `quorum:quorum` ownership
 - `docker build --target default` — builds successfully (no regression)
+
+### Follow-up: Skill Dispatch section missed the terminal moderator (2026-04-17)
+
+**Symptom:** QRM5 run on 2026-04-16 produced a free-form review dispatch despite the prompt amendments. Evidence from `logs/teamlead-20260417T023300.jsonl:162`:
+
+```
+action="Perform code review for QRM5-002 (OpenSearch Infrastructure)
+        following the Review Protocol in quorum.md ..."
+```
+
+No `/code-review` prefix — the moderator invoked the teamlead with natural language and got a shallow manual review instead of the structured multi-agent pipeline.
+
+**Root cause:** The Quorum system has **two separate moderator prompts** that serve different callers:
+
+| Prompt | Location | Used when |
+|--------|----------|-----------|
+| `ROLE_PROMPT_TEMPLATES[AgentRole.moderator]` | `libs/common/src/prompts/role-prompt-templates.ts` | Another agent invokes the moderator role (clarification flow) — served by `RolePromptService` in the agent app |
+| `TERMINAL_MODERATOR_PROMPT` | `apps/terminal/src/chat/chat.service.ts:175` | Human user chats with the terminal — the moderator that actually orchestrates dispatches |
+
+The "Skill Dispatch — REQUIRED for Reviews" section from commits `e347115` / `e6f8ae3` was added only to the `libs/common` template, which the terminal moderator never loads. The human-facing moderator (the one performing all dispatches) was completely unaffected by the amendment.
+
+**Fix:** Ported the identical "Skill Dispatch — REQUIRED for Reviews" section into `TERMINAL_MODERATOR_PROMPT`, positioned between the Collaboration and Context Management blocks for structural parity with the agent-role template. Both prompts now carry the same routing lookup table and slash-command format guidance, keeping future amendments synchronized.
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `apps/terminal/src/chat/chat.service.ts` | Added "Skill Dispatch — REQUIRED for Reviews" section to `TERMINAL_MODERATOR_PROMPT` (mirrors the agent-role template) |
+
+**Why this was missed the first time:** The ticket's Part 5 ("Skill Invocation — Dispatching Review Tasks") correctly identified the moderator as the dispatch decision-maker but referenced only the role-prompt template when specifying the prompt update. The terminal app's inline `TERMINAL_MODERATOR_PROMPT` is a long-standing divergence (predates QRM5) — future moderator-prompt work must update both locations or consolidate them.
+
+**How to apply going forward:** Any change to moderator behavior that must reach the human-facing orchestrator MUST edit `apps/terminal/src/chat/chat.service.ts`. Editing only `libs/common/src/prompts/role-prompt-templates.ts` affects agent-to-moderator clarification calls only — not user-initiated dispatches.
+
+### Audit of prior commits — second misplacement found (2026-04-17)
+
+While investigating the skill dispatch miss, audited every commit that touched `libs/common/src/prompts/role-prompt-templates.ts`. One additional prior change fell into the same trap:
+
+**`5a5581f`** — "Improve `InMemoryStore` search functionality and enhance debug logging" (Apr 9, 2026). The commit message says "Update moderator prompt with failure recovery guidance." The diff added a `## Failure Recovery` section to `ROLE_PROMPT_TEMPLATES[AgentRole.moderator]`:
+
+> When an agent invocation fails (especially `error_max_turns`), the agent may have stored progress before the failure. To discover checkpoints:
+> 1. Query **conversation** scope with `mode=get-all`
+> 2. Query **agent** scope with `mode=get-all`
+> ... do not blindly retry — acknowledge the result.
+
+This guidance is aimed at the orchestrator recovering from failed `invoke_agent` calls — exactly what the terminal moderator does. The clarification-flow moderator never issues `invoke_agent`, so the section was effectively dead code where it was placed. Ported verbatim into `TERMINAL_MODERATOR_PROMPT` (between Communication Style and Session Resume) as part of this follow-up.
+
+**Audit results — other commits are correctly scoped:**
+
+| Commit | Target section | Correctly placed? |
+|--------|---------------|-------------------|
+| `caba7e4` | `SYSTEM_PREAMBLE` (Git Discipline format) | ✅ Preamble is imported by both prompts |
+| `da0e928` | `SYSTEM_PREAMBLE` (Git Discipline section added) | ✅ Preamble is imported by both prompts |
+| `5a5581f` | `ROLE_PROMPT_TEMPLATES[moderator]` (Failure Recovery) | ❌ Should have gone to TERMINAL_MODERATOR_PROMPT |
+| `1e40528` | `ROLE_PROMPT_TEMPLATES[developer]` (Verification) | ✅ Developer-specific |
+| `d52bc62` | `ROLE_PROMPT_TEMPLATES[architect, teamlead]` | ✅ Role-specific |
+| `33805e5` | `SYSTEM_PREAMBLE` + `[developer]` (checkpointing) | ✅ Preamble + role-specific |
+| `fe185e0` | Both files in a single commit | ✅ Scoped correctly |
+
+### Guardrail: prompt pathway comments
+
+To prevent future occurrences, added vocal inline documentation to both prompt definitions:
+
+| File | Guardrail |
+|------|-----------|
+| `apps/terminal/src/chat/chat.service.ts` | JSDoc block above `TERMINAL_MODERATOR_PROMPT` explicitly naming the runtime (raw Anthropic SDK), the audience (human user), and listing past regressions (QRM5-BUG-002, `5a5581f`) as cautionary history |
+| `libs/common/src/prompts/role-prompt-templates.ts` | JSDoc blocks above `SYSTEM_PREAMBLE` (both-pathway), `GENERIC_PROMPT_TEMPLATE` (agent-only), and `ROLE_PROMPT_TEMPLATES` (agent-only, with ⚠️ warning on moderator entry specifically and inline comment above `[AgentRole.moderator]:` reiterating the scope) |
+
+The comments name both locations, their runtimes, and the dispatch-vs-clarification distinction so any future edit to moderator behavior triggers an immediate "check both prompts" signal for anyone reading either file.
+
+**Files modified in this follow-up:**
+
+| File | Change |
+|------|--------|
+| `apps/terminal/src/chat/chat.service.ts` | Added JSDoc header on `TERMINAL_MODERATOR_PROMPT`; ported `## Failure Recovery` section from the libs/common moderator template |
+| `libs/common/src/prompts/role-prompt-templates.ts` | Expanded JSDoc on `SYSTEM_PREAMBLE`, `GENERIC_PROMPT_TEMPLATE`, `ROLE_PROMPT_TEMPLATES` — documenting dual-pathway vs agent-only scope; added inline warning comment above `[AgentRole.moderator]:` |
+| `tickets/QRM5-BUG-002-sdk-skills-and-package-upgrade.md` | This audit and guardrail summary |
