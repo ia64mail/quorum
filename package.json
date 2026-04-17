@@ -34,6 +34,7 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/event-emitter": "^3.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "@opensearch-project/opensearch": "^2.13.0",
     "ink": "^6.6.0",
     "react": "^19.2.4",
     "reflect-metadata": "^0.2.2",
