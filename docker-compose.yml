@@ -26,6 +26,23 @@ x-agent-security: &agent-security
     - /home/quorum/.cache:size=128m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
 
 services:
+  opensearch:
+    image: opensearchproject/opensearch:2
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - quorum-net
+
   mcp-server:
     build:
       context: .
@@ -48,6 +65,14 @@ services:
       BOOTSTRAP_ENABLED: ${BOOTSTRAP_ENABLED:-true}
       BOOTSTRAP_MAX_TOKENS: ${BOOTSTRAP_MAX_TOKENS:-1000}
       BOOTSTRAP_PROJECT_RATIO: ${BOOTSTRAP_PROJECT_RATIO:-0.6}
+      # OpenSearch (QRM5)
+      OPENSEARCH_NODE: http://opensearch:9200
+      OPENSEARCH_INDEX: quorum-context
+      OPENSEARCH_USERNAME: admin
+      OPENSEARCH_PASSWORD: admin
+    depends_on:
+      opensearch:
+        condition: service_healthy
     volumes:
       - ./logs:/app/logs
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
@@ -158,6 +183,9 @@ services:
       - ./logs:/app/logs
     networks:
       - quorum-net
+
+volumes:
+  opensearch-data:
 
 networks:
   quorum-net:

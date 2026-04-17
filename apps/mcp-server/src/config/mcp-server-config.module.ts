@@ -5,6 +5,7 @@ import { bootstrapConfig } from './bootstrap.config';
 import { brokerConfig } from './broker.config';
 import { contextConfig } from './context.config';
 import { contextStoreConfig } from './context-store.config';
+import { opensearchConfig } from './opensearch.config';
 import { McpServerConfigService } from './mcp-server-config.service';
 
 @Global()
@@ -18,6 +19,7 @@ import { McpServerConfigService } from './mcp-server-config.service';
         brokerConfig,
         contextConfig,
         contextStoreConfig,
+        opensearchConfig,
       ],
     }),
   ],
