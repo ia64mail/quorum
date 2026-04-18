@@ -261,25 +261,52 @@ Based on QRM5-002, QRM5-003, QRM5-005, and broader codebase patterns:
 
 ## Acceptance Criteria
 
-- [ ] `EmbeddingPipelineService` class exists at `apps/mcp-server/src/embedding/embedding-pipeline.service.ts`
-- [ ] Pipeline subscribes to `'context.change'` events via `@OnEvent('context.change')`
-- [ ] Pipeline only processes events with action `'set'` — ignores `'expire'` and `'delete'`
-- [ ] On `set` event: fetches `embeddingText` from OpenSearch by composite key, computes embedding via `EmbeddingService.embedDocument()`, partial-updates the OpenSearch document with the vector
-- [ ] Queue processes items sequentially (not concurrently)
-- [ ] Failed embeddings are re-enqueued with exponential backoff (1s → 2s → 4s → 8s max)
-- [ ] Items are abandoned after 3 retries with a warning log
-- [ ] Documents deleted between `set` and pipeline processing (404 on get) are skipped without error
-- [ ] Startup backfill (`onModuleInit`): queries OpenSearch for documents without `embedding` field, enqueues them for processing
-- [ ] Startup backfill handles OpenSearch unavailability gracefully (logs warning, skips)
-- [ ] `EmbeddingPipelineService` is provided in `ContextStoreModule.forRoot()` opensearch branch — not in `EmbeddingModule`
-- [ ] When backend is `'inmemory'`, the pipeline is NOT instantiated
-- [ ] Unit tests for event handling: set/expire/delete filtering, composite key construction (4+)
-- [ ] Unit tests for processing: fetch → embed → update flow, 404 skip, sequential processing (4+)
-- [ ] Unit tests for retry: null embedding retry, update failure retry, max retries abandon, backoff delay (4+)
-- [ ] Unit tests for backfill: documents found, empty result, OpenSearch error (3+)
-- [ ] `npm run build` succeeds
-- [ ] `npm run lint` passes
-- [ ] Existing tests remain green (`npm run test` — baseline: 47 suites, 700 tests)
+- [x] `EmbeddingPipelineService` class exists at `apps/mcp-server/src/embedding/embedding-pipeline.service.ts`
+- [x] Pipeline subscribes to `'context.change'` events via `@OnEvent('context.change')`
+- [x] Pipeline only processes events with action `'set'` — ignores `'expire'` and `'delete'`
+- [x] On `set` event: fetches `embeddingText` from OpenSearch by composite key, computes embedding via `EmbeddingService.embedDocument()`, partial-updates the OpenSearch document with the vector
+- [x] Queue processes items sequentially (not concurrently)
+- [x] Failed embeddings are re-enqueued with exponential backoff (1s → 2s → 4s → 8s max)
+- [x] Items are abandoned after 3 retries with a warning log
+- [x] Documents deleted between `set` and pipeline processing (404 on get) are skipped without error
+- [x] Startup backfill (`onModuleInit`): queries OpenSearch for documents without `embedding` field, enqueues them for processing
+- [x] Startup backfill handles OpenSearch unavailability gracefully (logs warning, skips)
+- [x] `EmbeddingPipelineService` is provided in `ContextStoreModule.forRoot()` opensearch branch — not in `EmbeddingModule`
+- [x] When backend is `'inmemory'`, the pipeline is NOT instantiated
+- [x] Unit tests for event handling: set/expire/delete filtering, composite key construction (4+)
+- [x] Unit tests for processing: fetch → embed → update flow, 404 skip, sequential processing (4+)
+- [x] Unit tests for retry: null embedding retry, update failure retry, max retries abandon, backoff delay (4+)
+- [x] Unit tests for backfill: documents found, empty result, OpenSearch error (3+)
+- [x] `npm run build` succeeds
+- [x] `npm run lint` passes
+- [x] Existing tests remain green (`npm run test` — baseline: 47 suites, 700 tests)
+
+## Implementation Notes
+
+**Status:** Accepted
+
+**Implementation commit:** bce3935
+
+**Files modified:**
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/embedding/embedding-pipeline.service.ts` | New — 241 lines. Core pipeline service: event handler, queue, drain loop, processItem, retry logic, backfill |
+| `apps/mcp-server/src/embedding/embedding-pipeline.service.spec.ts` | New — 640 lines. 19 tests across 5 describe blocks (event handling, processing, retry, backfill, drain safety) |
+| `apps/mcp-server/src/context-store/context-store.module.ts` | Added `EmbeddingPipelineService` to opensearch branch providers |
+
+**Deviations from ticket:** None. Implementation matches the ticket spec exactly — module wiring in `ContextStoreModule` (not `EmbeddingModule`), file location in `embedding/`, same queue/drain/retry architecture.
+
+**Verification results:**
+- `npm run build` — 4/4 webpack compilations successful
+- `npm run lint` — clean (0 errors, 0 warnings)
+- `npm run test` — 48 suites, 719 tests passed (up from 47 suites / 700 tests baseline)
+
+**Test coverage breakdown:**
+- Event handling: 5 tests (set enqueue, expire ignore, delete ignore, conversation scope key, agent scope key)
+- Processing: 5 tests (full fetch→embed→update flow, 404 skip, meta-404 skip, sequential ordering, empty embeddingText skip)
+- Retry/error: 5 tests (null embed retry, update failure retry, get failure retry, max retries abandon, exponential backoff timing)
+- Startup backfill: 3 tests (documents found + processed, empty result set, OpenSearch unavailable graceful skip)
+- Drain loop safety: 1 test (processing flag reset after completion)
 
 ## Dependencies and References
 
