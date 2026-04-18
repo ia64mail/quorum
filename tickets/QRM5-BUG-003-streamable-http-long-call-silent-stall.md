@@ -91,6 +91,36 @@ Instrumentation deployed 2026-04-17 caught a reproduction on 2026-04-18 during t
 
 **Implication for Phase 2 ordering:** fix #1 (`server.requestTimeout` tuning) is now the primary fix and directly addresses the confirmed failing layer. Fixes #2 (heartbeat) and #3 (keepalive) stay on the plan as defence-in-depth against intermediate-layer idle drops that `requestTimeout` alone does not cover (Docker bridge conntrack, NAT, proxies), but they are no longer blocking.
 
+## Implementation Notes — Phase 2 Fix #1 (2026-04-18)
+
+Applied only fix #1 (`server.requestTimeout` tuning). Fixes #2 (heartbeat) and #3 (keepalive) deferred — not blocking now that the confirmed failing layer is addressed.
+
+**Change:** `apps/mcp-server/src/main.ts` — after `NestFactory.create`, grab the underlying `http.Server` via `app.getHttpServer()` and set `requestTimeout` and `headersTimeout` to `MCP_REQUEST_TIMEOUT_MS + 5 min` (35 min default).
+
+```ts
+const clientTimeoutMs = Number(process.env.MCP_REQUEST_TIMEOUT_MS) || 1_800_000;
+const serverTimeoutMs = clientTimeoutMs + 5 * 60_000;
+const httpServer = app.getHttpServer() as Server;
+httpServer.requestTimeout = serverTimeoutMs;
+httpServer.headersTimeout = serverTimeoutMs;
+```
+
+**Deviations from the Phase 2 plan:**
+
+1. **Env read, not ConfigService injection.** The plan implied reading through `config.mcp.requestTimeoutMs`, but `McpServerConfigService` does not currently expose `mcp` — that config module is consumed by clients (terminal, agent). Widening the server-side ConfigService for a single bootstrap-time value would be disproportionate, so `main.ts` reads `process.env.MCP_REQUEST_TIMEOUT_MS` directly with the same `1_800_000` fallback hardcoded in `libs/common/src/config/mcp.config.ts:12`. If a future change requires the same value elsewhere on the server, promote to a proper `mcp` server config then.
+
+2. **+5 min margin, not disabled (`0`).** The plan mentioned "≥ `MCP_REQUEST_TIMEOUT_MS` (or disabled)". Chose a bounded margin over disabling because it matches the precedent already set for the outgoing undici dispatcher in `apps/mcp-server/src/registry/http-agent-connection.ts:29-37` (same +5-min shape there: client 30 min → undici 35 min). Keeps a safety ceiling — a runaway handler will still be killed eventually rather than holding sockets forever.
+
+3. **Also set `headersTimeout`, not just `requestTimeout`.** Node requires `headersTimeout ≤ requestTimeout` (else it warns and clamps). Raising both together avoids a silent clamp surprise if defaults ever shift.
+
+**Not yet done (intentionally deferred):**
+- SSE heartbeat (Phase 2 fix #2) — ~15–25 lines in `McpController.handlePost` plus a config knob. Defence-in-depth against intermediate-layer idle drops.
+- TCP keepalive (Phase 2 fix #3) — `setKeepAlive(true, 30_000)` on both sides. Defence-in-depth against zombie ESTABLISHED sockets.
+
+Reassess need for #2 and #3 after the next long-running session under the new `requestTimeout`. If stalls fully disappear, they may stay deferred; if a different stall signature appears (e.g., no POST close event, client never sees bytes despite handler returning), #2 is the next move.
+
+**Validation state:** build + lint pass on the change. Runtime validation requires rebuilding the mcp-server docker image and rerunning a long (>5 min) developer invocation to confirm the stall is gone.
+
 ## Acceptance Criteria
 
 ### Ancillary (tool-loop budget)
