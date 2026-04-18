@@ -50,17 +50,46 @@ Deploy, reproduce (long dev or teamlead invocation, observed to trigger the stal
 
 ### Phase 2 — Hardening (after Phase 1 pinpoints the layer)
 
-Two candidate fixes, both cheap; likely apply both regardless of Phase 1 outcome:
+Phase 1 evidence (see Implementation Notes below) points to Node's HTTP `server.requestTimeout` as the dominant cause. Land fix #1 first; #2 and #3 are defence-in-depth.
 
-**1. SSE comment-frame heartbeat from the MCP server during in-flight tool calls.** `StreamableHTTPServerTransport` holds the POST response open while the handler runs; emit `:\n\n` comment frames on a 15–30s interval to keep the stream warm and surface a broken connection immediately (write will error rather than silently buffer). The SDK may not expose a hook for this directly — if not, the fix involves a thin wrapper transport or a periodic writer attached to the response object in `McpController`.
+**1. Raise (or disable) `server.requestTimeout` on the mcp-server HTTP server.** Node 18+ defaults `http.Server.requestTimeout` to 300_000ms (5 min) and silently kills the response socket when a request exceeds it — this is what the Phase 1 logs caught. Mirror the pattern already used for outgoing calls in `apps/mcp-server/src/registry/http-agent-connection.ts:29-37` (undici `headersTimeout`/`bodyTimeout` raised to 35 min): in `apps/mcp-server/src/main.ts` after `NestFactory.create`, grab the underlying HTTP server via `app.getHttpServer()` and set `requestTimeout` and `headersTimeout` to ≥ `MCP_REQUEST_TIMEOUT_MS` (currently 30 min) so the client-side `AbortController` remains the sole timeout authority. Roughly 3–5 lines.
 
-**2. TCP keepalive on the transport socket.** Enable `socket.setKeepAlive(true, 30_000)` on the underlying socket for both the server-side HTTP response and the client-side fetch. This causes the kernel to send keepalive probes on idle connections so dead flows are detected and torn down rather than persisting as zombie `ESTABLISHED` sockets. Node HTTP doesn't set this by default.
+**2. SSE comment-frame heartbeat from the MCP server during in-flight tool calls.** `StreamableHTTPServerTransport` holds the POST response open while the handler runs; emit `:\n\n` comment frames on a 15–30s interval to keep the stream warm and surface a broken connection immediately (write will error rather than silently buffer). Implement in `McpController.handlePost` as a `setInterval` that writes `: keepalive\n\n` only once `res.headersSent` and content-type contains `text/event-stream`, cleared on `close`/`finish`. Guards against intermediate-layer idle drops (Docker bridge conntrack, NAT, proxies) that `requestTimeout` tuning wouldn't touch.
+
+**3. TCP keepalive on the transport socket.** Enable `socket.setKeepAlive(true, 30_000)` on the underlying socket for both the server-side HTTP response and the client-side fetch. This causes the kernel to send keepalive probes on idle connections so dead flows are detected and torn down rather than persisting as zombie `ESTABLISHED` sockets. Node HTTP doesn't set this by default.
 
 ### What not to do
 
 - **Do not reduce `MCP_REQUEST_TIMEOUT_MS`.** That was QRM4-BUG-002's mistake direction — the 30-min timeout is a safety net, not a fix. Shorter timeouts only mean recovery starts sooner; they don't address the silent stall.
 - **Do not retry automatically on stall.** Duplicate-invocation prevention is tracked separately in [ICEBOX #1](ICEBOX.md#1-duplicate-invocation-prevention-message-broker) and is out of scope here.
 - **Do not land Phase 2 without Phase 1 evidence.** Heartbeat + keepalive are plausible fixes, but absent instrumentation we cannot confirm they address the actual failing layer.
+
+## Implementation Notes — Phase 1 Findings (2026-04-18)
+
+Instrumentation deployed 2026-04-17 caught a reproduction on 2026-04-18 during the QRM5-006 implementation session. The logs pinpoint the failing layer unambiguously: **the mcp-server HTTP server is terminating the response socket at ~300s before the tool handler returns.**
+
+**Reproduction timeline (correlationId `55dd5ed5-3a87-45dc-8744-8267fa2472a7`, moderator → developer):**
+
+| UTC time       | Event                                                                 | Source                     |
+|----------------|-----------------------------------------------------------------------|----------------------------|
+| 13:22:32.351   | `invoke_agent` received by McpService                                 | mcp-server                 |
+| 13:22:32.387   | Developer InvocationHandler: "Invocation received"                    | developer                  |
+| 13:22:32→13:27:37 | Developer executes the ticket (read files, write code, build, lint, test, commit) | developer          |
+| **13:27:33.054** | **`POST close: sessionId=f105acc9... writableFinished=false durationMs=300705`** | **mcp-server** |
+| 13:27:37.094   | Developer: "Invocation complete"                                      | developer                  |
+| 13:27:37.150   | `MessageBroker.Completed: target=developer success=true`              | mcp-server                 |
+| 13:27:37.151   | `invoke_agent returning: success=true handlerMs=304799`               | mcp-server (SDK write)     |
+| ~13:52:32      | Expected client-side 30-min timeout recovery                          | terminal                   |
+
+**Smoking gun:** the server-side POST response socket closed with `writableFinished=false` at `durationMs=300705` (≈5:00.7) — four seconds *before* the broker resolved and the SDK tried to write the result. When the SDK's `res.write(...)` fired, the response was already dead. All three prior successful invokes on the same session completed in under 300s (291 745, 294 505, 225 402 ms) and closed cleanly (`writableFinished=true`). The handler that crossed the 300s line got killed.
+
+**Layer classification vs. Phase 1 acceptance criteria:** this is **not** case (c) "server closes cleanly but client never sees bytes" — the prior working hypothesis. It is a variant of case (b): the server's response stream is closed by the Node HTTP stack itself *before* the tool handler returns, so there is no clean SDK write for the client to ever receive. The SSE stream never sees the final JSON-RPC response because the response object is already finished.
+
+**Root cause:** Node.js `http.Server.requestTimeout` defaults to 300 000ms in Node 18+. The MCP server's Express app was never tuned, so `requestTimeout` is silently enforcing a 5-minute ceiling on every POST. The exact 300.7s duration at the kill boundary matches this default to well within single-digit seconds of jitter.
+
+**Corroborating evidence already in the codebase:** `apps/mcp-server/src/registry/http-agent-connection.ts:29-37` documents the exact same 300s default on the *outgoing* undici side and raises both `headersTimeout` and `bodyTimeout` to 35 minutes for agent calls. The incoming HTTP server is the mirror case that was missed.
+
+**Implication for Phase 2 ordering:** fix #1 (`server.requestTimeout` tuning) is now the primary fix and directly addresses the confirmed failing layer. Fixes #2 (heartbeat) and #3 (keepalive) stay on the plan as defence-in-depth against intermediate-layer idle drops that `requestTimeout` alone does not cover (Docker bridge conntrack, NAT, proxies), but they are no longer blocking.
 
 ## Acceptance Criteria
 
@@ -75,6 +104,7 @@ Two candidate fixes, both cheap; likely apply both regardless of Phase 1 outcome
 - [ ] Diagnostic findings are documented in this ticket's Implementation Notes before Phase 2 begins
 
 ### Phase 2 (hardening)
+- [ ] `server.requestTimeout` (and `headersTimeout`) on the mcp-server HTTP server raised to ≥ `MCP_REQUEST_TIMEOUT_MS` (or disabled), matching the pattern in `apps/mcp-server/src/registry/http-agent-connection.ts:29-37`
 - [ ] SSE heartbeat frames (`:\n\n`) emitted from the MCP server on a configurable interval (default 15–30s) while a tool handler is in flight
 - [ ] `setKeepAlive(true, 30_000)` applied to both server-side response sockets and client-side fetch sockets
 - [ ] A long-running tool call (≥10 min simulated, e.g., developer handler with an artificial delay) returns its result over Streamable HTTP without stalling, on a fresh session
@@ -87,6 +117,7 @@ Two candidate fixes, both cheap; likely apply both regardless of Phase 1 outcome
 - Discovered: 2026-04-17 QRM5-004/QRM5-005 session. Stalled invocations:
   - `c0792d0b-0d61-4a20-98a3-3b300ad0578f` (developer, duration 401029ms)
   - `368d62f7-5225-4f4f-bf36-58ad80a76e4a` (teamlead, duration 309073ms)
+- Re-reproduced 2026-04-18 QRM5-006 session with Phase 1 instrumentation: `55dd5ed5-3a87-45dc-8744-8267fa2472a7` (developer, handlerMs=304799). POST socket closed at `durationMs=300705` with `writableFinished=false` — see Implementation Notes.
 - Promoted from [ICEBOX #4](ICEBOX.md#4-silent-stall-of-long-running-tool-responses-over-streamable-http)
 - Related: [QRM4-BUG-002](QRM4-BUG-002-mcp-client-timeout-mismatch.md) — same class of bug, opposite direction; see its Fix History for the "diagnose-before-fix" precedent
 - Related: [ICEBOX #1](ICEBOX.md#1-duplicate-invocation-prevention-message-broker) — duplicate-invocation risk amplified by each stall/retry cycle
