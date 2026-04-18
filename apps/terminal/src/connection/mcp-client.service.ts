@@ -77,10 +77,51 @@ export class McpClientService implements OnApplicationShutdown {
     const serverUrl = `${this.config.mcp.serverUrl}/mcp`;
     const timeoutMs = this.config.mcp.requestTimeoutMs;
     this.transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
-      fetch: (url, init) => {
+      fetch: async (url, init) => {
+        const fetchStart = Date.now();
+        const method = init?.method ?? 'GET';
+
         const signals: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
         if (init?.signal) signals.push(init.signal);
-        return fetch(url, { ...init, signal: AbortSignal.any(signals) });
+
+        const response = await fetch(url, {
+          ...init,
+          signal: AbortSignal.any(signals),
+        });
+
+        // QRM5-BUG-003 Phase 1 instrumentation: response stream lifecycle.
+        // Logs first byte arrival and stream close to distinguish server-side
+        // silence (no first byte) from mid-stream drops (first byte logged but
+        // close never fires before client timeout).
+        if (!response.body) return response;
+
+        let firstByteLogged = false;
+        let bytes = 0;
+        const instrumented = new TransformStream<Uint8Array, Uint8Array>({
+          transform: (chunk, controller) => {
+            if (!firstByteLogged) {
+              firstByteLogged = true;
+              this.logger.debug(
+                `fetch ${method} first byte: elapsedMs=${Date.now() - fetchStart}`,
+              );
+            }
+            bytes += chunk.byteLength;
+            controller.enqueue(chunk);
+          },
+          flush: () => {
+            this.logger.debug(
+              `fetch ${method} stream close: ` +
+                `elapsedMs=${Date.now() - fetchStart} bytes=${bytes} ` +
+                `firstByte=${firstByteLogged}`,
+            );
+          },
+        });
+
+        return new Response(response.body.pipeThrough(instrumented), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
       },
     });
     this.client = new Client({

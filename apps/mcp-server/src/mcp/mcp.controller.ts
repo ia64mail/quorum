@@ -35,6 +35,25 @@ export class McpController {
   async handlePost(@Req() req: Request, @Res() res: Response): Promise<void> {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
+    // QRM5-BUG-003 Phase 1 instrumentation: track POST response lifecycle.
+    // Closure reads `capturedSessionId` at event-fire time so new-session POSTs
+    // pick up the SDK-assigned id after `handleRequest`.
+    let capturedSessionId = sessionId;
+    const postStart = Date.now();
+    res.on('finish', () => {
+      this.logger.debug(
+        `POST finish: sessionId=${capturedSessionId ?? 'new'} ` +
+          `status=${res.statusCode} durationMs=${Date.now() - postStart}`,
+      );
+    });
+    res.on('close', () => {
+      this.logger.debug(
+        `POST close: sessionId=${capturedSessionId ?? 'new'} ` +
+          `status=${res.statusCode} writableFinished=${res.writableFinished} ` +
+          `durationMs=${Date.now() - postStart}`,
+      );
+    });
+
     if (sessionId && this.sessions.has(sessionId)) {
       const transport = this.sessions.get(sessionId)!;
       await transport.handleRequest(req, res, req.body);
@@ -59,6 +78,7 @@ export class McpController {
     // Session ID is only available after handleRequest has processed the initialize request
     const newSessionId = transport.sessionId;
     if (newSessionId) {
+      capturedSessionId = newSessionId;
       this.sessions.set(newSessionId, transport);
       this.logger.log(`Session created: ${newSessionId}`);
     }

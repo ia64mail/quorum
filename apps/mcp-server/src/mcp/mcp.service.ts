@@ -149,7 +149,19 @@ export class McpService implements OnModuleInit {
           sessionId: args.sessionId,
         };
 
+        const handlerStart = Date.now();
         const response = await this.messageBroker.invoke(request);
+
+        // QRM5-BUG-003 Phase 1 instrumentation: SDK write boundary.
+        // Logged after broker resolution, immediately before the SDK serializes
+        // and writes the tool result to the transport. Pairs with controller
+        // `POST finish/close` to localize stalls between handler return and
+        // on-wire response.
+        this.logger.debug(
+          `invoke_agent returning: correlationId=${correlationId} ` +
+            `target=${args.target} success=${response.success} ` +
+            `handlerMs=${Date.now() - handlerStart}`,
+        );
 
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(response) }],

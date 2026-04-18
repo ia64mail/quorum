@@ -804,7 +804,7 @@ describe('ChatService', () => {
         usage: { ...defaultUsage },
       };
 
-      for (let i = 0; i < 9; i++) {
+      for (let i = 0; i < 14; i++) {
         mockChat.mockResolvedValueOnce(
           toolUseResponse([{ id: `tu_${i}`, name: 'some_tool', input: {} }]),
         );
@@ -816,7 +816,7 @@ describe('ChatService', () => {
       const result = await callProcessWithLoop();
 
       expect(result.text).toContain('Partial progress');
-      expect(result.text).toContain('maximum of 10 rounds');
+      expect(result.text).toContain('maximum of 15 rounds');
     });
 
     it('should return user-friendly message when max rounds exceeded with no text', async () => {

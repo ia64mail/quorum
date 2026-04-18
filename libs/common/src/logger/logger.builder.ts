@@ -170,6 +170,7 @@ export class LoggerBuilder {
     if (this.addConsole) {
       transports.push(
         new winston.transports.Console({
+          level: winstonLevel,
           format: nestConsoleFormat(),
         }),
       );
@@ -181,6 +182,7 @@ export class LoggerBuilder {
       transports.push(
         new winston.transports.File({
           filename: join(this.jsonDir, filename),
+          level: 'debug',
           format: nestJsonFormat(this.agentRole),
         }),
       );
@@ -191,9 +193,11 @@ export class LoggerBuilder {
       transports.push(new winston.transports.Console({ silent: true }));
     }
 
+    // Top-level is permissive; console and file transports filter independently
+    // so the JSONL capture can always retain debug even when LOG_LEVEL is warn.
     const logger = winston.createLogger({
       levels: CUSTOM_LEVELS,
-      level: winstonLevel,
+      level: 'verbose',
       transports,
     });
 

@@ -24,12 +24,14 @@ function mockReq(
 interface MockResponse {
   status: jest.Mock;
   json: jest.Mock;
+  on: jest.Mock;
 }
 
 function mockRes(): { res: Response; mock: MockResponse } {
   const mock: MockResponse = {
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
+    on: jest.fn().mockReturnThis(),
   };
   return { res: mock as unknown as Response, mock };
 }
