@@ -5,6 +5,7 @@ import { InMemoryStore } from './in-memory-store';
 import { OpenSearchStore } from './opensearch/opensearch-store';
 import { OpenSearchModule } from './opensearch/opensearch.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
+import { EmbeddingPipelineService } from '../embedding/embedding-pipeline.service';
 
 /**
  * Provides the {@link ContextStore} injection token backed by either
@@ -29,7 +30,10 @@ export class ContextStoreModule {
           OpenSearchModule,
           EmbeddingModule,
         ],
-        providers: [{ provide: ContextStore, useClass: OpenSearchStore }],
+        providers: [
+          { provide: ContextStore, useClass: OpenSearchStore },
+          EmbeddingPipelineService,
+        ],
         exports: [ContextStore],
       };
     }
