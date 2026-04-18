@@ -10,12 +10,14 @@ async function bootstrap() {
   app.enableShutdownHooks();
   const config = app.get(McpServerConfigService);
 
-  // QRM5-BUG-003: Node's http.Server.requestTimeout defaults to 300s (5 min)
-  // and silently kills the response socket on longer requests, stalling any
-  // tool handler that runs past 5 minutes. Raise past MCP_REQUEST_TIMEOUT_MS
-  // (default 30 min, see libs/common/src/config/mcp.config.ts) so the
-  // client-side AbortController remains the sole timeout authority — mirrors
-  // the outgoing-side fix at apps/mcp-server/src/registry/http-agent-connection.ts.
+  // QRM5-BUG-003: defence-in-depth. Node's http.Server defaults both
+  // `requestTimeout` and `headersTimeout` to 300s — these apply to slow
+  // *incoming* request bodies, not slow responses, so they are NOT the
+  // actual cause of long-call stalls (the real fix is client-side undici
+  // `bodyTimeout`; see apps/terminal/src/connection/mcp-client.service.ts).
+  // Raising them anyway so the client-side AbortController remains the sole
+  // timeout authority across the whole stack, matching the outgoing-side
+  // pattern in apps/mcp-server/src/registry/http-agent-connection.ts.
   const clientTimeoutMs =
     Number(process.env.MCP_REQUEST_TIMEOUT_MS) || 1_800_000;
   const serverTimeoutMs = clientTimeoutMs + 5 * 60_000;

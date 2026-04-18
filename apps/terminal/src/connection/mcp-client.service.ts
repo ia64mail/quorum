@@ -2,6 +2,7 @@ import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { Agent as UndiciAgent, fetch as undiciFetch } from 'undici';
 import { TerminalConfigService } from '../config';
 
 const MAX_RETRIES = 10;
@@ -17,6 +18,16 @@ export class McpClientService implements OnApplicationShutdown {
   private reconnecting = false;
   private shuttingDown = false;
   private cachedTools: Tool[] = [];
+
+  // QRM5-BUG-003: undici defaults `headersTimeout`/`bodyTimeout` to 300s (5 min).
+  // invoke_agent responses from the MCP server can take >5 min while the
+  // target agent is working; without this dispatcher the response stream
+  // gets killed at exactly 5 min regardless of MCP_REQUEST_TIMEOUT_MS.
+  // Mirrors apps/mcp-server/src/registry/http-agent-connection.ts.
+  private readonly dispatcher = new UndiciAgent({
+    headersTimeout: 35 * 60_000,
+    bodyTimeout: 35 * 60_000,
+  });
 
   constructor(private readonly config: TerminalConfigService) {}
 
@@ -84,16 +95,17 @@ export class McpClientService implements OnApplicationShutdown {
         const signals: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
         if (init?.signal) signals.push(init.signal);
 
-        const response = await fetch(url, {
-          ...init,
+        const response = await undiciFetch(url, {
+          ...(init as Parameters<typeof undiciFetch>[1]),
           signal: AbortSignal.any(signals),
+          dispatcher: this.dispatcher,
         });
 
         // QRM5-BUG-003 Phase 1 instrumentation: response stream lifecycle.
         // Logs first byte arrival and stream close to distinguish server-side
         // silence (no first byte) from mid-stream drops (first byte logged but
         // close never fires before client timeout).
-        if (!response.body) return response;
+        if (!response.body) return response as unknown as Response;
 
         let firstByteLogged = false;
         let bytes = 0;
@@ -117,10 +129,11 @@ export class McpClientService implements OnApplicationShutdown {
           },
         });
 
-        return new Response(response.body.pipeThrough(instrumented), {
+        const body = response.body as unknown as ReadableStream<Uint8Array>;
+        return new Response(body.pipeThrough(instrumented), {
           status: response.status,
           statusText: response.statusText,
-          headers: response.headers,
+          headers: response.headers as unknown as HeadersInit,
         });
       },
     });

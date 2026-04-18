@@ -93,33 +93,52 @@ Instrumentation deployed 2026-04-17 caught a reproduction on 2026-04-18 during t
 
 ## Implementation Notes — Phase 2 Fix #1 (2026-04-18)
 
-Applied only fix #1 (`server.requestTimeout` tuning). Fixes #2 (heartbeat) and #3 (keepalive) deferred — not blocking now that the confirmed failing layer is addressed.
+Shipped in two passes:
 
-**Change:** `apps/mcp-server/src/main.ts` — after `NestFactory.create`, grab the underlying `http.Server` via `app.getHttpServer()` and set `requestTimeout` and `headersTimeout` to `MCP_REQUEST_TIMEOUT_MS + 5 min` (35 min default).
+- **Pass 1 (commit `646ea54`):** Raised `server.requestTimeout`/`headersTimeout` on the mcp-server HTTP server. Based on the 300.7s correlation in the Phase 1 logs, this looked like the fix. It was not — see Pass 2.
+- **Pass 2 (this update):** After Pass 1 deployed and a fresh long invocation stalled with the same 300.5s signature (correlationId `b4acdd0b-c9c3-42cc-a10f-c19ec009dd4b`, 2026-04-18 14:29→14:34), root cause was re-diagnosed: the 300s ceiling lives on the **client-side undici dispatcher**, not the server. Shipped the real fix by attaching a custom `UndiciAgent` dispatcher to the terminal and agent `fetch` wrappers.
 
-```ts
-const clientTimeoutMs = Number(process.env.MCP_REQUEST_TIMEOUT_MS) || 1_800_000;
-const serverTimeoutMs = clientTimeoutMs + 5 * 60_000;
-const httpServer = app.getHttpServer() as Server;
-httpServer.requestTimeout = serverTimeoutMs;
-httpServer.headersTimeout = serverTimeoutMs;
-```
+### Corrected diagnosis
 
-**Deviations from the Phase 2 plan:**
+Node's `http.Server.requestTimeout` applies to *receiving a slow incoming request body*, not to a slow response. The `invoke_agent` request body is a small JSON payload received in milliseconds, so the server-side timer never fires for this scenario. Pass 1 raised it anyway, but that fix is orthogonal to the actual stall.
 
-1. **Env read, not ConfigService injection.** The plan implied reading through `config.mcp.requestTimeoutMs`, but `McpServerConfigService` does not currently expose `mcp` — that config module is consumed by clients (terminal, agent). Widening the server-side ConfigService for a single bootstrap-time value would be disproportionate, so `main.ts` reads `process.env.MCP_REQUEST_TIMEOUT_MS` directly with the same `1_800_000` fallback hardcoded in `libs/common/src/config/mcp.config.ts:12`. If a future change requires the same value elsewhere on the server, promote to a proper `mcp` server config then.
+The actual 300s killer is **undici's default `bodyTimeout`** (also 300 000 ms). Node's built-in `fetch` is undici. When the terminal `fetch` wrapper awaits the response body from the MCP POST, undici waits up to `bodyTimeout` for the next byte on that body stream; for a long-running tool handler, the server holds the SSE stream open without writing, and undici kills it at the 5-minute mark. That the outgoing side of the mcp-server already documents this exact default (`apps/mcp-server/src/registry/http-agent-connection.ts:29-37`) for its own 30-min agent calls — and fixes it with a custom `UndiciAgent` dispatcher — was the precedent staring at us. The terminal and agent `fetch` wrappers never got the same treatment.
 
-2. **+5 min margin, not disabled (`0`).** The plan mentioned "≥ `MCP_REQUEST_TIMEOUT_MS` (or disabled)". Chose a bounded margin over disabling because it matches the precedent already set for the outgoing undici dispatcher in `apps/mcp-server/src/registry/http-agent-connection.ts:29-37` (same +5-min shape there: client 30 min → undici 35 min). Keeps a safety ceiling — a runaway handler will still be killed eventually rather than holding sockets forever.
+Log correlation for the Pass-1 failure to repro:
 
-3. **Also set `headersTimeout`, not just `requestTimeout`.** Node requires `headersTimeout ≤ requestTimeout` (else it warns and clamps). Raising both together avoids a silent clamp surprise if defaults ever shift.
+| UTC time       | Event                                                                            |
+|----------------|----------------------------------------------------------------------------------|
+| 14:29:11.270   | Terminal: "Calling tool: invoke_agent" (correlationId `b4acdd0b…`)                |
+| 14:29:11.275   | mcp-server: `invoke_agent: moderator → developer`                                 |
+| 14:34:11.799   | mcp-server: `POST close ... writableFinished=false durationMs=300526` ← client cut |
+| 14:34:51.294   | mcp-server: `MessageBroker.Completed success=true` (40s after socket died)         |
 
-**Not yet done (intentionally deferred):**
-- SSE heartbeat (Phase 2 fix #2) — ~15–25 lines in `McpController.handlePost` plus a config knob. Defence-in-depth against intermediate-layer idle drops.
-- TCP keepalive (Phase 2 fix #3) — `setKeepAlive(true, 30_000)` on both sides. Defence-in-depth against zombie ESTABLISHED sockets.
+The socket closure at 300.5s is the terminal's undici dispatcher giving up on the response body — not anything on the server.
 
-Reassess need for #2 and #3 after the next long-running session under the new `requestTimeout`. If stalls fully disappear, they may stay deferred; if a different stall signature appears (e.g., no POST close event, client never sees bytes despite handler returning), #2 is the next move.
+### Changes
 
-**Validation state:** build + lint pass on the change. Runtime validation requires rebuilding the mcp-server docker image and rerunning a long (>5 min) developer invocation to confirm the stall is gone.
+- `apps/terminal/src/connection/mcp-client.service.ts` — swap global `fetch` → `undici.fetch`; add `UndiciAgent` dispatcher with `headersTimeout: 35 * 60_000`, `bodyTimeout: 35 * 60_000`; cast `init` / response at the type boundary (undici and global DOM types are runtime-compatible but TS-divergent).
+- `apps/agent/src/connection/mcp-client.service.ts` — same change; protects nested invokes (agent A → agent B) whose return trip uses the same client wrapper.
+- `apps/mcp-server/src/main.ts` — Pass-1 change kept. Comment rewritten to state the truth: this is defence-in-depth, not the primary fix. Reason for keeping: it's already shipped, it's cheap, and it preserves the "client AbortController is the sole timeout authority" invariant end-to-end, matching the outgoing side's same +5-min margin.
+
+### Deviations from the Phase 2 plan
+
+1. **Primary fix moved client-side.** The plan put `server.requestTimeout` as fix #1 based on Phase 1's 300s correlation, but that turned out to be the wrong layer (see Corrected diagnosis). The real primary fix is an undici dispatcher on the terminal/agent fetch wrappers — same *shape* as the plan, different *side* of the wire.
+2. **Symmetry: agent client also patched.** The original plan focused on terminal↔mcp-server. Agent↔mcp-server has the identical default-undici issue for nested invokes, so the same dispatcher was applied to `apps/agent/src/connection/mcp-client.service.ts`.
+3. **+5 min margin, not disabled.** Mirrors `http-agent-connection.ts` exactly (client 30 min → undici 35 min). Bounded margin keeps a safety ceiling instead of letting a runaway handler hold sockets forever.
+4. **TypeScript boundary casts.** The global `fetch` / DOM `Response` types and undici's own types are runtime-compatible but TS-divergent (global Blob vs buffer.Blob, `stream/web` vs global ReadableStream). Applied narrow casts at the call site (`init as Parameters<typeof undiciFetch>[1]`, `response as unknown as Response`) rather than weakening the signature — keeps the fetch option's type contract with the MCP SDK.
+5. **Server-side `requestTimeout` kept, not reverted.** Pass-1 commit `646ea54` is left in place as defence-in-depth with an updated comment reflecting its real role. Reverting would churn another commit and weaken the (admittedly edge-case) slowloris margin without benefit.
+
+### Not yet done (intentionally deferred)
+
+- SSE heartbeat (Phase 2 fix #2) — defence-in-depth against intermediate-layer idle drops (Docker bridge conntrack, NAT, proxies).
+- TCP keepalive (Phase 2 fix #3) — defence-in-depth against zombie ESTABLISHED sockets.
+
+Reassess after the next long-running session under the new dispatcher. If stalls disappear, both may stay deferred; if a different signature appears (e.g., client sees first byte then mid-stream drop), #2 is the next move.
+
+### Validation state
+
+Build + lint + tests (47 suites / 700 tests) pass. Runtime validation requires rebuilding the terminal and agent docker images and rerunning a >5-min developer invocation to confirm the stall is gone.
 
 ## Acceptance Criteria
 
@@ -134,7 +153,9 @@ Reassess need for #2 and #3 after the next long-running session under the new `r
 - [ ] Diagnostic findings are documented in this ticket's Implementation Notes before Phase 2 begins
 
 ### Phase 2 (hardening)
-- [ ] `server.requestTimeout` (and `headersTimeout`) on the mcp-server HTTP server raised to ≥ `MCP_REQUEST_TIMEOUT_MS` (or disabled), matching the pattern in `apps/mcp-server/src/registry/http-agent-connection.ts:29-37`
+- [x] `server.requestTimeout` (and `headersTimeout`) on the mcp-server HTTP server raised to ≥ `MCP_REQUEST_TIMEOUT_MS` (defence-in-depth; not the primary cause — see Implementation Notes)
+- [x] Custom `UndiciAgent` dispatcher with `headersTimeout`/`bodyTimeout` = 35 min applied to the terminal fetch wrapper (`apps/terminal/src/connection/mcp-client.service.ts`) — the actual primary fix
+- [x] Same dispatcher applied to the agent fetch wrapper (`apps/agent/src/connection/mcp-client.service.ts`) for nested-invoke symmetry
 - [ ] SSE heartbeat frames (`:\n\n`) emitted from the MCP server on a configurable interval (default 15–30s) while a tool handler is in flight
 - [ ] `setKeepAlive(true, 30_000)` applied to both server-side response sockets and client-side fetch sockets
 - [ ] A long-running tool call (≥10 min simulated, e.g., developer handler with an artificial delay) returns its result over Streamable HTTP without stalling, on a fresh session
@@ -148,6 +169,7 @@ Reassess need for #2 and #3 after the next long-running session under the new `r
   - `c0792d0b-0d61-4a20-98a3-3b300ad0578f` (developer, duration 401029ms)
   - `368d62f7-5225-4f4f-bf36-58ad80a76e4a` (teamlead, duration 309073ms)
 - Re-reproduced 2026-04-18 QRM5-006 session with Phase 1 instrumentation: `55dd5ed5-3a87-45dc-8744-8267fa2472a7` (developer, handlerMs=304799). POST socket closed at `durationMs=300705` with `writableFinished=false` — see Implementation Notes.
+- Re-reproduced again 2026-04-18 after Pass-1 server-side fix landed: `b4acdd0b-c9c3-42cc-a10f-c19ec009dd4b` (developer, handlerMs=340019). Same `durationMs=300526` `writableFinished=false` close. Triggered the corrected client-side diagnosis and the Pass-2 undici dispatcher fix.
 - Promoted from [ICEBOX #4](ICEBOX.md#4-silent-stall-of-long-running-tool-responses-over-streamable-http)
 - Related: [QRM4-BUG-002](QRM4-BUG-002-mcp-client-timeout-mismatch.md) — same class of bug, opposite direction; see its Fix History for the "diagnose-before-fix" precedent
 - Related: [ICEBOX #1](ICEBOX.md#1-duplicate-invocation-prevention-message-broker) — duplicate-invocation risk amplified by each stall/retry cycle
