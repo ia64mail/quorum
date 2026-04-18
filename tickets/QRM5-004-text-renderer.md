@@ -223,24 +223,24 @@ Based on `composite-key-builder.ts` / `.spec.ts` and broader codebase patterns:
 
 ## Acceptance Criteria
 
-- [ ] `toEmbeddingText()` function exists at `libs/common/src/context-store/to-embedding-text.ts`
-- [ ] Function takes a `ContextItem` and returns a `string`
-- [ ] Output starts with the item's `key` as the header line, followed by a blank line, then the rendered value
-- [ ] String values are appended as-is after the header
-- [ ] Object values render as `"label: value"` lines with camelCase/snake_case keys converted to space-separated labels
-- [ ] Array values render as bulleted lists (`- item`) with indentation
-- [ ] Nested structures render recursively with increasing indentation (2 spaces per level)
-- [ ] Null and undefined values produce minimal output (key header only or key with empty body)
-- [ ] Number and boolean values render as their string representation
-- [ ] Output is truncated at `MAX_EMBEDDING_CHARS` (~1500 characters) with a `[truncated]` marker
-- [ ] Truncation preserves the key header (front-loaded information)
-- [ ] The `MAX_EMBEDDING_CHARS` constant uses `text.length / 3` token estimation (not `/4`)
-- [ ] The roadmap example (QRM4-BUG-015 record from D6) renders correctly
-- [ ] `toEmbeddingText` is exported from `libs/common/src/context-store/index.ts` barrel
-- [ ] Comprehensive test suite at `libs/common/src/context-store/to-embedding-text.spec.ts` covering: string values, object values, array values, primitives (number, boolean, null, undefined), key label conversion (camelCase, snake_case), nested structures, truncation, edge cases (empty objects, deeply nested, null array elements)
-- [ ] `npm run build` succeeds
-- [ ] `npm run lint` passes
-- [ ] Existing tests remain green (`npm run test` — baseline: 44 suites, 633 tests)
+- [x] `toEmbeddingText()` function exists at `libs/common/src/context-store/to-embedding-text.ts`
+- [x] Function takes a `ContextItem` and returns a `string`
+- [x] Output starts with the item's `key` as the header line, followed by a blank line, then the rendered value
+- [x] String values are appended as-is after the header
+- [x] Object values render as `"label: value"` lines with camelCase/snake_case keys converted to space-separated labels
+- [x] Array values render as bulleted lists (`- item`) with indentation
+- [x] Nested structures render recursively with increasing indentation (2 spaces per level)
+- [x] Null and undefined values produce minimal output (key header only or key with empty body)
+- [x] Number and boolean values render as their string representation
+- [x] Output is truncated at `MAX_EMBEDDING_CHARS` (~1500 characters) with a `[truncated]` marker
+- [x] Truncation preserves the key header (front-loaded information)
+- [x] The `MAX_EMBEDDING_CHARS` constant uses `text.length / 3` token estimation (not `/4`)
+- [x] The roadmap example (QRM4-BUG-015 record from D6) renders correctly
+- [x] `toEmbeddingText` is exported from `libs/common/src/context-store/index.ts` barrel
+- [x] Comprehensive test suite at `libs/common/src/context-store/to-embedding-text.spec.ts` covering: string values, object values, array values, primitives (number, boolean, null, undefined), key label conversion (camelCase, snake_case), nested structures, truncation, edge cases (empty objects, deeply nested, null array elements)
+- [x] `npm run build` succeeds
+- [x] `npm run lint` passes
+- [x] Existing tests remain green (`npm run test` — baseline: 44 suites, 633 tests)
 
 ## Dependencies and References
 
@@ -274,3 +274,32 @@ Based on `composite-key-builder.ts` / `.spec.ts` and broader codebase patterns:
    - **Truncation boundary:** The roadmap specifies ~500 embedding tokens / 1500 chars. Should the renderer also expose the `MAX_EMBEDDING_CHARS` constant for consumers that need to reason about text length (e.g., EmbeddingPipeline logging)? Or keep it strictly private?
    - **Rendering fidelity vs embedding quality trade-off:** The current design renders all object keys and array items. For very large records (e.g., a `changes` array with 20 file entries), the truncation will cut mid-record. Should there be a strategy for eliding middle elements (e.g., showing first N and last M) or is simple truncation acceptable given the key-first front-loading?
    - **`value` type coverage:** The `ContextItem.value` is `unknown`. The renderer handles string, number, boolean, null, undefined, array, and plain object. Are there other runtime types that agents have stored (e.g., `Date` objects, `Map`, `Set`) that need explicit handling? Based on the MCP tool contract (JSON-serializable), these shouldn't occur — but the architect may want to confirm.
+
+## Implementation Notes
+
+**Status:** Complete — Accepted
+
+**Commit:** `2afcd07` — `QRM5-004: add embedding text renderer utility`
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `libs/common/src/context-store/to-embedding-text.ts` | Pure `toEmbeddingText()` function with recursive `renderValue`, `keyToLabel`, and `truncate` helpers. MAX_EMBEDDING_CHARS = 1500 (private constant). |
+| `libs/common/src/context-store/to-embedding-text.spec.ts` | 29 tests: string values (3), object values (5), array values (4), primitives (4), key label conversion (3 — camelCase, snake_case, kebab-case, SCREAMING_SNAKE), roadmap example (1), truncation (3), edge cases (6 — deep nesting, empty objects, null array elements, special chars in key) |
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `libs/common/src/context-store/index.ts` | Added barrel export for `to-embedding-text` |
+
+### Deviations from Ticket Spec
+
+- None. Implementation follows all specified patterns and conventions exactly.
+
+### Verification
+
+- `npm run build` — ✅ 4 apps compiled successfully
+- `npm run lint` — ✅ 0 errors, 0 warnings
+- `npm run test` — ✅ 45 suites, 662 tests, all passing (29 new tests added, baseline was 44 suites / 633 tests)
