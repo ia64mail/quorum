@@ -5,7 +5,7 @@ import { BootstrapContextService } from './bootstrap-context.service';
 import { MessageBroker } from './message-broker.service';
 
 @Module({
-  imports: [RegistryModule, ContextStoreModule],
+  imports: [RegistryModule, ContextStoreModule.forRoot()],
   providers: [MessageBroker, BootstrapContextService],
   exports: [MessageBroker, BootstrapContextService],
 })

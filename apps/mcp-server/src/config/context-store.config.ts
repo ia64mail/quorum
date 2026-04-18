@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 const schema = z.object({
   contextStorePath: z.string().min(1),
+  backend: z.enum(['inmemory', 'opensearch']),
 });
 
 export const contextStoreConfig = registerAs('contextStore', () =>
@@ -11,5 +12,6 @@ export const contextStoreConfig = registerAs('contextStore', () =>
     contextStorePath:
       process.env.CONTEXT_STORE_PATH ??
       path.join(process.env.MCP_WORKSPACE_DIR ?? '.', 'quorum.context'),
+    backend: process.env.CONTEXT_STORE_BACKEND ?? 'inmemory',
   }),
 );
