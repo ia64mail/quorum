@@ -1,9 +1,12 @@
 import { DynamicModule, Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ContextStore } from '@app/common';
+import { contextStoreConfig } from '../config';
 import { InMemoryStore } from './in-memory-store';
 import { OpenSearchStore } from './opensearch/opensearch-store';
 import { OpenSearchModule } from './opensearch/opensearch.module';
+import { MigrationService } from './opensearch/migration.service';
 import { EmbeddingModule } from '../embedding/embedding.module';
 import { EmbeddingPipelineService } from '../embedding/embedding-pipeline.service';
 
@@ -29,9 +32,11 @@ export class ContextStoreModule {
           EventEmitterModule.forRoot(),
           OpenSearchModule,
           EmbeddingModule,
+          ConfigModule.forFeature(contextStoreConfig),
         ],
         providers: [
           { provide: ContextStore, useClass: OpenSearchStore },
+          MigrationService,
           EmbeddingPipelineService,
         ],
         exports: [ContextStore],

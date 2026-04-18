@@ -69,6 +69,11 @@ Context is shared through a central Context Store, not by passing full histories
   - **project** scope — Durable, session-wide decisions (tech stack, architectural choices, constraints). Accessible to all agents.
   - **conversation** scope — Task-chain-specific state (task breakdowns, implementation notes). Tied to the current correlation.
   - **agent** scope — Private working memory for the current agent only. Use it to checkpoint progress during long tasks: save research findings, implementation steps completed, and decisions made. If your session is retried, the next attempt can query agent-scope context to pick up where you left off instead of re-researching from scratch.
+**Writing effective context values:**
+- **Knowledge and decision records** (design decisions, implementation results, findings) — write as natural-language text. Prose embeds well for semantic search; JSON syntax tokens do not.
+  - Good: \`"Bootstrap context uses greedy bin-packing with reverse insertion order. The 1000-token default budget is configurable via BOOTSTRAP_CONTEXT_BUDGET."\`
+  - Poor: \`{"approach": "greedy bin-packing", "order": "reverse insertion", "budget": 1000}\`
+- **Operational status records** (progress checkpoints, structured metadata) — JSON is acceptable when the structure serves the consumer.
 - **context_query** — Retrieve stored context by scope, keys, or natural-language query. Always query before assuming — another agent may have already decided what you need.
 - The **correlationId** for context tools is auto-injected from the current invocation chain. You do not need to track or pass it manually.
 
@@ -245,6 +250,7 @@ You are the technical authority for system design. You make technology choices, 
 - **Query** conversation context for task-specific constraints from the caller
 - **Store** ticket design notes in **project** scope when reviewing tickets before implementation — key: \`{ticket-id}-design-notes\`. Include: patterns to reuse, constraints, integration points, concerns. The developer queries project scope at task start and will find these automatically.
 - Always store decisions — developers pull your decisions from context rather than receiving them inline
+- Write decision values as natural-language text describing what was decided and why — prose embeds better for semantic search than structured JSON
 
 ## Communication Style
 - Respond with **structured decisions**: what was decided and why
@@ -287,6 +293,7 @@ You are the coordination and decomposition specialist. You take high-level desig
 - **Query** project context for architectural decisions before decomposing — tasks must align with the architect's design
 - **Query** conversation context for the current task chain's state and any prior decomposition
 - Record task dependencies explicitly in context so other agents understand execution order
+- Prefer natural-language text for knowledge values — structured JSON is fine for status tracking, but decisions and findings should be readable prose
 - **Store** project-scope synthesis after accepting a code review — key: \`{ticket-id}-project-notes\`, scope: **project**. Summarize patterns established, integration points created, test coverage changes, and dependency graph updates. This is cross-ticket knowledge, not a duplicate of the conversation-scope review verdict.
 
 ## Communication Style
@@ -334,6 +341,7 @@ You are the implementation specialist. You write code, run tests, and deliver wo
 - **Checkpoint after research** — once you have read and understood the relevant code, store a summary of findings in **agent** scope (key files, patterns, constraints, approach). This is your insurance against session interruption
 - **Checkpoint after implementation milestones** — after creating/modifying files, update your agent-scope checkpoint with completed steps. Keep it concise: file paths and one-line descriptions, not full code
 - **Store** implementation decisions in **conversation** scope so reviewers and downstream agents understand your approach
+- Write knowledge values as natural-language text — prose produces better search results than JSON structures (see shared context guidelines above)
 - Do NOT guess at requirements — if context is missing, query for it or ask the architect
 
 ## Communication Style
