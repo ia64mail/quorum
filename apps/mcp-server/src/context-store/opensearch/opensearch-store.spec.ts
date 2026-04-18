@@ -497,12 +497,12 @@ describe('OpenSearchStore', () => {
       const arg = firstCallArg<{
         body: {
           query: { hybrid: { queries: unknown[] } };
-          search_pipeline: string;
         };
+        search_pipeline: string;
       }>(mockSearch);
       expect(arg.body.query.hybrid).toBeDefined();
       expect(arg.body.query.hybrid.queries).toHaveLength(2);
-      expect(arg.body.search_pipeline).toBe('hybrid-search');
+      expect(arg.search_pipeline).toBe('hybrid-search');
     });
 
     it('should fall back to BM25-only when embedQuery returns null', async () => {
@@ -530,8 +530,8 @@ describe('OpenSearchStore', () => {
       const arg = firstCallArg<{
         body: {
           query: { bool: { must: unknown; filter: unknown } };
-          search_pipeline?: string;
         };
+        search_pipeline?: string;
       }>(mockSearch);
       // BM25-only: uses bool query, not hybrid
       expect(arg.body.query.bool).toBeDefined();
@@ -539,7 +539,7 @@ describe('OpenSearchStore', () => {
         match: { embeddingText: 'fallback query' },
       });
       // No search_pipeline for BM25-only
-      expect(arg.body.search_pipeline).toBeUndefined();
+      expect(arg.search_pipeline).toBeUndefined();
     });
 
     it('should include scope and TTL filters in query', async () => {
@@ -625,9 +625,9 @@ describe('OpenSearchStore', () => {
       await store.search(ContextScope.project, 'test query');
 
       const arg = firstCallArg<{
-        body: { search_pipeline: string };
+        search_pipeline: string;
       }>(mockSearch);
-      expect(arg.body.search_pipeline).toBe('hybrid-search');
+      expect(arg.search_pipeline).toBe('hybrid-search');
     });
 
     it('should return empty array on OpenSearch query failure', async () => {

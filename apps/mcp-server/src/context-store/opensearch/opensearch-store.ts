@@ -241,7 +241,6 @@ export class OpenSearchStore extends ContextStore {
               ],
             },
           },
-          search_pipeline: 'hybrid-search',
         };
       } else {
         // BM25-only fallback
@@ -260,10 +259,16 @@ export class OpenSearchStore extends ContextStore {
         };
       }
 
-      const response = (await this.client.search({
+      const searchParams: Record<string, unknown> = {
         index: this.osConfig.index,
         body,
-      })) as SearchResponse;
+      };
+      if (queryEmbedding) {
+        searchParams.search_pipeline = 'hybrid-search';
+      }
+      const response = (await this.client.search(
+        searchParams,
+      )) as SearchResponse;
 
       // Apply token budget
       const tokenBudget = maxTokens ?? Infinity;
