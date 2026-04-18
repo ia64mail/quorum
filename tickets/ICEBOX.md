@@ -59,3 +59,5 @@ Reuse Claude Code SDK sessions across sequential invocations of the same agent r
 **Prerequisite:** Upstream fix for SDK #247. Monitor the issue and re-evaluate when resolved.
 
 **Discovered:** Run 10 cost analysis, 2026-04-10 — [QRM4-BUG-013](QRM4-BUG-013-moderator-conversation-caching.md)
+
+> **Promoted to ticket:** Silent Stall of Long-Running Tool Responses over Streamable HTTP → [QRM5-BUG-003](QRM5-BUG-003-streamable-http-long-call-silent-stall.md) (2026-04-17, after second occurrence in the same session)
