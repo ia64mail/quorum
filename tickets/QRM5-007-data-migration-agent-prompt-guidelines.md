@@ -235,34 +235,62 @@ Based on QRM5-002, QRM5-005, QRM5-006, and broader codebase patterns:
 ## Acceptance Criteria
 
 ### Migration
-- [ ] `MigrationService` class exists at `apps/mcp-server/src/context-store/opensearch/migration.service.ts`
-- [ ] Migration runs on startup via `OnModuleInit` only when `CONTEXT_STORE_BACKEND=opensearch`
-- [ ] Migration checks if OpenSearch index is empty before importing (idempotency)
-- [ ] Migration reads the `quorum.context` file from the configured `contextStorePath`
-- [ ] Expired records (past `expiresAt`) are skipped during import
-- [ ] Each imported record is indexed with `embeddingText` computed via `toEmbeddingText()`
-- [ ] Project-scope records have `id` set to `'_'` (matching OpenSearchStore C1 convention)
-- [ ] `embedding` vector is NOT set — deferred to `EmbeddingPipelineService` backfill
-- [ ] `quorum.context` file is preserved (not deleted) after successful import
-- [ ] Missing file (`ENOENT`) is handled gracefully — logs and returns
-- [ ] Malformed/empty file is handled gracefully — logs warning and returns
-- [ ] Individual index failures do not abort the migration — log warning, continue, report counts
-- [ ] OpenSearch unavailability at startup is handled gracefully — logs warning, skips migration
-- [ ] `MigrationService` is wired in `ContextStoreModule.forRoot()` opensearch branch, ordered before `EmbeddingPipelineService`
-- [ ] `ConfigModule.forFeature(contextStoreConfig)` is added to opensearch branch imports
-- [ ] Unit tests: successful migration, idempotent skip, ENOENT, empty file, malformed JSON, TTL filtering, partial failure, OpenSearch unavailability (8+)
+- [x] `MigrationService` class exists at `apps/mcp-server/src/context-store/opensearch/migration.service.ts`
+- [x] Migration runs on startup via `OnModuleInit` only when `CONTEXT_STORE_BACKEND=opensearch`
+- [x] Migration checks if OpenSearch index is empty before importing (idempotency)
+- [x] Migration reads the `quorum.context` file from the configured `contextStorePath`
+- [x] Expired records (past `expiresAt`) are skipped during import
+- [x] Each imported record is indexed with `embeddingText` computed via `toEmbeddingText()`
+- [x] Project-scope records have `id` set to `'_'` (matching OpenSearchStore C1 convention)
+- [x] `embedding` vector is NOT set — deferred to `EmbeddingPipelineService` backfill
+- [x] `quorum.context` file is preserved (not deleted) after successful import
+- [x] Missing file (`ENOENT`) is handled gracefully — logs and returns
+- [x] Malformed/empty file is handled gracefully — logs warning and returns
+- [x] Individual index failures do not abort the migration — log warning, continue, report counts
+- [x] OpenSearch unavailability at startup is handled gracefully — logs warning, skips migration
+- [x] `MigrationService` is wired in `ContextStoreModule.forRoot()` opensearch branch, ordered before `EmbeddingPipelineService`
+- [x] `ConfigModule.forFeature(contextStoreConfig)` is added to opensearch branch imports
+- [x] Unit tests: successful migration, idempotent skip, ENOENT, empty file, malformed JSON, TTL filtering, partial failure, OpenSearch unavailability (8+)
 
 ### Prompt guidelines
-- [ ] SYSTEM_PREAMBLE updated with text-first guideline in the shared context section, with good/poor examples
-- [ ] Developer role prompt: one-line reinforcement added to Context Management section
-- [ ] Architect role prompt: one-line reinforcement added to Context Management section
-- [ ] Team Lead role prompt: one-line reinforcement added to Context Management section
-- [ ] Prompt additions are concise (no more than ~100 words added to SYSTEM_PREAMBLE)
+- [x] SYSTEM_PREAMBLE updated with text-first guideline in the shared context section, with good/poor examples
+- [x] Developer role prompt: one-line reinforcement added to Context Management section
+- [x] Architect role prompt: one-line reinforcement added to Context Management section
+- [x] Team Lead role prompt: one-line reinforcement added to Context Management section
+- [x] Prompt additions are concise (no more than ~100 words added to SYSTEM_PREAMBLE)
 
 ### General
-- [ ] `npm run build` succeeds
-- [ ] `npm run lint` passes
-- [ ] Existing tests remain green (`npm run test` — baseline: 48 suites, 719 tests)
+- [x] `npm run build` succeeds
+- [x] `npm run lint` passes
+- [x] Existing tests remain green (`npm run test` — baseline: 48 suites, 719 tests)
+
+## Implementation Notes
+
+**Status:** ✅ Accepted — all 24 acceptance criteria verified
+
+**Commit:** cb560b3
+
+**Files modified:**
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/context-store/opensearch/migration.service.ts` | New — one-time migration service (148 lines) |
+| `apps/mcp-server/src/context-store/opensearch/migration.service.spec.ts` | New — 18 test cases across 5 describe blocks (475 lines) |
+| `apps/mcp-server/src/context-store/context-store.module.ts` | Modified — added `MigrationService` provider (before `EmbeddingPipelineService`), `ConfigModule.forFeature(contextStoreConfig)` import |
+| `libs/common/src/prompts/role-prompt-templates.ts` | Modified — added text-first guideline to SYSTEM_PREAMBLE and per-role reinforcements |
+
+**Deviations from ticket:** None. Implementation follows the ticket specification precisely.
+
+**Verification results:**
+- `npm run build`: ✅ (4 webpack compilations successful)
+- `npm run lint`: ✅ (0 errors, 0 warnings)
+- `npm run test`: ✅ (49 suites, 737 tests — up from 48/719 baseline)
+
+**Review observations:**
+- TTL filtering (`now >= item.expiresAt`) exactly matches `InMemoryStore.onModuleInit()` pattern
+- C1 convention (`id ?? '_'`) matches `OpenSearchStore.set()` at line 76
+- Client access pattern (constructor `setupService.getClient()`) consistent with `OpenSearchStore` and `EmbeddingPipelineService`
+- Error handling follows graceful-degradation principle throughout — outer try/catch on `onModuleInit`, per-record try/catch on index calls, ENOENT/empty/malformed guards
+- Provider ordering in module ensures migration → backfill sequence
 
 ## Dependencies and References
 
