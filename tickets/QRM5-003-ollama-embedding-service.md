@@ -66,7 +66,7 @@ The init container pattern avoids the race condition where the runtime container
 - **Image:** `ollama/ollama:latest`
 - **Volume:** `ollama-data` named volume at `/root/.ollama` (same volume as init)
 - **Depends on:** `ollama-init` with `condition: service_completed_successfully`
-- **Health check:** `curl -sf http://localhost:11434/api/tags || exit 1` — verifies Ollama is running and responsive. The `/api/tags` endpoint returns the list of available models, confirming both the server and model readiness.
+- **Health check:** `ollama list >/dev/null 2>&1 || exit 1` — verifies Ollama is running and responsive. `ollama list` hits the local `/api/tags` endpoint via the bundled CLI, confirming both the server and model readiness. Note: the `ollama/ollama:latest` image is minimal and does not include `curl` or `wget`, so the CLI is the only zero-dependency probe available.
 - **Network:** `quorum-net`
 - **No port exposure to host** — only accessible within Docker network
 
@@ -202,7 +202,7 @@ Based on QRM5-002 and broader codebase analysis:
   - Uses `ollama/ollama:latest` image
   - Depends on `ollama-init` with `condition: service_completed_successfully`
   - Mounts `ollama-data` named volume at `/root/.ollama`
-  - Has health check via `GET /api/tags`
+  - Has health check via `ollama list` (queries local `/api/tags`)
   - Is connected to `quorum-net`
 - [x] `mcp-server` service depends on `ollama` with `condition: service_healthy`
 - [x] `mcp-server` environment includes `OLLAMA_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS` with correct defaults
@@ -245,6 +245,8 @@ Based on QRM5-002 and broader codebase analysis:
 - `apps/mcp-server/src/config/mcp-server-config.module.ts` — Registered `embeddingConfig` in `load` array
 
 **Deviations from ticket:** None. Implementation follows all specified patterns and conventions exactly.
+
+**Post-acceptance correction (2026-04-18):** The original healthcheck `curl -sf http://localhost:11434/api/tags || exit 1` caused the `ollama` container to be permanently marked unhealthy, blocking `mcp-server` from starting. Root cause: the `ollama/ollama:latest` image is minimal and ships without `curl` or `wget` — the probe exited with code 127 (`command not found`) on every attempt, even though the Ollama server was running and listening on `:11434`. Fixed by replacing the probe with `ollama list >/dev/null 2>&1 || exit 1`, which uses the bundled CLI to hit the same `/api/tags` endpoint with zero added dependencies. Ticket design text (Implementation Details §1 and Acceptance Criteria) updated to match.
 
 **Verification results:**
 - `npm run build` — ✅ 4/4 webpack compilations successful
