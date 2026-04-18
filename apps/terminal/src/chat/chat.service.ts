@@ -15,7 +15,7 @@ import { McpClientService } from '../connection';
 import { StdinLockService } from '../clarification';
 import { TerminalConfigService } from '../config';
 
-const MAX_TOOL_ROUNDS = 10;
+const MAX_TOOL_ROUNDS = 15;
 const TRUNCATE_ACTION = 80;
 const TRUNCATE_RESULT = 150;
 
