@@ -194,35 +194,62 @@ Based on QRM5-002 and broader codebase analysis:
 
 ## Acceptance Criteria
 
-- [ ] `docker-compose.yml` includes an `ollama-init` service that:
+- [x] `docker-compose.yml` includes an `ollama-init` service that:
   - Uses `ollama/ollama:latest` image
   - Overrides entrypoint to start server, pull `mxbai-embed-large`, then exit
   - Mounts `ollama-data` named volume at `/root/.ollama`
-- [ ] `docker-compose.yml` includes an `ollama` runtime service that:
+- [x] `docker-compose.yml` includes an `ollama` runtime service that:
   - Uses `ollama/ollama:latest` image
   - Depends on `ollama-init` with `condition: service_completed_successfully`
   - Mounts `ollama-data` named volume at `/root/.ollama`
   - Has health check via `GET /api/tags`
   - Is connected to `quorum-net`
-- [ ] `mcp-server` service depends on `ollama` with `condition: service_healthy`
-- [ ] `mcp-server` environment includes `OLLAMA_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS` with correct defaults
-- [ ] `embeddingConfig` factory exists at `apps/mcp-server/src/config/embedding.config.ts` with Zod validation for all three fields (string URL, string model, numeric dimensions)
-- [ ] `embeddingConfig` is registered in `McpServerConfigModule` and exported from the config barrel
-- [ ] `OllamaClient` service exists at `apps/mcp-server/src/embedding/ollama-client.service.ts` with `embed()` and `isHealthy()` methods
-- [ ] `OllamaClient.embed()` calls `POST /api/embed` with correct model and input fields
-- [ ] `OllamaClient` validates response structure and dimension count
-- [ ] `EmbeddingService` exists at `apps/mcp-server/src/embedding/embedding.service.ts` with `embedDocument()`, `embedQuery()`, and `isAvailable()` methods
-- [ ] `embedDocument()` passes text as-is to the client (no prefix)
-- [ ] `embedQuery()` prepends `"Represent this sentence for searching relevant passages: "` to the input text
-- [ ] `EmbeddingService` handles Ollama unavailability gracefully (logs error, does not crash)
-- [ ] `EmbeddingModule` at `apps/mcp-server/src/embedding/embedding.module.ts` wires both services, exports `EmbeddingService`
-- [ ] `ollama-data` named volume is declared in `docker-compose.yml`
-- [ ] Unit tests for `embeddingConfig` — defaults, env var overrides, empty string fallback, non-numeric dimensions rejection
-- [ ] Unit tests for `OllamaClient` — successful embed, health check pass/fail, connection failure, malformed response, dimension mismatch
-- [ ] Unit tests for `EmbeddingService` — document vs query prefix, availability check, graceful error handling
-- [ ] `npm run build` succeeds
-- [ ] `npm run lint` passes
-- [ ] Existing tests remain green (`npm run test`)
+- [x] `mcp-server` service depends on `ollama` with `condition: service_healthy`
+- [x] `mcp-server` environment includes `OLLAMA_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS` with correct defaults
+- [x] `embeddingConfig` factory exists at `apps/mcp-server/src/config/embedding.config.ts` with Zod validation for all three fields (string URL, string model, numeric dimensions)
+- [x] `embeddingConfig` is registered in `McpServerConfigModule` and exported from the config barrel
+- [x] `OllamaClient` service exists at `apps/mcp-server/src/embedding/ollama-client.service.ts` with `embed()` and `isHealthy()` methods
+- [x] `OllamaClient.embed()` calls `POST /api/embed` with correct model and input fields
+- [x] `OllamaClient` validates response structure and dimension count
+- [x] `EmbeddingService` exists at `apps/mcp-server/src/embedding/embedding.service.ts` with `embedDocument()`, `embedQuery()`, and `isAvailable()` methods
+- [x] `embedDocument()` passes text as-is to the client (no prefix)
+- [x] `embedQuery()` prepends `"Represent this sentence for searching relevant passages: "` to the input text
+- [x] `EmbeddingService` handles Ollama unavailability gracefully (logs error, does not crash)
+- [x] `EmbeddingModule` at `apps/mcp-server/src/embedding/embedding.module.ts` wires both services, exports `EmbeddingService`
+- [x] `ollama-data` named volume is declared in `docker-compose.yml`
+- [x] Unit tests for `embeddingConfig` — defaults, env var overrides, empty string fallback, non-numeric dimensions rejection
+- [x] Unit tests for `OllamaClient` — successful embed, health check pass/fail, connection failure, malformed response, dimension mismatch
+- [x] Unit tests for `EmbeddingService` — document vs query prefix, availability check, graceful error handling
+- [x] `npm run build` succeeds
+- [x] `npm run lint` passes
+- [x] Existing tests remain green (`npm run test`)
+
+## Implementation Notes
+
+**Status:** Accepted
+
+**Commit:** `ae89207` — `QRM5-003: add Ollama embedding service with Docker infrastructure`
+
+**Files created (7):**
+- `apps/mcp-server/src/config/embedding.config.ts` — Zod-validated config factory (`ollamaBaseUrl`, `model`, `dimensions`)
+- `apps/mcp-server/src/config/embedding.config.spec.ts` — 7 tests: defaults, env overrides, empty fallback, NaN/zero rejection
+- `apps/mcp-server/src/embedding/ollama-client.service.ts` — HTTP client wrapping `POST /api/embed` and `GET /api/tags`
+- `apps/mcp-server/src/embedding/ollama-client.service.spec.ts` — 10 tests: success, model/input verification, error cases, dimension mismatch, health check
+- `apps/mcp-server/src/embedding/embedding.service.ts` — Asymmetric embedding with `mxbai-embed-large` query prefix, graceful degradation
+- `apps/mcp-server/src/embedding/embedding.service.spec.ts` — 6 tests: document/query prefix, availability, error handling
+- `apps/mcp-server/src/embedding/embedding.module.ts` — NestJS module exporting `EmbeddingService`
+
+**Files modified (3):**
+- `docker-compose.yml` — Added `ollama-init`, `ollama` services, `ollama-data` volume, mcp-server dependency + env vars
+- `apps/mcp-server/src/config/index.ts` — Barrel export for `embeddingConfig`
+- `apps/mcp-server/src/config/mcp-server-config.module.ts` — Registered `embeddingConfig` in `load` array
+
+**Deviations from ticket:** None. Implementation follows all specified patterns and conventions exactly.
+
+**Verification results:**
+- `npm run build` — ✅ 4/4 webpack compilations successful
+- `npm run lint` — ✅ 0 errors, 0 warnings
+- `npm run test` — ✅ 633 tests, 44 suites, all passing (23 new tests added)
 
 ## Dependencies and References
 
