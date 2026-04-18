@@ -309,29 +309,29 @@ Based on QRM5-002, QRM5-003, and broader codebase patterns:
 
 ## Acceptance Criteria
 
-- [ ] `OpenSearchStore` class exists at `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts`
-- [ ] `OpenSearchStore` extends `ContextStore` abstract class
-- [ ] `set()` builds a `ContextItem`, computes `embeddingText` via `toEmbeddingText()`, indexes to OpenSearch with composite key as document `_id` and `refresh: 'true'`
-- [ ] `set()` emits `'context.change'` event with action `'set'`
-- [ ] `set()` does NOT compute or set the `embedding` vector (deferred to QRM5-006 pipeline)
-- [ ] `get()` retrieves document by composite key, returns `undefined` for missing documents
-- [ ] `get()` performs lazy TTL expiration — deletes expired documents and emits `'context.change'` with action `'expire'`
-- [ ] `getAll()` queries OpenSearch with scope/id filter and TTL filter, returns `Record<string, unknown>`
-- [ ] `search()` sends a hybrid query (BM25 + k-NN) through the `'hybrid-search'` pipeline when embedding is available
-- [ ] `search()` falls back to BM25-only query when `EmbeddingService.embedQuery()` returns null
-- [ ] `search()` includes scope, id, and TTL filters
-- [ ] `search()` respects the `maxTokens` budget using `Math.ceil(JSON.stringify(value).length / 4)` estimation
-- [ ] `search()` excludes `embedding` and `embeddingText` fields from returned `_source`
-- [ ] `getStats()` returns correct `itemCount` and `estimatedTokens` with optional scope/id filter
-- [ ] `contextStoreConfig` extended with `backend` field (`'inmemory'` | `'opensearch'`, default `'inmemory'`)
-- [ ] `ContextStoreModule` conditionally wires `OpenSearchStore` or `InMemoryStore` based on `backend` config
-- [ ] When `backend === 'inmemory'`, `OpenSearchModule` and `EmbeddingModule` are NOT imported
-- [ ] `OpenSearchStore` handles OpenSearch failures gracefully (logs error, returns sensible defaults)
-- [ ] Unit tests for `OpenSearchStore`: set (6+), get (4+), getAll (4+), search (7+), getStats (3+) — all with mocked OpenSearch client and EmbeddingService
-- [ ] Unit tests for `contextStoreConfig` backend field (default, override, validation)
-- [ ] `npm run build` succeeds
-- [ ] `npm run lint` passes
-- [ ] Existing tests remain green (`npm run test` — baseline: 45 suites, 662 tests)
+- [x] `OpenSearchStore` class exists at `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts`
+- [x] `OpenSearchStore` extends `ContextStore` abstract class
+- [x] `set()` builds a `ContextItem`, computes `embeddingText` via `toEmbeddingText()`, indexes to OpenSearch with composite key as document `_id` and `refresh: 'true'`
+- [x] `set()` emits `'context.change'` event with action `'set'`
+- [x] `set()` does NOT compute or set the `embedding` vector (deferred to QRM5-006 pipeline)
+- [x] `get()` retrieves document by composite key, returns `undefined` for missing documents
+- [x] `get()` performs lazy TTL expiration — deletes expired documents and emits `'context.change'` with action `'expire'`
+- [x] `getAll()` queries OpenSearch with scope/id filter and TTL filter, returns `Record<string, unknown>`
+- [x] `search()` sends a hybrid query (BM25 + k-NN) through the `'hybrid-search'` pipeline when embedding is available
+- [x] `search()` falls back to BM25-only query when `EmbeddingService.embedQuery()` returns null
+- [x] `search()` includes scope, id, and TTL filters
+- [x] `search()` respects the `maxTokens` budget using `Math.ceil(JSON.stringify(value).length / 4)` estimation
+- [x] `search()` excludes `embedding` and `embeddingText` fields from returned `_source`
+- [x] `getStats()` returns correct `itemCount` and `estimatedTokens` with optional scope/id filter
+- [x] `contextStoreConfig` extended with `backend` field (`'inmemory'` | `'opensearch'`, default `'inmemory'`)
+- [x] `ContextStoreModule` conditionally wires `OpenSearchStore` or `InMemoryStore` based on `backend` config
+- [x] When `backend === 'inmemory'`, `OpenSearchModule` and `EmbeddingModule` are NOT imported
+- [x] `OpenSearchStore` handles OpenSearch failures gracefully (logs error, returns sensible defaults)
+- [x] Unit tests for `OpenSearchStore`: set (6+), get (4+), getAll (4+), search (7+), getStats (3+) — all with mocked OpenSearch client and EmbeddingService
+- [x] Unit tests for `contextStoreConfig` backend field (default, override, validation)
+- [x] `npm run build` succeeds
+- [x] `npm run lint` passes
+- [x] Existing tests remain green (`npm run test` — baseline: 45 suites, 662 tests)
 
 ## Dependencies and References
 
@@ -372,3 +372,34 @@ Based on QRM5-002, QRM5-003, and broader codebase patterns:
 - [`@opensearch-project/opensearch` npm client](https://www.npmjs.com/package/@opensearch-project/opensearch) — JavaScript client API
 
 **Architect review:** Not required. All design decisions for this ticket are resolved in the QRM5-000 roadmap: D2 (unified hybrid store), D8 (hybrid search pipeline), D9 (backward compatibility), D6 (text renderer), D7 (one record one embedding). The implementation is a contract implementation over infrastructure that already exists — no new architectural decisions are needed. The store follows the established `InMemoryStore` behavioral contract exactly, with the search strategy being the only intentional divergence (hybrid vs substring), which is fully specified in the roadmap's Write Path and Search Path sections.
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-18
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts` | Created | Core `OpenSearchStore` class (389 lines) — implements all 5 `ContextStore` abstract methods backed by OpenSearch, with hybrid search (BM25 + k-NN) and BM25-only fallback |
+| `apps/mcp-server/src/context-store/opensearch/opensearch-store.spec.ts` | Created | 32 unit tests covering set (7), get (5), getAll (6), search (9), getStats (5) — all with mocked OpenSearch client and EmbeddingService |
+| `apps/mcp-server/src/config/context-store.config.ts` | Modified | Added `backend` field with `z.enum(['inmemory', 'opensearch'])` validation, default `'inmemory'` |
+| `apps/mcp-server/src/config/context-store.config.spec.ts` | Created | 6 tests for context store config — covers backend default, override, validation, plus existing path tests |
+| `apps/mcp-server/src/context-store/context-store.module.ts` | Modified | Converted from static `@Module` to `DynamicModule` with `forRoot()` — conditionally imports `OpenSearchModule`/`EmbeddingModule` and wires the appropriate store implementation |
+| `apps/mcp-server/src/mcp/mcp.module.ts` | Modified | Updated import to use `ContextStoreModule.forRoot()` |
+| `apps/mcp-server/src/messaging/messaging.module.ts` | Modified | Updated import to use `ContextStoreModule.forRoot()` |
+
+### Deviations from Ticket Spec
+
+- **`refresh: true` (boolean) instead of `refresh: 'true'` (string).** The OpenSearch JavaScript client accepts both forms equivalently; boolean is cleaner TypeScript.
+- **`search_pipeline` passed as a query parameter instead of in the request body.** The initial implementation placed `search_pipeline` inside the request body, but OpenSearch requires it as a top-level query parameter on the search request. Fixed in commit `d643723`.
+- **`set()` always stores `id` as `params.id ?? '_'` instead of conditionally setting it.** Unlike `InMemoryStore` which only sets `id` when provided, `OpenSearchStore` always persists `id` (defaulting to `'_'` for project scope) so OpenSearch `term` queries on the `id` field work correctly for all scopes. Documented in code as "C1".
+- **`ContextStoreModule` reads `CONTEXT_STORE_BACKEND` env var directly** instead of through the config factory, because NestJS module composition happens before DI resolution — config providers are not available at module import time. Documented in code as "architect C2".
+
+### Verification
+
+- `npm run build` — 4 webpack compilations successful
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 47 suites, 700 tests passing (38 new + 662 existing)
