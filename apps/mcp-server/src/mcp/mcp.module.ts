@@ -6,7 +6,7 @@ import { McpController } from './mcp.controller';
 import { McpService } from './mcp.service';
 
 @Module({
-  imports: [MessagingModule, ContextStoreModule, RegistryModule],
+  imports: [MessagingModule, ContextStoreModule.forRoot(), RegistryModule],
   controllers: [McpController],
   providers: [McpService],
   exports: [McpService],
