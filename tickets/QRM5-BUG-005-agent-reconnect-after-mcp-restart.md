@@ -56,54 +56,80 @@ When a `callTool()` is made with a stale session ID, the new server returns `Ses
 
 ## Implementation Details
 
-Multiple layered fixes are possible; they can ship independently.
+Two complementary fixes — one reactive (client-side), one proactive (server-side) — that together eliminate the zombie-transport problem and ensure agents self-heal after an mcp-server restart.
 
-### Option A — Session-not-found → reconnect (minimum viable)
+### Part 1 — Session-not-found → reconnect (client-side)
 
-Wrap `callTool()` in `McpClientService`. On error, inspect whether the error is `Session not found` (or the equivalent MCP SDK signature). If so, close the current transport and call `handleReconnection()` before returning the error (or retrying the call once, transparently).
+Wrap `callTool()` in `McpClientService` with error interception. When the error message contains `Session not found` (or the equivalent MCP SDK error signature):
 
-Tradeoff: reactive. The first caller after a server restart still sees an error. Subsequent calls work.
+1. Log a WARN-level message identifying the stale session ID and the session-not-found response.
+2. Close the current transport to clean up the zombie connection.
+3. Call `handleReconnection()` to establish a fresh session.
+4. Retry the original `callTool()` once transparently.
+5. If the retry also fails, surface the error to the caller.
 
-### Option B — Periodic heartbeat (stronger)
+This is the reactive safety net: even if the SSE keepalive (Part 2) hasn't triggered `onclose` yet, the first tool call that hits the new server will self-heal. The caller sees at most one brief delay (reconnection + retry) rather than a hard failure.
 
-Every 30–60s, agents call an ultra-cheap MCP tool (or the server's HTTP `/health`) to prove the transport is live. On failure, trigger `handleReconnection()`. Converts "dead until next real request" into "dead for at most one heartbeat interval." Adds background traffic but the volume is negligible.
+Apply the same fix to both MCP client implementations:
+- `apps/agent/src/connection/mcp-client.service.ts` (agent roles)
+- `apps/terminal/src/connection/mcp-client.service.ts` (moderator/terminal)
 
-### Option C — Stream-level keepalive (deepest)
+### Part 2 — SSE stream keepalive (server-side)
 
-Have the MCP server emit a periodic SSE comment (`: ping\n\n`) on the long-lived stream. SSE clients handle this transparently and it keeps intermediate layers (conntrack, proxies) from closing the connection — and, critically, when the server restarts, the stream breaks cleanly and `onclose` fires. Requires server-side change in `McpController` or `McpService`.
+Have the MCP server emit a periodic SSE comment (`: ping\n\n`) on the long-lived server→client stream. This achieves three things:
 
-**Recommended combination:** Option A (fast, safe, mostly sufficient) now, then option C once QRM5-BUG-003 is root-caused (they share a diagnosis surface — both are about SSE stream liveness). Option B is a reasonable alternative to C if C proves complex.
+- **Clean break on restart:** When the server restarts, the new process does not inherit the old socket's SSE write loop. The client's SSE `fetch` response errors out, `onclose` fires, and the existing `handleReconnection()` path kicks in — resolving the root cause (zombie transport where `onclose` never fires).
+- **Proxy/conntrack keepalive:** Intermediate network layers won't close an idle connection, preventing a secondary class of silent disconnection.
+- **QRM5-BUG-003 mitigation:** The same SSE keepalive addresses the long-idle-stream stall diagnosed in QRM5-BUG-003, since it closes the window where conntrack drops an idle connection without either side noticing.
+
+**Interval:** 30 seconds — frequent enough to detect a server restart within one heartbeat, infrequent enough to add negligible traffic.
+
+**Server-side implementation:** In `McpController` or `McpService`, start a `setInterval` that writes `: ping\n\n` to each active SSE response stream. Clean up the interval on connection close (response `close` event). The `: ping` is an SSE comment — compliant clients ignore it silently, so no protocol-level changes are needed.
+
+### Excluded approach — Periodic health-check heartbeat
+
+A periodic agent-side heartbeat (calling `/health` or a cheap MCP tool every 30–60s) was considered but excluded. The SSE keepalive in Part 2 achieves the same liveness detection at the transport layer without requiring each agent to run its own polling loop. Adding agent-side polling on top would be redundant.
 
 ### Tests
 
-- Unit: simulate `Session not found` from `callTool()`, verify `McpClientService` calls `handleReconnection()` and retries once.
-- Integration: the runbook Scenario 5 variant where mcp-server restarts — after the restart, within N seconds the agents should re-register without container restarts. Add as a new scenario in QRM5-008 Part 3.
-
-### Observational improvement (ships independently)
-
-Add a WARN log on `callTool()` when the server returns `Session not found` — currently this error surfaces only as a bubbled-up tool result, with no dedicated log. At minimum, agents should complain loudly about session-ID mismatches even before a real fix ships.
+- **Unit — session-not-found reconnect:** Simulate a `Session not found` error from `callTool()`, verify `McpClientService` logs a WARN, calls `handleReconnection()`, and retries the call once.
+- **Unit — retry failure:** Simulate `Session not found` on both the original call and the retry, verify the error is surfaced to the caller after one retry attempt.
+- **Unit — SSE keepalive:** Verify the server emits `: ping\n\n` comments at the configured interval on active SSE streams.
+- **Integration — QRM5-008 scenario:** Add a new runbook scenario (or extend Scenario 5) that performs `docker compose restart mcp-server` and verifies all agents re-register within ≤ 2 minutes with no agent container restarts.
 
 ## Acceptance Criteria
 
+### Client-side reconnect (Part 1)
+- [ ] `McpClientService.callTool()` intercepts `Session not found` errors, logs a WARN with the stale session ID, triggers `handleReconnection()`, and retries the call once
+- [ ] If the retry also fails, the error is surfaced to the caller (no infinite retry loop)
+- [ ] Fix is applied to both `apps/agent/` and `apps/terminal/` MCP client implementations
+- [ ] Unit test: `McpClientService` reconnects and retries on session-not-found
+- [ ] Unit test: retry failure after session-not-found surfaces the error
+
+### SSE keepalive (Part 2)
+- [ ] MCP server emits `: ping\n\n` SSE comments at ~30s intervals on all active SSE streams
+- [ ] Keepalive intervals are cleaned up on connection close (no leaked timers)
+- [ ] Unit test: SSE keepalive emits ping comments at the configured interval
+
+### End-to-end
 - [ ] After `docker compose restart mcp-server`, all four agents re-appear in `GET /registry` within ≤ 2 minutes with **no agent container restarts**
-- [ ] First tool call after the server restart either succeeds (reconnect raced ahead) or fails once with a clear warn-level log and succeeds on the next attempt
-- [ ] `McpClientService` emits a log line when a `Session not found` error is observed and when reconnection is triggered by that path
-- [ ] Unit test: `McpClientService` reconnects on session-not-found
-- [ ] New QRM5-008 Scenario (or extension of Scenario 5) verifies agent self-heal after mcp-server restart
+- [ ] First tool call after the server restart either succeeds transparently (reconnect + retry) or fails once with a clear WARN-level log and succeeds on the next attempt
+- [ ] New QRM5-008 runbook scenario (or extension of Scenario 5) verifies agent self-heal after mcp-server restart
 - [ ] `npm run build`, `npm run lint`, `npm run test` all pass
 
 ## Dependencies and References
 
 - **Surfaced by:** [QRM5-008](QRM5-008-tests.md) Run 1, Scenario 5 follow-up (2026-04-18)
-- **Related:** [QRM5-BUG-003](QRM5-BUG-003-streamable-http-long-call-silent-stall.md) — same class of symptom (ESTABLISHED-but-dead SSE stream). Option C here (SSE keepalive) may double as a mitigation for QRM5-BUG-003 since it closes the long-idle window that likely triggers the stall.
+- **Related:** [QRM5-BUG-003](QRM5-BUG-003-streamable-http-long-call-silent-stall.md) — same class of symptom (ESTABLISHED-but-dead SSE stream). Part 2 (SSE keepalive) doubles as a mitigation for QRM5-BUG-003 since it closes the long-idle window that likely triggers the stall.
 - **Related:** [QRM1-BUG-001](QRM1-BUG-001-mcp-server-single-transport.md) — precedent for MCP connection lifecycle bugs, resolved; the agent reconnection path was added partly in response but is not exercised under server-restart conditions.
 
 **Key files:**
 
 | File | Relevance |
 |------|-----------|
-| `apps/agent/src/connection/mcp-client.service.ts` | Primary fix site — wrap `callTool`, trigger reconnection on session-not-found, add heartbeat |
-| `apps/terminal/src/connection/mcp-client.service.ts` | Terminal (moderator) client — mirror any fix applied to the agent client |
-| `apps/mcp-server/src/mcp/mcp.controller.ts` | For option C — emit SSE keepalive on the long-lived stream |
-| `apps/mcp-server/src/mcp/mcp.service.ts` | Related transport lifecycle |
-| `apps/agent/src/connection/mcp-client.service.spec.ts` | Extend with session-not-found reconnection test |
+| `apps/agent/src/connection/mcp-client.service.ts` | Part 1 — wrap `callTool()` with session-not-found interception, WARN log, reconnect + retry |
+| `apps/terminal/src/connection/mcp-client.service.ts` | Part 1 — mirror the same session-not-found → reconnect fix for the moderator client |
+| `apps/mcp-server/src/mcp/mcp.controller.ts` | Part 2 — emit `: ping\n\n` SSE keepalive on the long-lived server→client stream |
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Part 2 — related transport lifecycle, may need keepalive timer coordination |
+| `apps/agent/src/connection/mcp-client.service.spec.ts` | Tests — session-not-found reconnection + retry unit tests |
+| `apps/mcp-server/src/mcp/mcp.controller.spec.ts` | Tests — SSE keepalive emission unit tests |
