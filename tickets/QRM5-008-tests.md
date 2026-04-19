@@ -1,20 +1,41 @@
-# QRM5-008: Comprehensive Test Coverage for QRM5 Components
+# QRM5-008: QRM5 Smoke Test Runbook (Live Orchestration)
 
 ## Summary
 
-Audit and complete test coverage for all QRM5 components — the embedding text renderer, Ollama client, embedding service, embedding pipeline, OpenSearch store, setup service, migration service, and configuration factories. Unit tests for each component already exist from their respective implementation tickets (QRM5-002 through QRM5-007). This ticket validates coverage completeness, fills any gaps found during audit, and adds an end-to-end integration test that exercises the full write → BM25 search → hybrid search lifecycle across the real component stack.
+Validate the live QRM5 hybrid search stack end-to-end through a scenario-driven smoke test runbook executed by a Claude Code orchestrator against the running Docker system. The primary deliverable is a sequence of scenarios that exercise every QRM5 surface — OpenSearch backend activation, embedding pipeline, hybrid search, graceful degradation, migration, agent text-first writes — verified via HTTP probes, OpenSearch inspection, and `docker compose logs` monitoring. No new automated tests are written; per-ticket unit tests remain the automated layer.
 
 ## Problem Statement
 
-Each QRM5 ticket delivered its own unit tests alongside the implementation (the project convention). The test suite currently stands at **49 suites / 737 tests**, including QRM5-specific specs for every new component. However, no ticket was responsible for:
+The QRM5 hybrid search stack is fully implemented and activated (QRM5-002 through QRM5-007 shipped; QRM5-009 flipped the backend and upgraded `/health`). The automated test suite stands at **49+ suites / 745 tests**, with QRM5-specific specs for every new component — but automated tests exist only at the unit level. No test verifies that `OpenSearchStore.set()` → event → `EmbeddingPipelineService` → `EmbeddingService.embedDocument()` → OpenSearch partial-update works against a **real** OpenSearch + Ollama stack, under real Docker networking, with real NestJS module wiring.
 
-1. **Cross-component integration testing.** Each unit test mocks its dependencies. No test verifies that `OpenSearchStore.set()` → `EmbeddingPipelineService` event subscription → `EmbeddingService.embedDocument()` → OpenSearch partial-update actually works as a connected pipeline. The hybrid search path (BM25 + k-NN) has never been tested with a real OpenSearch instance.
+Initial drafts of this ticket proposed two work streams: (1) a coverage audit across all QRM5 specs with gap-fill tests, and (2) an in-process integration test using a mocked OpenSearch client. Both are deferred (see below). Instead, this ticket adopts the **QRM1-013 pattern**: a scenario-driven runbook that a Claude Code agent can execute against the live containers, observing real behavior in real logs. This matches how the system is actually operated and delivers higher-confidence validation than a mocked integration test, at the cost of determinism in a few LLM-driven scenarios.
 
-2. **Coverage audit across the QRM5 boundary.** Individual ticket authors tested what they built, but edge cases at component boundaries — the handoff between `set()` event emission and pipeline consumption, the interaction between migration indexing and pipeline backfill, the search fallback when `EmbeddingService.isAvailable()` returns false mid-operation — may have gaps that only appear when reviewing the full surface.
+## Design Context
 
-3. **InMemoryStore regression verification.** The abstract `ContextStore` contract hasn't changed, and `InMemoryStore` wasn't modified, but verifying that existing InMemoryStore tests still pass against the unchanged contract confirms backward compatibility.
+### Deferred work streams
 
-Without this ticket, the team has confidence in individual components but not in the assembled system. The integration test is the capstone that validates the QRM5 design promise: write a record, search it immediately via BM25, then search it via hybrid scoring once the embedding arrives.
+**Part 1 — Coverage Audit (deferred).** Systematic per-file audit of the 11 QRM5 spec files against their sources. Deferred: the individual tickets already delivered ~200 QRM5-specific tests with deliberate coverage. A broad audit has diminishing returns relative to a live smoke test that would catch the kinds of defects unit tests miss (networking, module composition, event wiring, real OpenSearch/Ollama protocol quirks).
+
+**Part 2 — In-process Integration Test (deferred).** An `opensearch-integration.spec.ts` spec that mocks `@opensearch-project/opensearch` Client and `global.fetch` while exercising real `OpenSearchStore`, `EmbeddingPipelineService`, `EmbeddingService`, `OllamaClient`, `OpenSearchSetupService`, and real `EventEmitter2` wiring. Deferred: the mock faithfulness required (BM25 scoring approximation, k-NN scoring, pipeline semantics) is significant engineering in itself, and the failure modes it could surface are largely a subset of what the live runbook surfaces. Revisit if CI needs a pre-merge integration gate that doesn't depend on Docker.
+
+### What already exists (baseline)
+
+| Component | Spec file | Tests |
+|-----------|-----------|-------|
+| `toEmbeddingText()` | `libs/common/src/context-store/to-embedding-text.spec.ts` | ~40 |
+| `OllamaClient` | `apps/mcp-server/src/embedding/ollama-client.service.spec.ts` | 10 |
+| `EmbeddingService` | `apps/mcp-server/src/embedding/embedding.service.spec.ts` | 8 |
+| `EmbeddingPipelineService` | `apps/mcp-server/src/embedding/embedding-pipeline.service.spec.ts` | 19 |
+| `OpenSearchStore` | `apps/mcp-server/src/context-store/opensearch/opensearch-store.spec.ts` | ~35 |
+| `OpenSearchSetupService` | `apps/mcp-server/src/context-store/opensearch/opensearch-setup.service.spec.ts` | 8 |
+| `MigrationService` | `apps/mcp-server/src/context-store/opensearch/migration.service.spec.ts` | 16 |
+| `opensearchConfig` | `apps/mcp-server/src/config/opensearch.config.spec.ts` | 6 |
+| `embeddingConfig` | `apps/mcp-server/src/config/embedding.config.spec.ts` | 7 |
+| `contextStoreConfig` | `apps/mcp-server/src/config/context-store.config.spec.ts` | 6 |
+| `InMemoryStore` | `apps/mcp-server/src/context-store/in-memory-store.spec.ts` | ~45 |
+| `HealthService` (QRM5-009) | `apps/mcp-server/src/health/health.controller.spec.ts` | 9 |
+
+**Total QRM5-related automated tests already in the suite: ~200 across 12 spec files.** This runbook layers live validation on top of that baseline — it does **not** replace it.
 
 ## Design Context
 
@@ -54,181 +75,303 @@ This approach tests the real NestJS dependency injection, real event emission/su
 
 ## Implementation Details
 
-### Part 1: Coverage Audit
+### Part 1: Coverage Audit — **Deferred**
 
-Review each spec file against its source implementation. For each component, verify:
+Systematic review of each QRM5 spec file against its source, filling any gaps found. Not implemented. Rationale: individual tickets delivered ~200 QRM5-specific tests with deliberate coverage; incremental audit value is low relative to the runbook's real-environment validation. Revisit if a specific bug surfaces that a unit test should have caught.
 
-1. **All public methods have tests** — every method signature in the class should have at least one happy-path and one error-path test
-2. **Constructor/init behavior is tested** — `onModuleInit()` lifecycle hooks, config injection validation
-3. **Error branches are covered** — every `catch` block, every graceful degradation return, every conditional error path
-4. **Edge cases at boundaries** — empty inputs, null/undefined values, concurrent operations where applicable
+### Part 2: In-process Integration Test — **Deferred**
 
-Document any gaps found and add tests for them. Expected gaps are small given the thoroughness of individual ticket implementations, but the audit ensures nothing slipped through.
+An `opensearch-integration.spec.ts` spec with mocked OpenSearch Client + mocked `fetch` exercising the real service stack. Not implemented. Rationale: mock faithfulness is a significant engineering lift (hybrid query semantics, k-NN approximation, async pipeline timing) and duplicates coverage of the live runbook below. Revisit if CI needs a pre-merge integration gate that must run without Docker.
 
-**Specific areas to scrutinize:**
+### Part 3: Live Smoke Test Runbook
 
-- `OpenSearchStore.search()` — does the test verify the exact hybrid query structure sent to OpenSearch (BM25 leg + k-NN leg + scope filter + TTL filter + pipeline reference)? Does it test the case where `embedQuery` returns null mid-search (not just when `isAvailable` is false)?
-- `EmbeddingPipelineService` — is the `processing` flag race condition tested? (Two rapid `enqueue` calls should not start two concurrent drain loops)
-- `MigrationService` — does the test verify that `toEmbeddingText` is called with the correct `ContextItem` shape for each record type (project with no id, conversation with id)?
-- `OllamaClient` — is the timeout behavior on `isHealthy()` tested? (The implementation uses `AbortSignal.timeout(5000)`)
+The primary deliverable. This runbook is executed by a Claude Code orchestrator against the running Docker stack — it combines HTTP probes, OpenSearch inspection, `docker compose exec` calls to agents, and `docker compose logs` monitoring to verify every QRM5 surface in a real environment.
 
-### Part 2: Integration Test
+**Structure.** The runbook follows the QRM1-013 pattern: numbered scenarios with preconditions, commands, expected outputs, and a final result table. Each run is appended below the runbook as a dated section recording pre-run fixes, per-scenario outcomes, and any bugs found (each bug opens its own `QRM5-BUG-NNN` ticket).
 
-**File:** `apps/mcp-server/src/context-store/opensearch/opensearch-integration.spec.ts`
+**Execution model.** An orchestrating Claude Code agent runs scenarios sequentially, captures outputs, compares against expectations, and writes a run summary. Deterministic scenarios (HTTP probes, OpenSearch index inspection, log greps) have strict pass/fail criteria. Live-LLM scenarios (agent-driven writes and searches) require Claude Code to interpret agent responses but still check concrete side effects in OpenSearch and logs rather than relying solely on agent self-report.
 
-This is the capstone test for QRM5. It validates the end-to-end lifecycle that no unit test covers.
+**Scope vs QRM1-013.** QRM1-013 validated connectivity (registration, invocation, safeguards, basic context relay). This runbook assumes those still pass and focuses only on QRM5-specific behavior: OpenSearch activation, embedding pipeline, hybrid search, graceful degradation, migration, text-first agent writes, health dependency reporting.
 
-#### Mock OpenSearch Client
+#### Scenarios
 
-Build a lightweight in-memory mock that implements the subset of the OpenSearch `Client` API used by the QRM5 components:
+**Scenario 1: Backend activation & dependency health (deterministic)**
 
-```typescript
-// Conceptual shape — not full implementation
-class MockOpenSearchClient {
-  private docs = new Map<string, Record<string, unknown>>();
+Verify `CONTEXT_STORE_BACKEND=opensearch` is active and `/health` reports both dependencies up.
 
-  async index({ index, id, body, refresh }) { /* store doc */ }
-  async get({ id, _source_includes }) { /* retrieve doc */ }
-  async update({ id, body: { doc } }) { /* merge partial update */ }
-  async search({ body }) { /* filter + simple text matching */ }
-  async count({ index }) { /* return doc count */ }
-  async delete({ id }) { /* remove doc */ }
-
-  // Test helpers
-  getDocument(id: string) { /* direct access for assertions */ }
-}
+```bash
+docker compose exec mcp-server printenv CONTEXT_STORE_BACKEND
+curl -s http://localhost:3000/health | jq .
 ```
 
-The mock doesn't need to implement real BM25 scoring or k-NN — it needs to store and retrieve documents faithfully so the real service code can execute its full path. Search can use simple substring matching for verification purposes.
+**Expected:**
+- `CONTEXT_STORE_BACKEND=opensearch`
+- Health body: `{ "status": "ok", "dependencies": { "opensearch": "up", "ollama": "up" } }`
 
-#### Mock Ollama via fetch
+**Scenario 2: OpenSearch index & pipeline provisioned (deterministic)**
 
-Use the same `global.fetch` mock pattern established in `ollama-client.service.spec.ts`. Return a deterministic 1024-dimensional vector for any embed request. The `/api/tags` health check returns OK.
+Verify `OpenSearchSetupService.onModuleInit()` created the index and hybrid-search pipeline.
 
-#### Test scenarios
-
-**Scenario 1: Write → immediate BM25 search → hybrid search after embedding**
-
-This is the core QRM5 promise. Steps:
-1. Write a record via `OpenSearchStore.set()` with a descriptive text value
-2. Immediately call `OpenSearchStore.search()` — verify the record is found (it has `embeddingText` but no `embedding` yet, so BM25-only match)
-3. Wait for the `EmbeddingPipelineService` drain to complete (the `'context.change'` event triggers async embedding)
-4. Verify the OpenSearch document now has an `embedding` field (the partial update landed)
-5. Call `OpenSearchStore.search()` again — verify the record is found and the hybrid search path was used (the query included both BM25 and k-NN legs)
-
-**Scenario 2: Write with Ollama unavailable → BM25-only → Ollama recovers → backfill fills vectors**
-
-Tests the graceful degradation path:
-1. Configure the fetch mock to reject Ollama requests (simulate container down)
-2. Write a record via `set()` — should succeed (BM25-indexed)
-3. Search — should find via BM25 only
-4. Verify no `embedding` field on the document (pipeline retries exhausted or Ollama unavailable)
-5. Restore the fetch mock to succeed
-6. Trigger backfill (or allow retry to succeed) — verify the embedding vector appears
-
-**Scenario 3: Multiple records, scope isolation, token budget**
-
-Validates that the full pipeline respects the ContextStore contract:
-1. Write 3 records: one project-scope, one conversation-scope, one with TTL
-2. Let embeddings complete for all
-3. Search project scope — should only return project records
-4. Search conversation scope with specific id — should only return that conversation's records
-5. Search with a small `maxTokens` budget — should truncate results
-6. Advance time past TTL — expired record should not appear in search
-
-**Scenario 4: Migration integration**
-
-If feasible within the mock setup:
-1. Prepare a mock `quorum.context` file content (mock `fs/promises.readFile`)
-2. Configure the mock OpenSearch client to return `count: 0` (empty index)
-3. Init the `MigrationService` — verify records are indexed into the mock client
-4. Verify `EmbeddingPipelineService` backfill picks up the migrated records (they have `embeddingText` but no `embedding`)
-5. After backfill, verify migrated records have embedding vectors
-
-#### NestJS Test Module Setup
-
-```typescript
-const module = await Test.createTestingModule({
-  imports: [
-    EventEmitterModule.forRoot(),
-    ConfigModule.forFeature(opensearchConfig),
-    ConfigModule.forFeature(embeddingConfig),
-    ConfigModule.forFeature(contextStoreConfig),
-  ],
-  providers: [
-    OpenSearchSetupService,  // real, but Client mock injected via jest.mock
-    OpenSearchStore,
-    EmbeddingPipelineService,
-    OllamaClient,            // real, but fetch is mocked at global level
-    EmbeddingService,
-    { provide: EventEmitter2, useValue: new EventEmitter2() },
-  ],
-}).compile();
+```bash
+curl -s http://localhost:9200/quorum-context | jq '.["quorum-context"].mappings.properties | keys'
+curl -s http://localhost:9200/_search/pipeline/hybrid-search | jq .
 ```
 
-The exact wiring may need adjustment — `OpenSearchSetupService` creates the `Client` in its constructor, so the `@opensearch-project/opensearch` module must be jest-mocked before the test module compiles. Follow the pattern established in `opensearch-store.spec.ts` for the `jest.mock('@opensearch-project/opensearch')` setup.
+**Expected:**
+- Mapping properties include `scope`, `scopeId`, `compositeKey`, `value`, `embedding`, `embeddingText`, `tokenCount`, `expiresAt`, `updatedAt`
+- `embedding` field is `knn_vector` with the configured dimensions (default 1024)
+- Pipeline exists with `normalization-processor` using BM25 weight 0.3 + k-NN weight 0.7
 
-#### Async timing
+**Scenario 3: Migration from `quorum.context` (deterministic, post-startup)**
 
-The integration test must handle the async nature of the embedding pipeline. Options:
-- **Fake timers + flushPromises** — same pattern as `embedding-pipeline.service.spec.ts`. Use `jest.useFakeTimers()`, trigger actions, then `await flushPromises()` to let the drain loop complete.
-- **Poll with timeout** — if fake timers create too much complexity with the full module stack, poll the mock OpenSearch client for the expected state with a short timeout.
+Verify one-time migration ran on first opensearch-backend startup.
 
-The fake timers approach is preferred for determinism. The existing pipeline spec already demonstrates this pattern works well.
+```bash
+docker compose logs mcp-server 2>&1 | grep -iE "migration|migrated|quorum\.context"
+curl -s "http://localhost:9200/quorum-context/_count" | jq .
+```
 
-### Part 3: InMemoryStore Regression Verification
+**Expected:**
+- Logs show either `migrated N records` with N matching the pre-existing `quorum.context` entry count, OR `skipped migration: index already populated` / `no quorum.context file` when applicable
+- Non-empty migration runs result in a count matching the pre-existing entries; subsequent starts are idempotent (no duplicate imports)
 
-No new tests needed — the existing `in-memory-store.spec.ts` (45+ tests) validates the ContextStore abstract contract independently. This ticket simply verifies those tests still pass, confirming that the QRM5 changes to `ContextStoreModule` (conditional backend selection) and the addition of `OpenSearchStore` didn't break the inmemory path.
+**Scenario 4: Write → BM25 → embedding → hybrid search (live LLM, capstone)**
 
-Run `npm run test -- --testPathPattern=in-memory-store` and confirm all tests pass. Record the count in Implementation Notes.
+The core QRM5 promise. Validates write-path indexing, async embedding pipeline, and hybrid search rank.
+
+Step 1 — Ask architect to write a descriptive context record:
+
+```bash
+docker compose exec mcp-server node -e "
+  fetch('http://architect:3002/invoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      correlationId: 'qrm5-smoke-004',
+      caller: 'moderator',
+      target: 'architect',
+      action: \"Write a context record at project scope with key 'auth-decision' and value describing that the team chose JWT with 15-minute access tokens and 7-day refresh tokens for the user authentication system, because session storage added operational overhead. Confirm the write.\",
+      wait: true, depth: 0
+    })
+  }).then(r => r.json()).then(j => console.log(JSON.stringify(j, null, 2)))
+"
+```
+
+Step 2 — Immediately inspect OpenSearch (BM25-indexed, likely no embedding yet):
+
+```bash
+curl -s "http://localhost:9200/quorum-context/_search?q=compositeKey:*auth-decision*" \
+  | jq '.hits.hits[0]._source | { compositeKey, embeddingText: (.embeddingText[0:80]), has_embedding: (.embedding != null) }'
+```
+
+Step 3 — Wait for embedding pipeline drain, then re-inspect:
+
+```bash
+sleep 3
+docker compose logs mcp-server --since 30s 2>&1 | grep -iE "embedding|pipeline"
+curl -s "http://localhost:9200/quorum-context/_search?q=compositeKey:*auth-decision*" \
+  | jq '.hits.hits[0]._source | { has_embedding: (.embedding != null), embedding_dims: (.embedding | length) }'
+```
+
+Step 4 — Ask developer to semantically search (no literal key match in the query):
+
+```bash
+docker compose exec mcp-server node -e "
+  fetch('http://developer:3002/invoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      correlationId: 'qrm5-smoke-004',
+      caller: 'moderator',
+      target: 'developer',
+      action: \"Use the context_query tool in search mode at project scope to find 'how are user sessions handled'. Return the top result's compositeKey and a brief summary of its value.\",
+      wait: true, depth: 0
+    })
+  }).then(r => r.json()).then(j => console.log(JSON.stringify(j, null, 2)))
+"
+```
+
+**Expected:**
+- Step 1: `success: true`, architect reports write confirmed
+- Step 2: record present in OpenSearch; `embeddingText` populated; `has_embedding` is `false` OR `true` (timing-dependent)
+- Step 3: logs show `EmbeddingPipelineService` processed the record; `has_embedding: true`; `embedding_dims: 1024` (or configured dim)
+- Step 4: developer returns `project::auth-decision` (or equivalent composite key) even though the search query used different wording — this is the hybrid semantic match working
+
+**Scenario 5: Graceful degradation — Ollama down (deterministic + live LLM)**
+
+Verify writes still succeed with BM25-only indexing when Ollama is unreachable, `/health` reports it, and recovery backfills vectors.
+
+Step 1 — Stop Ollama:
+
+```bash
+docker compose stop ollama
+sleep 2
+curl -s http://localhost:3000/health | jq .
+```
+
+**Expected:** `dependencies.ollama: "down"`, `status: "ok"`, HTTP 200 (liveness preserved — no restart loop).
+
+Step 2 — Write a record while Ollama is down:
+
+```bash
+docker compose exec mcp-server node -e "
+  fetch('http://architect:3002/invoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      correlationId: 'qrm5-smoke-005',
+      caller: 'moderator',
+      target: 'architect',
+      action: \"Write a context record at project scope with key 'degraded-write' and value 'Written while Ollama is down to verify BM25 still works'. Confirm the write.\",
+      wait: true, depth: 0
+    })
+  }).then(r => r.json()).then(j => console.log(JSON.stringify(j, null, 2)))
+"
+curl -s "http://localhost:9200/quorum-context/_search?q=compositeKey:*degraded-write*" \
+  | jq '.hits.hits[0]._source | { has_embedding: (.embedding != null) }'
+```
+
+**Expected:** Write succeeds, record present, `has_embedding: false`.
+
+Step 3 — Restart Ollama and verify backfill:
+
+```bash
+docker compose start ollama
+# wait for ollama healthy + embedding pipeline backfill cycle
+sleep 15
+curl -s http://localhost:3000/health | jq .
+curl -s "http://localhost:9200/quorum-context/_search?q=compositeKey:*degraded-write*" \
+  | jq '.hits.hits[0]._source | { has_embedding: (.embedding != null) }'
+docker compose logs mcp-server --since 60s 2>&1 | grep -iE "backfill|embedding"
+```
+
+**Expected:** `dependencies.ollama: "up"`, `has_embedding: true`, logs show backfill of the previously-missing record.
+
+**Scenario 6: Scope isolation & token budget (live LLM)**
+
+Verify hybrid search honors scope filters and `maxTokens` budget.
+
+Step 1 — Write records across scopes:
+
+```bash
+# project-scope record via architect
+# conversation-scope record via architect (use a specific conversationId)
+# conversation-scope record via architect in a different conversation
+```
+
+(Compose three invocations analogous to Scenario 4 Step 1 with varied scope/id and long-ish values.)
+
+Step 2 — Search with `maxTokens: 200`:
+
+```bash
+docker compose exec mcp-server node -e "
+  fetch('http://developer:3002/invoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      correlationId: 'qrm5-smoke-006',
+      caller: 'moderator',
+      target: 'developer',
+      action: \"Call context_query in search mode at conversation scope with conversationId 'conv-A' and maxTokens 200. Return the compositeKeys and total token count.\",
+      wait: true, depth: 0
+    })
+  }).then(r => r.json()).then(j => console.log(JSON.stringify(j, null, 2)))
+"
+```
+
+**Expected:** Only conversation `conv-A` records returned (no project or conv-B leakage); cumulative tokens ≤ 200.
+
+**Scenario 7: Agent text-first context writes (live LLM, prompt verification)**
+
+Verify that QRM5-007 prompt guidelines take effect — agents write descriptive prose, not JSON blobs.
+
+```bash
+docker compose exec mcp-server node -e "
+  fetch('http://teamlead:3002/invoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      correlationId: 'qrm5-smoke-007',
+      caller: 'moderator',
+      target: 'teamlead',
+      action: \"Record a project-scope context entry summarizing the QRM5 test strategy and confirm the write.\",
+      wait: true, depth: 0
+    })
+  }).then(r => r.json()).then(j => console.log(JSON.stringify(j, null, 2)))
+"
+curl -s "http://localhost:9200/quorum-context/_search?q=scope:project&size=5" \
+  | jq '.hits.hits[]._source | { compositeKey, valuePreview: (.value | tostring | .[0:120]) }'
+```
+
+**Expected:** `value` fields are natural-language prose (not JSON-stringified objects), `embeddingText` is descriptive. If JSON blobs appear, file `QRM5-BUG-NNN` — prompt guidelines insufficient.
+
+**Scenario 8: Log correlation across pipeline (deterministic, post-hoc)**
+
+After scenarios 4–7, verify correlation IDs and record IDs appear across services.
+
+```bash
+docker compose logs 2>&1 | grep qrm5-smoke-004
+docker compose logs mcp-server 2>&1 | grep -iE "auth-decision|degraded-write" | head -20
+```
+
+**Expected:** `qrm5-smoke-004` appears in `InvocationHandler` (architect + developer) and `MessageBroker` (mcp-server). Record composite keys appear in `OpenSearchStore.set()` and `EmbeddingPipelineService` processing logs.
+
+#### Teardown
+
+```bash
+# Restore any stopped containers from Scenario 5 (safety net in case of early abort)
+docker compose start ollama
+# Optionally reset the index between runs
+curl -s -X DELETE http://localhost:9200/quorum-context
+docker compose restart mcp-server  # triggers fresh setup + migration
+```
+
+#### Result Summary Template
+
+| Scenario | Type | Pass Criteria |
+|----------|------|---------------|
+| 1. Backend & Health | Deterministic | `opensearch` backend; both deps `up` |
+| 2. Index & Pipeline | Deterministic | Index exists with k-NN mapping; hybrid pipeline with 0.3/0.7 weights |
+| 3. Migration | Deterministic | Logs show migration decision; count matches expectation |
+| 4. Write → Hybrid Search | Live LLM | Embedding populated; semantic search returns record written with different wording |
+| 5. Graceful Degradation | Live LLM + Deterministic | Write succeeds without Ollama; `/health` reflects state; backfill on recovery |
+| 6. Scope & Budget | Live LLM | Scope isolation honored; token budget enforced |
+| 7. Text-first Writes | Live LLM | `value` and `embeddingText` are descriptive prose |
+| 8. Log Correlation | Deterministic | Correlation IDs across services; record keys in pipeline logs |
 
 ## Acceptance Criteria
 
-- [ ] Coverage audit completed for all 11 QRM5 spec files — each reviewed against its source, gaps documented
-- [ ] Any gap-fill tests added (or explicitly documented as "no gaps found" if audit is clean)
-- [ ] Integration test file exists at `apps/mcp-server/src/context-store/opensearch/opensearch-integration.spec.ts`
-- [ ] Integration test Scenario 1: write → BM25 search → embedding completes → hybrid search — passes
-- [ ] Integration test Scenario 2: Ollama unavailable → BM25 fallback → recovery → vectors appear — passes
-- [ ] Integration test Scenario 3: multi-record scope isolation and token budget — passes
-- [ ] Integration test Scenario 4: migration → backfill → vectors — passes (or documented as deferred if mock complexity is prohibitive)
-- [ ] InMemoryStore regression: existing 45+ tests pass unchanged
-- [ ] All existing QRM5 unit tests remain green (no regressions from audit changes)
-- [ ] `npm run build` succeeds
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes — all suites, all tests (baseline: 49 suites, 737 tests)
+- [ ] Part 1 (Coverage Audit) explicitly documented as deferred with rationale in this ticket
+- [ ] Part 2 (In-process Integration Test) explicitly documented as deferred with rationale in this ticket
+- [ ] Part 3 runbook committed in this ticket with 8 scenarios (backend & health, index & pipeline, migration, write→hybrid search, graceful degradation, scope & budget, text-first writes, log correlation)
+- [ ] At least one full run of the runbook executed by a Claude Code orchestrator against the live stack; results appended as a dated run section below the runbook
+- [ ] Scenarios 1, 2, 3, 8 (deterministic) pass on the recorded run
+- [ ] Scenarios 4, 5, 6, 7 (live LLM) pass on the recorded run, or their failures are filed as `QRM5-BUG-NNN` tickets
+- [ ] Any failing scenario or bug discovered has a follow-up ticket opened and linked from the run section
 
 ## Dependencies and References
 
 - **Depends on:**
-  - QRM5-004 (Text Renderer) ✅ — `toEmbeddingText()` and its tests
-  - QRM5-005 (OpenSearchStore) ✅ — store implementation and its tests
-  - QRM5-006 (Async Embedding Pipeline) ✅ — pipeline implementation and its tests
-  - QRM5-007 (Data Migration & Agent Prompt Guidelines) ✅ — migration service and its tests
-  - All QRM5 unit test specs from QRM5-002 through QRM5-007 must be committed before this ticket starts
-- **Blocks:** Nothing — this is the final validation ticket before QRM5-009 (Config & Docs)
+  - QRM5-002..007 (full stack implementation) ✅
+  - QRM5-009 (OpenSearch activation + health endpoint) ✅ — scenarios 1 and 5 depend on the upgraded `/health` dependency reporting
+  - QRM1-013 (connectivity smoke test) ✅ — the format this runbook follows; basic connectivity is assumed passing
+- **Blocks:** Nothing — QRM5-009 already activated the backend. This runbook is post-hoc live validation.
 - **Part of:** [QRM5-000-roadmap.md](QRM5-000-roadmap.md) — Semantic Search Foundation milestone
 
-**Key existing files (test specs to audit):**
+**Reference runbook:** [QRM1-013-smoke-test-runbook.md](QRM1-013-smoke-test-runbook.md) — QRM1 connectivity scenarios + run log format. This ticket's runbook mirrors that structure (numbered scenarios, result table, dated run sections with pre-run fixes and bugs filed).
 
-| Spec file | Source file |
-|-----------|------------|
-| `libs/common/src/context-store/to-embedding-text.spec.ts` | `libs/common/src/context-store/to-embedding-text.ts` |
-| `apps/mcp-server/src/embedding/ollama-client.service.spec.ts` | `apps/mcp-server/src/embedding/ollama-client.service.ts` |
-| `apps/mcp-server/src/embedding/embedding.service.spec.ts` | `apps/mcp-server/src/embedding/embedding.service.ts` |
-| `apps/mcp-server/src/embedding/embedding-pipeline.service.spec.ts` | `apps/mcp-server/src/embedding/embedding-pipeline.service.ts` |
-| `apps/mcp-server/src/context-store/opensearch/opensearch-store.spec.ts` | `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts` |
-| `apps/mcp-server/src/context-store/opensearch/opensearch-setup.service.spec.ts` | `apps/mcp-server/src/context-store/opensearch/opensearch-setup.service.ts` |
-| `apps/mcp-server/src/context-store/opensearch/migration.service.spec.ts` | `apps/mcp-server/src/context-store/opensearch/migration.service.ts` |
-| `apps/mcp-server/src/config/opensearch.config.spec.ts` | `apps/mcp-server/src/config/opensearch.config.ts` |
-| `apps/mcp-server/src/config/embedding.config.spec.ts` | `apps/mcp-server/src/config/embedding.config.ts` |
-| `apps/mcp-server/src/config/context-store.config.spec.ts` | `apps/mcp-server/src/config/context-store.config.ts` |
-| `apps/mcp-server/src/context-store/in-memory-store.spec.ts` | `apps/mcp-server/src/context-store/in-memory-store.ts` |
+**Key surfaces exercised:**
 
-**Testing patterns reference:**
-- NestJS test module: `in-memory-store.spec.ts` (full `Test.createTestingModule` with `EventEmitterModule`)
-- Manual mock objects: `opensearch-store.spec.ts` (mock OpenSearch client, EmbeddingService, SetupService)
-- `global.fetch` mocking: `ollama-client.service.spec.ts` (save/restore original, mock per-test)
-- Fake timers + flushPromises: `embedding-pipeline.service.spec.ts` (async queue drain, retry backoff)
-- Date.now() spying: `opensearch-store.spec.ts`, `in-memory-store.spec.ts` (TTL expiration)
-- Environment variable save/restore: all config spec files
-- `jest.mock()` with module replacement: `migration.service.spec.ts` (fs/promises, @app/common)
+| Surface | Scenarios | Source |
+|---------|-----------|--------|
+| OpenSearch backend activation | 1, 2 | `docker-compose.yml`, `context-store.module.ts` |
+| Health endpoint dependency reporting | 1, 5 | `apps/mcp-server/src/health/health.service.ts` |
+| Index + hybrid-search pipeline provisioning | 2 | `opensearch-setup.service.ts` |
+| Migration from `quorum.context` | 3 | `migration.service.ts` |
+| Write path (index + embeddingText + event) | 4, 5, 6, 7 | `opensearch-store.ts` |
+| Async embedding pipeline (drain + backfill) | 4, 5 | `embedding-pipeline.service.ts`, `embedding.service.ts`, `ollama-client.service.ts` |
+| Hybrid search (BM25 + k-NN) ranking | 4, 6 | `opensearch-store.ts` search path |
+| Graceful degradation (Ollama down) | 5 | `opensearch-store.ts`, `embedding.service.isAvailable()` |
+| Scope isolation + token budget | 6 | `opensearch-store.ts` search filters |
+| Text-first prompt guidelines | 7 | `libs/common/src/prompts/role-prompt-templates.ts` |
+| Correlation ID propagation | 8 | `InvocationHandler`, `MessageBroker`, `OpenSearchStore`, `EmbeddingPipelineService` loggers |
