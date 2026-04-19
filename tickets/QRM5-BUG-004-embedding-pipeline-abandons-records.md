@@ -94,15 +94,15 @@ Would remove `MAX_RETRIES` and keep items in the queue indefinitely with a cappe
 
 ## Acceptance Criteria
 
-- [ ] A `setInterval`-based periodic sweep calls `backfill()` every 60 seconds after module init
-- [ ] After a record is abandoned by the retry ladder, the next periodic sweep (within ≤ 60s) re-queues and successfully embeds it without mcp-server restart
-- [ ] A `sweeping` concurrency guard prevents re-entrant `backfill()` calls from the timer; the guard is separate from the `processing` flag
-- [ ] The interval handle is cleared in `onModuleDestroy()` — no leaked timers during test teardown or graceful shutdown
-- [ ] No duplicate embed work on records that already have an `embedding` vector (backfill query already enforces this, but verify in test)
-- [ ] Sweep does not spam logs when no abandoned records exist (`debug` level for "No documents need embedding backfill")
-- [ ] Unit tests cover: (1) sweep recovers abandoned records; (2) sweep is idempotent under concurrent invocation; (3) sweep is a no-op when index is empty
+- [x] A `setInterval`-based periodic sweep calls `backfill()` every 60 seconds after module init
+- [x] After a record is abandoned by the retry ladder, the next periodic sweep (within ≤ 60s) re-queues and successfully embeds it without mcp-server restart
+- [x] A `sweeping` concurrency guard prevents re-entrant `backfill()` calls from the timer; the guard is separate from the `processing` flag
+- [x] The interval handle is cleared in `onModuleDestroy()` — no leaked timers during test teardown or graceful shutdown
+- [x] No duplicate embed work on records that already have an `embedding` vector (backfill query already enforces this, but verify in test)
+- [x] Sweep does not spam logs when no abandoned records exist (`debug` level for "No documents need embedding backfill")
+- [x] Unit tests cover: (1) sweep recovers abandoned records; (2) sweep is idempotent under concurrent invocation; (3) sweep is a no-op when index is empty
 - [ ] Runbook Scenario 5 (QRM5-008) updated to expect automatic recovery, and the follow-up run confirms it
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass
 
 ## Dependencies and References
 
@@ -118,3 +118,27 @@ Would remove `MAX_RETRIES` and keep items in the queue indefinitely with a cappe
 | `apps/mcp-server/src/embedding/embedding-pipeline.service.spec.ts` | Extend tests — sweep recovery, concurrency guard, no-op when clean |
 | `apps/mcp-server/src/health/health.service.ts` | Observational — confirms Ollama state during repro |
 | `docs/context-store.md` | Update graceful-degradation table to reflect automatic recovery after fix |
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-19
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/embedding/embedding-pipeline.service.ts` | Modified | Added `BACKFILL_SWEEP_INTERVAL_MS` constant (60s), `sweeping` concurrency guard, `backfillInterval` handle, `setInterval` in `onModuleInit()`, `OnModuleDestroy` lifecycle with `clearInterval` cleanup |
+| `apps/mcp-server/src/embedding/embedding-pipeline.service.spec.ts` | Modified | Added 5 tests in "periodic backfill sweep" describe block: sweep recovery after abandon, concurrency guard skip, no-op when clean, destroy cleanup, destroy-before-init safety |
+
+### Deviations from Ticket Spec
+
+- **Runbook Scenario 5 update not included.** The ticket's implementation details marked this "Optional integration" while the acceptance criteria listed it as a checkbox. The developer reasonably followed the implementation details. The runbook update and live verification remain deferred — can be confirmed during the next QRM5-008 runbook re-run.
+
+### Verification
+
+- `npm run build` — 4 webpack bundles compiled successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 760 tests passing (5 new + 755 existing)
+- Worker process exit warning is pre-existing (confirmed present on parent commit `f033c6c`)
