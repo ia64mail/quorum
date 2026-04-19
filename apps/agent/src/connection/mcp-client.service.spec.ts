@@ -166,6 +166,84 @@ describe('McpClientService', () => {
     });
   });
 
+  describe('session-not-found reconnect', () => {
+    beforeEach(async () => {
+      // Establish initial connection
+      mockConnect.mockResolvedValue(undefined);
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+      });
+      mockListTools.mockResolvedValue({ tools: [] });
+      mockClose.mockResolvedValue(undefined);
+      await service.connectAndRegister();
+      jest.clearAllMocks();
+      // Reset mocks for the actual test — connect/listTools needed for reconnection
+      mockConnect.mockResolvedValue(undefined);
+      mockListTools.mockResolvedValue({ tools: [] });
+      mockClose.mockResolvedValue(undefined);
+    });
+
+    it('should reconnect and retry on session-not-found error', async () => {
+      mockCallTool
+        // First callTool attempt — session not found
+        .mockRejectedValueOnce(new Error('Session not found'))
+        // register_agent during reconnection
+        .mockResolvedValueOnce({
+          content: [{ type: 'text', text: 'ok' }],
+        })
+        // Retry callTool — succeeds
+        .mockResolvedValueOnce({
+          content: [{ type: 'text', text: 'retry-result' }],
+        });
+
+      const result = await service.callTool('invoke_agent', {
+        target: 'developer',
+      });
+
+      // Transport was closed before reconnection
+      expect(mockClose).toHaveBeenCalledTimes(1);
+      // Reconnected (connect + register + discoverTools)
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+      expect(mockListTools).toHaveBeenCalledTimes(1);
+      // Original call + register + retry = 3
+      expect(mockCallTool).toHaveBeenCalledTimes(3);
+      expect(result).toEqual({
+        content: [{ type: 'text', text: 'retry-result' }],
+      });
+    });
+
+    it('should surface error when retry also fails after session-not-found', async () => {
+      mockCallTool
+        // First callTool attempt — session not found
+        .mockRejectedValueOnce(new Error('Session not found'))
+        // register_agent during reconnection
+        .mockResolvedValueOnce({
+          content: [{ type: 'text', text: 'ok' }],
+        })
+        // Retry callTool — also fails
+        .mockRejectedValueOnce(new Error('Connection refused'));
+
+      await expect(
+        service.callTool('invoke_agent', { target: 'developer' }),
+      ).rejects.toThrow('Connection refused');
+
+      expect(mockClose).toHaveBeenCalledTimes(1);
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not intercept non-session-not-found errors', async () => {
+      mockCallTool.mockRejectedValueOnce(new Error('Some other error'));
+
+      await expect(
+        service.callTool('invoke_agent', { target: 'developer' }),
+      ).rejects.toThrow('Some other error');
+
+      // No reconnection attempted
+      expect(mockClose).not.toHaveBeenCalled();
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+  });
+
   describe('onApplicationShutdown', () => {
     it('should unregister and close transport', async () => {
       mockConnect.mockResolvedValue(undefined);

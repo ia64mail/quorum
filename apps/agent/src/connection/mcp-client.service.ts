@@ -52,14 +52,36 @@ export class McpClientService implements OnApplicationShutdown {
     return [...this.cachedTools];
   }
 
-  /** Expose `client.callTool()` for future use (QRM1-008). */
+  /**
+   * Call an MCP tool, with session-not-found interception.
+   *
+   * If the server returns "Session not found" (stale session after restart),
+   * the zombie transport is closed, a reconnection is attempted, and the
+   * call is retried once. (QRM5-BUG-005)
+   */
   async callTool(
     name: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.client.callTool({ name, arguments: args }, undefined, {
-      timeout: this.config.mcp.requestTimeoutMs,
-    });
+    try {
+      return await this.client.callTool({ name, arguments: args }, undefined, {
+        timeout: this.config.mcp.requestTimeoutMs,
+      });
+    } catch (err) {
+      if (!this.isSessionNotFound(err)) throw err;
+
+      this.logger.warn(
+        `Session not found during callTool("${name}"), ` +
+          'closing stale transport and reconnecting',
+      );
+      await this.closeTransport();
+      await this.handleReconnection();
+
+      // Retry once — if this also fails, the error surfaces to the caller
+      return this.client.callTool({ name, arguments: args }, undefined, {
+        timeout: this.config.mcp.requestTimeoutMs,
+      });
+    }
   }
 
   async onApplicationShutdown(_signal?: string): Promise<void> {
@@ -202,6 +224,15 @@ export class McpClientService implements OnApplicationShutdown {
       );
       this.cachedTools = [];
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Error Detection
+  // ---------------------------------------------------------------------------
+
+  private isSessionNotFound(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.includes('Session not found');
   }
 
   // ---------------------------------------------------------------------------

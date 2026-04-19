@@ -12,6 +12,9 @@ import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { McpService } from './mcp.service';
 
+/** QRM5-BUG-005: interval between SSE keepalive pings (ms). */
+const SSE_KEEPALIVE_INTERVAL_MS = 30_000;
+
 /**
  * Streamable HTTP transport endpoint for MCP protocol communication.
  *
@@ -106,6 +109,11 @@ export class McpController {
 
     const transport = this.sessions.get(sessionId)!;
     await transport.handleRequest(req, res);
+
+    // QRM5-BUG-005: SSE keepalive — emit a comment ping every 30s so the
+    // client's SSE stream errors out promptly when the server process restarts,
+    // triggering the existing onclose → handleReconnection path.
+    this.startSseKeepalive(res);
   }
 
   /** Terminate a session, close its transport, and remove it from the session map. */
@@ -122,5 +130,28 @@ export class McpController {
     await transport.handleRequest(req, res);
     this.sessions.delete(sessionId);
     this.logger.log(`Session deleted: ${sessionId}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // SSE Keepalive
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Emit `: ping\n\n` SSE comments at a fixed interval to keep the stream
+   * alive and ensure the client detects a dead connection when the server
+   * process restarts (QRM5-BUG-005).
+   */
+  private startSseKeepalive(res: Response): void {
+    const interval = setInterval(() => {
+      if (res.writableEnded) {
+        clearInterval(interval);
+        return;
+      }
+      res.write(': ping\n\n');
+    }, SSE_KEEPALIVE_INTERVAL_MS);
+
+    res.on('close', () => {
+      clearInterval(interval);
+    });
   }
 }

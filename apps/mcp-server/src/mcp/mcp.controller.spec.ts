@@ -25,6 +25,8 @@ interface MockResponse {
   status: jest.Mock;
   json: jest.Mock;
   on: jest.Mock;
+  write: jest.Mock;
+  writableEnded: boolean;
 }
 
 function mockRes(): { res: Response; mock: MockResponse } {
@@ -32,6 +34,8 @@ function mockRes(): { res: Response; mock: MockResponse } {
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
     on: jest.fn().mockReturnThis(),
+    write: jest.fn().mockReturnValue(true),
+    writableEnded: false,
   };
   return { res: mock as unknown as Response, mock };
 }
@@ -225,6 +229,106 @@ describe('McpController', () => {
       const { mock: mockGet } = mockRes();
       await controller.handleGet(reqGet, mockGet as unknown as Response);
       expect(mockGet.status).toHaveBeenCalledWith(404);
+    });
+  });
+
+  describe('SSE keepalive', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('should emit ping comments at 30s intervals on SSE streams', async () => {
+      // Create a session
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      // Open SSE stream
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { res: resGet, mock: mockGetRes } = mockRes();
+      await controller.handleGet(reqGet, resGet);
+
+      // No ping before 30s
+      expect(mockGetRes.write).not.toHaveBeenCalled();
+
+      // First ping at 30s
+      jest.advanceTimersByTime(30_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+      expect(mockGetRes.write).toHaveBeenCalledWith(': ping\n\n');
+
+      // Second ping at 60s
+      jest.advanceTimersByTime(30_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clean up keepalive interval on connection close', async () => {
+      // Create a session
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      // Open SSE stream
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { res: resGet, mock: mockGetRes } = mockRes();
+      await controller.handleGet(reqGet, resGet);
+
+      // Verify keepalive starts
+      jest.advanceTimersByTime(30_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+
+      // Find and trigger the 'close' handler
+      const closeCalls = mockGetRes.on.mock.calls as [string, () => void][];
+      const closeCall = closeCalls.find((call) => call[0] === 'close');
+      expect(closeCall).toBeDefined();
+      closeCall![1]();
+
+      // No more pings after close
+      jest.advanceTimersByTime(90_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+    });
+
+    it('should stop pinging when response is no longer writable', async () => {
+      // Create a session
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      // Open SSE stream
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { res: resGet, mock: mockGetRes } = mockRes();
+      await controller.handleGet(reqGet, resGet);
+
+      // First ping succeeds
+      jest.advanceTimersByTime(30_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+
+      // Mark response as ended
+      mockGetRes.writableEnded = true;
+
+      // Next interval fires but skips write
+      jest.advanceTimersByTime(30_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not start keepalive for 404 responses', async () => {
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'nonexistent' },
+      });
+      const { mock: mockGetRes } = mockRes();
+      await controller.handleGet(reqGet, mockGetRes as unknown as Response);
+
+      jest.advanceTimersByTime(60_000);
+      expect(mockGetRes.write).not.toHaveBeenCalled();
     });
   });
 });
