@@ -12,7 +12,7 @@ if (process.env.ENABLE_TEST_ENDPOINTS === 'true') {
 @Module({
   imports: [
     McpServerConfigModule,
-    HealthModule,
+    HealthModule.forRoot(),
     McpModule,
     ...conditionalImports,
   ],

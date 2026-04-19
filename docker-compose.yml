@@ -89,6 +89,8 @@ services:
       BOOTSTRAP_ENABLED: ${BOOTSTRAP_ENABLED:-true}
       BOOTSTRAP_MAX_TOKENS: ${BOOTSTRAP_MAX_TOKENS:-1000}
       BOOTSTRAP_PROJECT_RATIO: ${BOOTSTRAP_PROJECT_RATIO:-0.6}
+      # Context Store backend (QRM5-009)
+      CONTEXT_STORE_BACKEND: opensearch
       # OpenSearch (QRM5)
       OPENSEARCH_NODE: http://opensearch:9200
       OPENSEARCH_INDEX: quorum-context
