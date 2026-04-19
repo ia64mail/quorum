@@ -135,16 +135,59 @@ Update the architecture overview to reflect the new containers.
 ## Acceptance Criteria
 
 - [x] `CONTEXT_STORE_BACKEND: opensearch` is set in `docker-compose.yml` mcp-server environment
-- [ ] Health endpoint reports dependency status (OpenSearch connectivity, Ollama availability) in the response body when opensearch backend is active
-- [ ] Health endpoint returns HTTP 200 always (liveness — no restart loops)
-- [ ] Health endpoint behaves as before (`{ status: 'ok' }`) when `CONTEXT_STORE_BACKEND=inmemory`
-- [ ] Health endpoint spec updated with tests for both backends
-- [ ] `docs/context-store.md` updated: OpenSearchStore section, module wiring, configuration, architecture diagram; OpenSearch removed from "Future Enhancements"
-- [ ] `docs/context-management.md` updated: search behavior describes hybrid search
-- [ ] `docs/system-design.md` updated: architecture diagram includes OpenSearch and Ollama containers
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (existing tests unaffected)
+- [x] Health endpoint reports dependency status (OpenSearch connectivity, Ollama availability) in the response body when opensearch backend is active
+- [x] Health endpoint returns HTTP 200 always (liveness — no restart loops)
+- [x] Health endpoint behaves as before (`{ status: 'ok' }`) when `CONTEXT_STORE_BACKEND=inmemory`
+- [x] Health endpoint spec updated with tests for both backends
+- [x] `docs/context-store.md` updated: OpenSearchStore section, module wiring, configuration, architecture diagram; OpenSearch removed from "Future Enhancements"
+- [x] `docs/context-management.md` updated: search behavior describes hybrid search
+- [x] `docs/system-design.md` updated: architecture diagram includes OpenSearch and Ollama containers
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (existing tests unaffected)
+
+## Implementation Notes
+
+**Status:** ✅ Accepted — all 11 acceptance criteria verified
+
+**Commits:**
+| Commit | Scope |
+|--------|-------|
+| `614a1a0` | Env var flip + health endpoint upgrade |
+| `9941c40` | Documentation updates (three docs) |
+| `8b6c3c2` | Follow-up: remove stale "Future Enhancements" entry, add Phase B/C forward references |
+
+**Files modified:**
+| File | Change |
+|------|--------|
+| `docker-compose.yml` | Added `CONTEXT_STORE_BACKEND: opensearch` to mcp-server environment |
+| `apps/mcp-server/src/health/health.service.ts` | New — `HealthService` with `DependencyStatus`/`HealthResponse` types, `@Optional()` injection of `OpenSearchSetupService` and `EmbeddingService`, parallel dependency checks (65 lines) |
+| `apps/mcp-server/src/health/health.controller.ts` | Thin delegation to `HealthService.check()`, returns `Promise<HealthResponse>` |
+| `apps/mcp-server/src/health/health.module.ts` | Converted to `DynamicModule` via `forRoot()` — reads `CONTEXT_STORE_BACKEND` directly from `process.env` (same pattern as `ContextStoreModule`), conditionally imports `OpenSearchModule`/`EmbeddingModule` |
+| `apps/mcp-server/src/health/index.ts` | New — barrel export |
+| `apps/mcp-server/src/mcp-server.module.ts` | Updated to use `HealthModule.forRoot()` |
+| `apps/mcp-server/src/health/health.controller.spec.ts` | Expanded from 1 to 9 tests covering both backends, mixed up/down states, error handling |
+| `docs/context-store.md` | Major rewrite — added OpenSearchStore section (write/search paths, hybrid query BM25 0.3 + k-NN 0.7, embedding pipeline, graceful degradation table), module wiring with dynamic `forRoot()`, all config tables, startup sequence. Moved OpenSearch from Future Enhancements to current. Removed implemented "Bootstrap context injection" item, added Phase B/C forward references. |
+| `docs/context-management.md` | Updated `context_query` search mode from substring matching to hybrid semantic search, added graceful degradation note |
+| `docs/system-design.md` | Added OpenSearch and Ollama to architecture diagram, network diagram, container components table. Updated monorepo structure, Docker Compose services count, context management section, key design decisions table. |
+
+**Deviations from ticket:** None. Implementation follows the ticket specification precisely. One additive scope item surfaced during doc review and was handled in `8b6c3c2`: the "Bootstrap context injection" entry under Future Enhancements was stale (already delivered in QRM4-001..005) and was removed along with adding the Phase B/C forward-reference table from the QRM5-000 roadmap.
+
+**Verification results:**
+- `npm run build`: ✅
+- `npm run lint`: ✅ (0 errors, 0 warnings)
+- `npm run test`: ✅ 745 tests passing (up from 737 baseline — 8 new health tests)
+
+**Design choices carried through:**
+- **Liveness semantics preserved** — `/health` always returns HTTP 200; dependency status is reported in the body only. Avoids Docker restart loops when OpenSearch/Ollama are transiently unavailable.
+- **Backend-aware dependency list** — `inmemory` mode returns `{ status: 'ok' }` unchanged (no `dependencies` field). Only `opensearch` mode reports the `dependencies` object.
+- **`@Optional()` injection** — `HealthService` tolerates missing `OpenSearchSetupService`/`EmbeddingService` so the same service class works for both backends without conditional providers.
+- **Direct `process.env` read at module composition** — `HealthModule.forRoot()` mirrors `ContextStoreModule.forRoot()` (architect C2 pattern) because module imports resolve before DI/config is available.
+- **Parallel dependency checks** — `Promise.all` for OpenSearch + Ollama so health latency is bounded by the slower dependency, not the sum.
+
+**Delegation:**
+- Work items 1 (env var) and 2 (health endpoint) — implemented by developer.
+- Work item 3 (three doc files) — delegated to architect; one follow-up cleanup commit (`8b6c3c2`) after review.
 
 ## Dependencies and References
 
