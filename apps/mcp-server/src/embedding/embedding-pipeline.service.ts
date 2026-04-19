@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import type { Client } from '@opensearch-project/opensearch';
@@ -13,6 +19,9 @@ const MAX_RETRIES = 3;
 
 /** Maximum backoff delay in milliseconds. */
 const MAX_BACKOFF_MS = 8000;
+
+/** Interval in milliseconds between periodic backfill sweeps. */
+const BACKFILL_SWEEP_INTERVAL_MS = 60_000;
 
 /** Internal queue item representing a document awaiting embedding. */
 interface QueueItem {
@@ -42,11 +51,13 @@ interface BackfillSearchResponse {
  * but lack an `embedding` vector (e.g., after a restart while Ollama was down).
  */
 @Injectable()
-export class EmbeddingPipelineService implements OnModuleInit {
+export class EmbeddingPipelineService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EmbeddingPipelineService.name);
   private readonly client: Client;
   private readonly queue: QueueItem[] = [];
   private processing = false;
+  private sweeping = false;
+  private backfillInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly setupService: OpenSearchSetupService,
@@ -63,6 +74,26 @@ export class EmbeddingPipelineService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await this.backfill();
+    this.backfillInterval = setInterval(() => {
+      if (this.sweeping) return;
+      this.sweeping = true;
+      this.backfill()
+        .catch((error: unknown) => {
+          this.logger.error(
+            `Periodic backfill sweep failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        })
+        .finally(() => {
+          this.sweeping = false;
+        });
+    }, BACKFILL_SWEEP_INTERVAL_MS);
+  }
+
+  onModuleDestroy(): void {
+    if (this.backfillInterval) {
+      clearInterval(this.backfillInterval);
+      this.backfillInterval = null;
+    }
   }
 
   /* ------------------------------------------------------------------ */

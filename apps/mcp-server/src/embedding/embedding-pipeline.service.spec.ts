@@ -606,6 +606,148 @@ describe('EmbeddingPipelineService', () => {
   });
 
   /* ---------------------------------------------------------------- */
+  /*  Periodic backfill sweep                                          */
+  /* ---------------------------------------------------------------- */
+
+  describe('periodic backfill sweep', () => {
+    it('should recover abandoned records on the next periodic sweep', async () => {
+      const compositeKey = CompositeKeyBuilder.build(
+        ContextScope.project,
+        'abandoned-item',
+      );
+
+      // Initial backfill — empty (no records to backfill at startup)
+      mockSearch.mockResolvedValueOnce(makeBackfillResponse([]));
+
+      const pipeline = createPipeline();
+      await pipeline.onModuleInit();
+      await flushPromises();
+
+      // Simulate a record that will be abandoned: embed always returns null
+      mockGet.mockResolvedValue(makeGetResponse('some text'));
+      mockEmbedDocument.mockResolvedValue(null);
+
+      pipeline.handleContextChange({
+        scope: ContextScope.project,
+        key: 'abandoned-item',
+        action: 'set',
+      });
+
+      // Exhaust the retry ladder (retryCount 0 → 1 → 2 → 3 → abandon)
+      await flushPromises(); // retryCount=0, fails, schedules at 1000ms
+      jest.advanceTimersByTime(1000);
+      await flushPromises(); // retryCount=1, fails, schedules at 2000ms
+      jest.advanceTimersByTime(2000);
+      await flushPromises(); // retryCount=2, fails, schedules at 4000ms
+      jest.advanceTimersByTime(4000);
+      await flushPromises(); // retryCount=3 (>= MAX_RETRIES), abandoned
+
+      // Record is now abandoned. Reset mocks for recovery scenario.
+      const vector = makeVector();
+      mockEmbedDocument.mockResolvedValue(vector);
+      mockUpdate.mockResolvedValue({});
+
+      // The periodic sweep will find this abandoned record
+      mockSearch.mockResolvedValueOnce(makeBackfillResponse([compositeKey]));
+
+      // Advance to the next sweep interval (60s from init, minus 7s elapsed)
+      jest.advanceTimersByTime(60_000 - 7000);
+      await flushPromises();
+
+      // The sweep should have re-queued the abandoned record and embedded it
+      expect(mockUpdate).toHaveBeenCalledWith({
+        index: 'test-index',
+        id: compositeKey,
+        body: { doc: { embedding: vector } },
+      });
+
+      pipeline.onModuleDestroy();
+    });
+
+    it('should skip periodic sweep when previous sweep is still running', async () => {
+      // Initial backfill — empty
+      mockSearch.mockResolvedValueOnce(makeBackfillResponse([]));
+
+      const pipeline = createPipeline();
+      await pipeline.onModuleInit();
+      await flushPromises();
+
+      // Set up a slow backfill for the first sweep
+      let resolveSlowSearch!: (value: unknown) => void;
+      const slowSearch = new Promise((resolve) => {
+        resolveSlowSearch = resolve;
+      });
+      mockSearch.mockReturnValueOnce(slowSearch);
+
+      // Trigger first sweep — blocked on slowSearch
+      jest.advanceTimersByTime(60_000);
+
+      // Queue a response for a potential second sweep
+      mockSearch.mockResolvedValueOnce(makeBackfillResponse([]));
+
+      // Trigger second sweep — should be skipped (sweeping guard)
+      jest.advanceTimersByTime(60_000);
+      await flushPromises();
+
+      // Resolve the slow search so the first sweep completes
+      resolveSlowSearch(makeBackfillResponse([]));
+      await flushPromises();
+
+      // mockSearch called: initial backfill (1) + first sweep (2).
+      // Second sweep was skipped due to the sweeping guard.
+      expect(mockSearch).toHaveBeenCalledTimes(2);
+
+      pipeline.onModuleDestroy();
+    });
+
+    it('should not enqueue records when periodic sweep finds no abandoned documents', async () => {
+      // Initial backfill — empty
+      mockSearch.mockResolvedValue(makeBackfillResponse([]));
+
+      const pipeline = createPipeline();
+      await pipeline.onModuleInit();
+      await flushPromises();
+
+      // Trigger periodic sweep
+      jest.advanceTimersByTime(60_000);
+      await flushPromises();
+
+      // search called twice: initial backfill + one sweep
+      expect(mockSearch).toHaveBeenCalledTimes(2);
+      // No documents to process
+      expect(mockGet).not.toHaveBeenCalled();
+      expect(mockUpdate).not.toHaveBeenCalled();
+
+      pipeline.onModuleDestroy();
+    });
+
+    it('should clear interval on onModuleDestroy to prevent further sweeps', async () => {
+      mockSearch.mockResolvedValue(makeBackfillResponse([]));
+
+      const pipeline = createPipeline();
+      await pipeline.onModuleInit();
+      await flushPromises();
+
+      pipeline.onModuleDestroy();
+
+      mockSearch.mockClear();
+
+      // Advance well past multiple sweep intervals
+      jest.advanceTimersByTime(180_000);
+      await flushPromises();
+
+      // No sweeps should have fired after destroy
+      expect(mockSearch).not.toHaveBeenCalled();
+    });
+
+    it('should handle onModuleDestroy gracefully when interval was never set', () => {
+      const pipeline = createPipeline();
+      // Don't call onModuleInit — interval is null
+      expect(() => pipeline.onModuleDestroy()).not.toThrow();
+    });
+  });
+
+  /* ---------------------------------------------------------------- */
   /*  Drain loop safety                                                */
   /* ---------------------------------------------------------------- */
 
