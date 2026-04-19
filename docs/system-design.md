@@ -32,6 +32,11 @@ graph TB
             REG -.-> MSG
         end
 
+        subgraph "Infrastructure"
+            OS["OpenSearch<br/>(BM25 + k-NN index)"]
+            OLL["Ollama<br/>(mxbai-embed-large)"]
+        end
+
         subgraph "Agent Containers (Hardened)"
             A1[Architect Agent]
             A2[Team Lead Agent]
@@ -40,6 +45,9 @@ graph TB
             A5[QA Agent]
             A6[Product Owner Agent]
         end
+
+        CTX -->|"hybrid search + storage"| OS
+        CTX -.->|"async embedding"| OLL
 
         MOD <-->|Streamable HTTP| MCP
         A1 <-->|Streamable HTTP| MCP
@@ -135,12 +143,30 @@ The communication backbone connecting all agents.
 - Register and track active agents via `register_agent`/`unregister_agent`
 - Route inter-agent messages via Message Broker
 - Expose `invoke_agent` tool for agent-to-agent communication
-- Manage shared Context Store (in-memory with file persistence)
-- Health check endpoint (`GET /health`)
+- Manage shared Context Store (OpenSearch hybrid search backend or InMemory fallback, configurable via `CONTEXT_STORE_BACKEND`)
+- Health check endpoint (`GET /health`) with dependency status reporting
+
+**Infrastructure Dependencies** (when `CONTEXT_STORE_BACKEND=opensearch`):
+- **OpenSearch** — context document storage with hybrid BM25 + k-NN search
+- **Ollama** — local embedding inference for k-NN vectors (graceful degradation to BM25-only if unavailable)
 
 > **Note:** See [Agent Messaging](agent-messaging.md) for detailed documentation on bidirectional MCP and the Message Broker mechanism. See [Context Management](context-management.md) for the context sharing API and [Context Store](context-store.md) for storage backend details.
 
-### 3. Agent Containers
+### 3. Infrastructure Containers
+
+OpenSearch and Ollama provide the hybrid search backend for the Context Store. The MCP server depends on both with `condition: service_healthy` — it starts only after they are ready.
+
+| Container | Image | Purpose | Health Check |
+|-----------|-------|---------|--------------|
+| **opensearch** | `opensearchproject/opensearch:2` | BM25 full-text + k-NN vector index for context storage and hybrid semantic search | `GET /_cluster/health` |
+| **ollama** | `ollama/ollama:latest` | Local embedding inference using `mxbai-embed-large` (1024 dimensions). Zero per-token cost, full data privacy | `ollama list` |
+| **ollama-init** | `ollama/ollama:latest` | Init container — pulls the embedding model into a shared volume before the runtime `ollama` container starts | Runs to completion |
+
+OpenSearch runs in single-node mode with the security plugin disabled (local development). Named volumes (`opensearch-data`, `ollama-data`) persist data and model weights across restarts.
+
+The Context Store backend is configurable via `CONTEXT_STORE_BACKEND` (`opensearch` or `inmemory`). When set to `opensearch`, the `ContextStoreModule` wires `OpenSearchStore` as the backend, along with `MigrationService` (one-time data import from `quorum.context`) and `EmbeddingPipelineService` (async vector computation). When set to `inmemory`, these infrastructure containers are unused. See [Context Store](context-store.md) for full implementation details.
+
+### 4. Agent Containers
 
 Identical Docker images configured via environment variables. Containers are hardened with read-only filesystems, dropped capabilities, and no-new-privileges.
 
@@ -298,9 +324,14 @@ This transforms context from "push everything" to "store decisions, query as nee
 
 ### Storage
 
-The current backend is `InMemoryStore` — a `Map<string, ContextItem>` with composite keys (`{scope}:{id}:{key}`) managed by `CompositeKeyBuilder`. Project scope always uses `_` as ID; conversation/agent scopes require an explicit ID (correlationId or agentId).
+The Context Store backend is configurable via `CONTEXT_STORE_BACKEND`:
 
-Context is persisted to a `quorum.context` JSON file in the workspace directory. The store loads from this file on startup (pruning expired items) and saves on shutdown via atomic tmp+rename. This survives container restarts without requiring an external database.
+- **`opensearch`** (production): `OpenSearchStore` backed by OpenSearch with hybrid BM25 + k-NN vector search. Embedding vectors are computed asynchronously via Ollama (`mxbai-embed-large`). Documents are BM25-searchable immediately on write and hybrid-searchable within ~300ms after async embedding completes. Graceful degradation ensures the system continues with BM25-only search when Ollama is unavailable.
+- **`inmemory`** (default): `InMemoryStore` — a `Map<string, ContextItem>` with case-insensitive substring search and JSON file persistence (`quorum.context`). Used for tests and development without Docker infrastructure.
+
+Both backends use composite keys (`{scope}:{id}:{key}`) managed by `CompositeKeyBuilder`. Project scope always uses `_` as ID; conversation/agent scopes require an explicit ID (correlationId or agentId).
+
+When switching from `inmemory` to `opensearch`, `MigrationService` performs a one-time import of existing `quorum.context` records into the OpenSearch index on first startup.
 
 > **Details:** [Context Management](context-management.md) for MCP API design, [Context Store](context-store.md) for storage implementation details.
 
@@ -330,12 +361,14 @@ quorum/
 │   │   ├── src/
 │   │   │   ├── main.ts
 │   │   │   ├── mcp-server.module.ts
-│   │   │   ├── config/          # Server + broker + context-store config
-│   │   │   ├── health/          # GET /health endpoint
+│   │   │   ├── config/          # Server, broker, context-store, opensearch, embedding config
+│   │   │   ├── health/          # GET /health endpoint (with dependency status)
 │   │   │   ├── mcp/             # MCP protocol (7 tools, 2 resources)
 │   │   │   ├── registry/        # Agent registry, HttpAgentConnection
 │   │   │   ├── messaging/       # Message broker, role timeouts
-│   │   │   ├── context-store/   # InMemoryStore with file persistence
+│   │   │   ├── context-store/   # ContextStoreModule (dynamic), InMemoryStore, opensearch/
+│   │   │   │   └── opensearch/  # OpenSearchStore, OpenSearchSetupService, MigrationService
+│   │   │   ├── embedding/       # EmbeddingService, EmbeddingPipelineService, OllamaClient
 │   │   │   └── testing/         # Gated test endpoints (ENABLE_TEST_ENDPOINTS)
 │   │   └── tsconfig.app.json
 │   │
@@ -371,9 +404,9 @@ Two YAML anchors provide shared configuration:
 | `x-shared-env` | Common env vars (Anthropic API, MCP server URL, logging) |
 | `x-agent-security` | Security constraints (read-only fs, dropped caps, tmpfs mounts) |
 
-**Services** (5 deployed): `mcp-server` (port 3000, default target), `terminal` (port 3001, default target), `architect`, `teamlead`, `developer` (each port 3002, agent target). All agent containers share `x-agent-security` constraints and mount the workspace read-write. The terminal mounts the workspace read-only. All services write logs to a shared `quorum-logs` volume.
+**Services** (8 deployed): `mcp-server` (port 3000, default target), `terminal` (port 3001, default target), `architect`, `teamlead`, `developer` (each port 3002, agent target), `opensearch` (port 9200), `ollama` (port 11434), `ollama-init` (init container, runs to completion). All agent containers share `x-agent-security` constraints and mount the workspace read-write. The terminal mounts the workspace read-only. All services write logs to a shared `quorum-logs` volume. Named volumes `opensearch-data` and `ollama-data` persist index data and model weights.
 
-Currently 5 deployed services: mcp-server, terminal, architect, teamlead, developer. The qa and productowner roles are fully defined (permissions, prompts, timeouts) but not yet added as compose services.
+The qa and productowner roles are fully defined (permissions, prompts, timeouts) but not yet added as compose services.
 
 ## Key Design Decisions
 
@@ -391,7 +424,8 @@ Currently 5 deployed services: mcp-server, terminal, architect, teamlead, develo
 | **NestJS monorepo** | Consistent tooling, shared libraries, easier deployment |
 | **Docker Compose** | Simple orchestration, suitable for single-host development |
 | **Pull-based context** | Agents query what they need vs receiving everything; prevents context exhaustion ([details](context-management.md)) |
-| **Context file persistence** | `quorum.context` JSON file in workspace — survives container restarts without external database |
+| **OpenSearch hybrid search** | Unified BM25 + k-NN vector index for context retrieval — semantic search with keyword fallback. Local Ollama embedding for zero-cost, private inference ([details](context-store.md)) |
+| **Configurable context backend** | `CONTEXT_STORE_BACKEND` env var swaps between OpenSearch (production) and InMemoryStore (tests/dev) at module composition time |
 
 ## Network Communication
 
@@ -408,6 +442,8 @@ graph LR
         A1[architect:3002]
         A2[teamlead:3002]
         A3[developer:3002]
+        OS[opensearch:9200]
+        OLL[ollama:11434]
     end
 
     T -->|"Streamable HTTP (MCP)"| M
@@ -418,6 +454,8 @@ graph LR
     M -->|"POST /invoke"| A1
     M -->|"POST /invoke"| A2
     M -->|"POST /invoke"| A3
+    M -->|"hybrid search + storage"| OS
+    M -.->|"embedding"| OLL
 ```
 
 ## Future Considerations
@@ -425,6 +463,6 @@ graph LR
 - **QA/ProductOwner deployment**: Roles are fully defined (permissions, prompts, timeouts) but not yet added as Docker Compose services
 - **LLM-based context summarization**: Replace POC truncation with semantic summarization in `context_summarize`
 - **Scaling**: Kubernetes deployment for multi-host scenarios
-- **Persistent context backend**: PostgreSQL + pgvector or OpenSearch to replace file-based persistence (see [Context Store](context-store.md) for evolution plan)
+- **Hybrid search tuning**: Adjust BM25/k-NN weights (currently 0.3/0.7), sub-document chunking for large values
 - **Authentication**: Secure agent-to-agent communication
 - **Plugin System**: Custom agent roles via external modules
