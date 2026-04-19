@@ -396,11 +396,23 @@ Docker dependency chain ensures correct ordering:
 | Enhancement | Description |
 |-------------|-------------|
 | **LLM-based summarization** | Replace POC truncation in `context_summarize` with semantic summarization |
-| **Bootstrap context injection** | Message Broker queries Context Store for recent decisions and attaches to invocation requests (TODO in broker) |
 | **Resource update notifications** | Wire `'context.change'` events to MCP `notifications/resources/updated` for real-time subscriptions (TODO in MCP service) |
 | **Role-based access control** | Agents only see context for their scope |
 | **Hybrid weight tuning** | Adjust BM25/k-NN weights (currently 0.3/0.7) based on observed retrieval quality |
 | **Sub-document chunking** | For large context values, split into chunks for finer-grained vector matching (currently one embedding per record) |
+
+### Phase B/C Forward References
+
+QRM5's hybrid search infrastructure is designed to support subsequent Knowledge Base phases without rework:
+
+| Future Capability | QRM5 Foundation |
+|-------------------|-----------------|
+| **KB entries (Phase B)** | OpenSearch index can hold KB entries alongside context records (same or separate index); `toEmbeddingText()` handles markdown values cleanly |
+| **Multi-dimensional classification (Phase B)** | OpenSearch supports additional keyword fields for dimension tags (by-file, by-feature, by-concept) — additive mapping change |
+| **LLM extraction pipeline (Phase B)** | `EmbeddingService` and `EmbeddingPipelineService` are reusable for KB entry embedding |
+| **Background maintenance (Phase C)** | OpenSearch's update-by-query enables bulk staleness detection and cleanup |
+| **`knowledge_query` MCP tool (Phase B)** | Hybrid search infrastructure is shared; KB queries use the same pipeline with different index/filters |
+| **Provenance metadata (Phase B)** | OpenSearch document structure is extensible — add fields to the mapping without migration |
 
 ## References
 
