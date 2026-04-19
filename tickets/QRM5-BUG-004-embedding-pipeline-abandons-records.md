@@ -42,38 +42,65 @@ On abandon (line 171–176), the item is dropped from the queue and never seen a
 
 The constants pre-date the hybrid search activation. The assumption encoded is "Ollama flakes momentarily during a single embed call" — not "Ollama can be down for a sustained period." QRM5-009 activated the backend into production use; the runbook smoke test is the first exercise of the sustained-outage path.
 
-## Implementation Details
+## Chosen Approach: Periodic Backfill Sweep
 
-Multiple viable fixes; pick one. Preferred: option A (periodic backfill) because it is the smallest change and subsumes the other failure modes (including transient OpenSearch unavailability during the partial-update step).
+**Decision:** Option A — periodic backfill sweep. This was selected over two alternatives (see Excluded Approaches below) because it is the smallest change, reuses the existing `backfill()` method with zero modification, and subsumes failure modes beyond Ollama outages (e.g., transient OpenSearch unavailability during the partial-update step in `processItem()`).
 
-### Option A — Periodic backfill sweep (preferred)
+### How it works
 
-Run `backfill()` on a timer (`@Interval` from `@nestjs/schedule`, or a plain `setInterval` in `onModuleInit`). Interval: 60–120s. The backfill query is already idempotent and bounded (`size: 10000`). When Ollama is up, abandoned records are drained within one sweep. When Ollama is still down, `embedDocument()` returns null, each item enters the retry ladder, hits abandon, and the next sweep picks it up again.
+Run `backfill()` on a recurring timer. The backfill query is already idempotent and bounded (`size: 10000`). When Ollama is up, abandoned records are drained within one sweep cycle. When Ollama is still down, `embedDocument()` returns null for each item, each item enters the retry ladder, hits abandon, and the next sweep picks it up again — a self-healing loop.
 
-Gotcha: make sure the sweep doesn't re-enter while a previous sweep is still draining — guard with the existing `processing` flag or a dedicated `sweeping` flag.
+### Implementation steps
 
-**Files:** `embedding-pipeline.service.ts` (add `backfillIntervalHandle`, start in `onModuleInit`, clear in `onModuleDestroy`), add `@nestjs/schedule` dependency if not already present (check `package.json`).
+1. **Add a `setInterval` timer in `onModuleInit()`** — invoke `backfill()` every **60 seconds** (60 000 ms). Use a plain `setInterval` rather than `@Interval` from `@nestjs/schedule` to avoid adding a new dependency; the pipeline already has lifecycle hooks.
 
-### Option B — Ollama availability edge listener
+2. **Store the interval handle** — add a private `backfillInterval: ReturnType<typeof setInterval> | null = null` field. Assign in `onModuleInit()` after the initial `backfill()` call completes.
 
-Add a polling check (every 30s) on `embeddingService.isAvailable()`. When it transitions from false → true, call `backfill()` once. Lighter overhead when healthy, more code than option A. No benefit when Ollama is always up but OpenSearch update calls are flaky.
+3. **Clear the timer in `onModuleDestroy()`** — implement `OnModuleDestroy`, clear the interval handle to prevent leaks during testing and graceful shutdown.
 
-### Option C — Unbounded retry with longer backoff
+4. **Add a concurrency guard** — add a private `sweeping = false` flag. Wrap the periodic `backfill()` call: if `sweeping` is true, skip silently. Set `sweeping = true` before calling `backfill()`, reset in a `finally` block. This prevents re-entrant sweeps if a previous cycle takes longer than 60s (unlikely, but defensive). Do NOT reuse the `processing` flag — it guards the drain loop, which is a different concern.
 
-Remove `MAX_RETRIES`, cap backoff at a larger value (60s), keep items in the queue forever. Simplest change, but the in-memory queue now grows without bound during extended outages, and items aren't recovered across mcp-server restarts (the startup backfill already handles that case). **Not preferred.**
+5. **Log level discipline** — the existing `backfill()` already logs `'No documents need embedding backfill'` at `debug` level. No change needed for the quiet-when-healthy requirement.
+
+### Files to modify
+
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/embedding/embedding-pipeline.service.ts` | Add `backfillInterval` field, `sweeping` guard, `setInterval` in `onModuleInit`, `clearInterval` in `onModuleDestroy` (implement `OnModuleDestroy`) |
+| `apps/mcp-server/src/embedding/embedding-pipeline.service.spec.ts` | Add unit tests for sweep recovery and concurrency guard |
 
 ### Tests
 
-- Unit test: abandoned items are picked up by a second `backfill()` call (proves the sweep is the recovery path).
-- Unit test: concurrent `backfill()` invocations don't double-enqueue the same record (concurrency guard).
-- Optional — integration: extend the Scenario 5 runbook to observe automatic recovery without mcp-server restart.
+- **Unit test — sweep recovery:** Abandon an item via the retry ladder, then call `backfill()` a second time. Assert the record is re-enqueued and successfully embedded. This proves the periodic sweep is the recovery path.
+- **Unit test — concurrency guard:** Trigger two `backfill()` invocations concurrently. Assert only one executes (no double-enqueue of the same record).
+- **Unit test — no-op when clean:** Call `backfill()` when no records lack embeddings. Assert no enqueue calls and a `debug`-level log.
+- **Optional integration:** Extend Scenario 5 in the QRM5-008 runbook to observe automatic recovery without mcp-server restart.
+
+## Excluded Approaches
+
+### Option B — Ollama availability edge listener (rejected)
+
+Would poll `embeddingService.isAvailable()` every 30s and trigger `backfill()` on a false→true transition. **Rejected because:**
+- More code than Option A (state machine for the edge detection, new polling timer, availability tracking).
+- Only covers Ollama outages. Does NOT recover records that failed due to transient OpenSearch errors during the `client.update()` partial-update step — those records would remain stuck until restart. Option A's backfill query catches any record missing an embedding, regardless of the failure cause.
+- No benefit in the common case (Ollama always up) — same overhead as Option A but more moving parts.
+
+### Option C — Unbounded retry with longer backoff (rejected)
+
+Would remove `MAX_RETRIES` and keep items in the queue indefinitely with a capped backoff (60s). **Rejected because:**
+- The in-memory queue grows without bound during extended outages, creating memory pressure for a problem that is better solved at the query level.
+- Items in the queue are NOT recovered across mcp-server restarts — the startup `backfill()` handles that case, making the unbounded queue redundant for the restart scenario.
+- Keeps failed items hot in memory even when the fix (Ollama recovery) is minutes away. The periodic sweep is more resource-efficient: it queries OpenSearch only every 60s and only for the gap records.
 
 ## Acceptance Criteria
 
-- [ ] After a record is abandoned by the retry ladder, a subsequent sweep (within ≤ 2 minutes of Ollama recovery) re-queues and successfully embeds it without mcp-server restart
+- [ ] A `setInterval`-based periodic sweep calls `backfill()` every 60 seconds after module init
+- [ ] After a record is abandoned by the retry ladder, the next periodic sweep (within ≤ 60s) re-queues and successfully embeds it without mcp-server restart
+- [ ] A `sweeping` concurrency guard prevents re-entrant `backfill()` calls from the timer; the guard is separate from the `processing` flag
+- [ ] The interval handle is cleared in `onModuleDestroy()` — no leaked timers during test teardown or graceful shutdown
 - [ ] No duplicate embed work on records that already have an `embedding` vector (backfill query already enforces this, but verify in test)
-- [ ] Sweep/re-check does not spam logs when no abandoned records exist (`debug` level for "no documents need backfill")
-- [ ] Unit tests cover: sweep recovers abandoned records; sweep is idempotent under concurrent invocation; sweep is a no-op when index is empty
+- [ ] Sweep does not spam logs when no abandoned records exist (`debug` level for "No documents need embedding backfill")
+- [ ] Unit tests cover: (1) sweep recovers abandoned records; (2) sweep is idempotent under concurrent invocation; (3) sweep is a no-op when index is empty
 - [ ] Runbook Scenario 5 (QRM5-008) updated to expect automatic recovery, and the follow-up run confirms it
 - [ ] `npm run build`, `npm run lint`, `npm run test` all pass
 
@@ -87,8 +114,7 @@ Remove `MAX_RETRIES`, cap backoff at a larger value (60s), keep items in the que
 
 | File | Relevance |
 |------|-----------|
-| `apps/mcp-server/src/embedding/embedding-pipeline.service.ts` | Primary fix site — add periodic sweep |
-| `apps/mcp-server/src/embedding/embedding.service.ts` | `isAvailable()` for option B |
-| `apps/mcp-server/src/embedding/embedding-pipeline.service.spec.ts` | Extend tests |
+| `apps/mcp-server/src/embedding/embedding-pipeline.service.ts` | Primary fix site — add periodic sweep timer, `sweeping` guard, `onModuleDestroy` |
+| `apps/mcp-server/src/embedding/embedding-pipeline.service.spec.ts` | Extend tests — sweep recovery, concurrency guard, no-op when clean |
 | `apps/mcp-server/src/health/health.service.ts` | Observational — confirms Ollama state during repro |
 | `docs/context-store.md` | Update graceful-degradation table to reflect automatic recovery after fix |
