@@ -100,22 +100,43 @@ A periodic agent-side heartbeat (calling `/health` or a cheap MCP tool every 30�
 ## Acceptance Criteria
 
 ### Client-side reconnect (Part 1)
-- [ ] `McpClientService.callTool()` intercepts `Session not found` errors, logs a WARN with the stale session ID, triggers `handleReconnection()`, and retries the call once
-- [ ] If the retry also fails, the error is surfaced to the caller (no infinite retry loop)
-- [ ] Fix is applied to both `apps/agent/` and `apps/terminal/` MCP client implementations
-- [ ] Unit test: `McpClientService` reconnects and retries on session-not-found
-- [ ] Unit test: retry failure after session-not-found surfaces the error
+- [x] `McpClientService.callTool()` intercepts `Session not found` errors, logs a WARN with the stale session ID, triggers `handleReconnection()`, and retries the call once
+- [x] If the retry also fails, the error is surfaced to the caller (no infinite retry loop)
+- [x] Fix is applied to both `apps/agent/` and `apps/terminal/` MCP client implementations
+- [x] Unit test: `McpClientService` reconnects and retries on session-not-found
+- [x] Unit test: retry failure after session-not-found surfaces the error
 
 ### SSE keepalive (Part 2)
-- [ ] MCP server emits `: ping\n\n` SSE comments at ~30s intervals on all active SSE streams
-- [ ] Keepalive intervals are cleaned up on connection close (no leaked timers)
-- [ ] Unit test: SSE keepalive emits ping comments at the configured interval
+- [x] MCP server emits `: ping\n\n` SSE comments at ~30s intervals on all active SSE streams
+- [x] Keepalive intervals are cleaned up on connection close (no leaked timers)
+- [x] Unit test: SSE keepalive emits ping comments at the configured interval
 
 ### End-to-end
 - [ ] After `docker compose restart mcp-server`, all four agents re-appear in `GET /registry` within ≤ 2 minutes with **no agent container restarts**
 - [ ] First tool call after the server restart either succeeds transparently (reconnect + retry) or fails once with a clear WARN-level log and succeeds on the next attempt
 - [ ] New QRM5-008 runbook scenario (or extension of Scenario 5) verifies agent self-heal after mcp-server restart
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass
+
+## Implementation Notes
+
+**Status:** Accepted (code review passed, end-to-end criteria pending live stack validation)
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `apps/agent/src/connection/mcp-client.service.ts` | Wrapped `callTool()` with try/catch session-not-found interception, added `isSessionNotFound()` private helper |
+| `apps/terminal/src/connection/mcp-client.service.ts` | Mirror of agent-side session-not-found interception |
+| `apps/mcp-server/src/mcp/mcp.controller.ts` | Added `startSseKeepalive()` private method, `SSE_KEEPALIVE_INTERVAL_MS` constant (30s), wired into `handleGet()` |
+| `apps/agent/src/connection/mcp-client.service.spec.ts` | +3 tests: reconnect-and-retry, retry failure, non-session-not-found passthrough |
+| `apps/terminal/src/connection/mcp-client.service.spec.ts` | +3 tests: mirror of agent spec |
+| `apps/mcp-server/src/mcp/mcp.controller.spec.ts` | +4 tests: ping emission, close cleanup, writableEnded guard, 404 skip; added `write`/`writableEnded` to MockResponse |
+
+**Deviations from ticket:**
+- WARN log includes tool name rather than stale session ID — the session ID is internal to the SDK's `StreamableHTTPClientTransport` and not exposed via public API. Tool name provides sufficient diagnostic context.
+- `mcp.service.ts` was not modified — keepalive timer lives entirely in the controller's `startSseKeepalive()`, keeping transport lifecycle concerns co-located with the HTTP handler.
+
+**Verification:** `npm run build` (4 apps compiled), `npm run lint` (0 errors, 0 warnings), `npm run test` (49 suites, 755 tests, all passed).
 
 ## Dependencies and References
 
