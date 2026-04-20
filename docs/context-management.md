@@ -172,8 +172,19 @@ server.registerTool('context_query', {
 | Mode | Behavior | Returns |
 |------|----------|---------|
 | `keys` | Calls `get()` for each key individually | `Record<string, unknown>` (key → value, `undefined` for missing) |
-| `search` | Case-insensitive substring match with token budget | `ContextItem[]` (within `maxTokens` budget, defaults to `CONTEXT_DEFAULT_MAX_TOKENS`) |
+| `search` | Hybrid BM25 + k-NN vector search with token budget (OpenSearch backend); substring match fallback (InMemory backend) | `ContextItem[]` ranked by relevance (within `maxTokens` budget, defaults to `CONTEXT_DEFAULT_MAX_TOKENS`) |
 | `get-all` | Returns all items in the scope | `Record<string, unknown>` |
+
+**Search behavior (OpenSearch backend):**
+
+With the OpenSearch backend active, `search` mode uses **hybrid semantic search** rather than simple substring matching:
+
+1. The query is embedded via `EmbeddingService.embedQuery()` using the `mxbai-embed-large` model (with an asymmetric instruction prefix for retrieval quality)
+2. A hybrid query executes both a **BM25 full-text leg** (matching against pre-rendered `embeddingText`) and a **k-NN vector leg** (cosine similarity on embedding vectors)
+3. Results are fused via the `hybrid-search` pipeline using min-max normalization and weighted combination (30% BM25, 70% k-NN)
+4. Results are **ranked by relevance** — not just filtered by keyword presence — and accumulated within the `maxTokens` budget
+
+**Graceful degradation:** If Ollama is unavailable, search falls back to BM25-only (still superior to substring matching since it uses tokenized full-text search with TF-IDF ranking). A record written moments ago that hasn't been embedded yet is still found via BM25; it participates in hybrid search once its vector is computed (~300ms async).
 
 **Usage by agent:**
 ```

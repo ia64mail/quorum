@@ -2,6 +2,7 @@ import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { Agent as UndiciAgent, fetch as undiciFetch } from 'undici';
 import { AgentConfigService } from '../config';
 
 const MAX_RETRIES = 10;
@@ -24,6 +25,16 @@ export class McpClientService implements OnApplicationShutdown {
   private shuttingDown = false;
   private cachedTools: Tool[] = [];
 
+  // QRM5-BUG-003: undici defaults `headersTimeout`/`bodyTimeout` to 300s (5 min).
+  // Nested invoke_agent responses (agent A → agent B via MCP) can take longer
+  // than that; without this dispatcher the caller's response stream is killed
+  // at 5 min regardless of MCP_REQUEST_TIMEOUT_MS. Mirrors the outgoing-side
+  // dispatcher in apps/mcp-server/src/registry/http-agent-connection.ts.
+  private readonly dispatcher = new UndiciAgent({
+    headersTimeout: 35 * 60_000,
+    bodyTimeout: 35 * 60_000,
+  });
+
   constructor(private readonly config: AgentConfigService) {}
 
   /**
@@ -41,14 +52,36 @@ export class McpClientService implements OnApplicationShutdown {
     return [...this.cachedTools];
   }
 
-  /** Expose `client.callTool()` for future use (QRM1-008). */
+  /**
+   * Call an MCP tool, with session-not-found interception.
+   *
+   * If the server returns "Session not found" (stale session after restart),
+   * the zombie transport is closed, a reconnection is attempted, and the
+   * call is retried once. (QRM5-BUG-005)
+   */
   async callTool(
     name: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.client.callTool({ name, arguments: args }, undefined, {
-      timeout: this.config.mcp.requestTimeoutMs,
-    });
+    try {
+      return await this.client.callTool({ name, arguments: args }, undefined, {
+        timeout: this.config.mcp.requestTimeoutMs,
+      });
+    } catch (err) {
+      if (!this.isSessionNotFound(err)) throw err;
+
+      this.logger.warn(
+        `Session not found during callTool("${name}"), ` +
+          'closing stale transport and reconnecting',
+      );
+      await this.closeTransport();
+      await this.handleReconnection();
+
+      // Retry once — if this also fails, the error surfaces to the caller
+      return this.client.callTool({ name, arguments: args }, undefined, {
+        timeout: this.config.mcp.requestTimeoutMs,
+      });
+    }
   }
 
   async onApplicationShutdown(_signal?: string): Promise<void> {
@@ -89,10 +122,15 @@ export class McpClientService implements OnApplicationShutdown {
     const serverUrl = `${this.config.mcp.serverUrl}/mcp`;
     const timeoutMs = this.config.mcp.requestTimeoutMs;
     this.transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
-      fetch: (url, init) => {
+      fetch: async (url, init) => {
         const signals: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
         if (init?.signal) signals.push(init.signal);
-        return fetch(url, { ...init, signal: AbortSignal.any(signals) });
+        const response = await undiciFetch(url, {
+          ...(init as Parameters<typeof undiciFetch>[1]),
+          signal: AbortSignal.any(signals),
+          dispatcher: this.dispatcher,
+        });
+        return response as unknown as Response;
       },
     });
     this.client = new Client({
@@ -186,6 +224,15 @@ export class McpClientService implements OnApplicationShutdown {
       );
       this.cachedTools = [];
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Error Detection
+  // ---------------------------------------------------------------------------
+
+  private isSessionNotFound(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.includes('Session not found');
   }
 
   // ---------------------------------------------------------------------------

@@ -26,6 +26,47 @@ x-agent-security: &agent-security
     - /home/quorum/.cache:size=128m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
 
 services:
+  ollama-init:
+    image: ollama/ollama:latest
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 2 && ollama pull mxbai-embed-large && echo 'Model pull complete'"]
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - quorum-net
+
+  ollama:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - quorum-net
+
+  opensearch:
+    image: opensearchproject/opensearch:2
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - quorum-net
+
   mcp-server:
     build:
       context: .
@@ -48,6 +89,22 @@ services:
       BOOTSTRAP_ENABLED: ${BOOTSTRAP_ENABLED:-true}
       BOOTSTRAP_MAX_TOKENS: ${BOOTSTRAP_MAX_TOKENS:-1000}
       BOOTSTRAP_PROJECT_RATIO: ${BOOTSTRAP_PROJECT_RATIO:-0.6}
+      # Context Store backend (QRM5-009)
+      CONTEXT_STORE_BACKEND: opensearch
+      # OpenSearch (QRM5)
+      OPENSEARCH_NODE: http://opensearch:9200
+      OPENSEARCH_INDEX: quorum-context
+      OPENSEARCH_USERNAME: admin
+      OPENSEARCH_PASSWORD: admin
+      # Ollama embedding (QRM5)
+      OLLAMA_BASE_URL: http://ollama:11434
+      EMBEDDING_MODEL: mxbai-embed-large
+      EMBEDDING_DIMENSIONS: "1024"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     volumes:
       - ./logs:/app/logs
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
@@ -158,6 +215,10 @@ services:
       - ./logs:/app/logs
     networks:
       - quorum-net
+
+volumes:
+  ollama-data:
+  opensearch-data:
 
 networks:
   quorum-net:

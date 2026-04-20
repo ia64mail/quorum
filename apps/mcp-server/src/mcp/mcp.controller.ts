@@ -12,6 +12,9 @@ import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { McpService } from './mcp.service';
 
+/** QRM5-BUG-005: interval between SSE keepalive pings (ms). */
+const SSE_KEEPALIVE_INTERVAL_MS = 30_000;
+
 /**
  * Streamable HTTP transport endpoint for MCP protocol communication.
  *
@@ -34,6 +37,25 @@ export class McpController {
   @Post()
   async handlePost(@Req() req: Request, @Res() res: Response): Promise<void> {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    // QRM5-BUG-003 Phase 1 instrumentation: track POST response lifecycle.
+    // Closure reads `capturedSessionId` at event-fire time so new-session POSTs
+    // pick up the SDK-assigned id after `handleRequest`.
+    let capturedSessionId = sessionId;
+    const postStart = Date.now();
+    res.on('finish', () => {
+      this.logger.debug(
+        `POST finish: sessionId=${capturedSessionId ?? 'new'} ` +
+          `status=${res.statusCode} durationMs=${Date.now() - postStart}`,
+      );
+    });
+    res.on('close', () => {
+      this.logger.debug(
+        `POST close: sessionId=${capturedSessionId ?? 'new'} ` +
+          `status=${res.statusCode} writableFinished=${res.writableFinished} ` +
+          `durationMs=${Date.now() - postStart}`,
+      );
+    });
 
     if (sessionId && this.sessions.has(sessionId)) {
       const transport = this.sessions.get(sessionId)!;
@@ -59,6 +81,7 @@ export class McpController {
     // Session ID is only available after handleRequest has processed the initialize request
     const newSessionId = transport.sessionId;
     if (newSessionId) {
+      capturedSessionId = newSessionId;
       this.sessions.set(newSessionId, transport);
       this.logger.log(`Session created: ${newSessionId}`);
     }
@@ -86,6 +109,11 @@ export class McpController {
 
     const transport = this.sessions.get(sessionId)!;
     await transport.handleRequest(req, res);
+
+    // QRM5-BUG-005: SSE keepalive — emit a comment ping every 30s so the
+    // client's SSE stream errors out promptly when the server process restarts,
+    // triggering the existing onclose → handleReconnection path.
+    this.startSseKeepalive(res);
   }
 
   /** Terminate a session, close its transport, and remove it from the session map. */
@@ -102,5 +130,28 @@ export class McpController {
     await transport.handleRequest(req, res);
     this.sessions.delete(sessionId);
     this.logger.log(`Session deleted: ${sessionId}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // SSE Keepalive
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Emit `: ping\n\n` SSE comments at a fixed interval to keep the stream
+   * alive and ensure the client detects a dead connection when the server
+   * process restarts (QRM5-BUG-005).
+   */
+  private startSseKeepalive(res: Response): void {
+    const interval = setInterval(() => {
+      if (res.writableEnded) {
+        clearInterval(interval);
+        return;
+      }
+      res.write(': ping\n\n');
+    }, SSE_KEEPALIVE_INTERVAL_MS);
+
+    res.on('close', () => {
+      clearInterval(interval);
+    });
   }
 }

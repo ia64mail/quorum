@@ -5,6 +5,8 @@ dist
 .idea
 *.md
 !README.md
+!docker/plugins/**/*.md
+!docker/plugins/**/*.json
 coverage
 .env*
 *.log

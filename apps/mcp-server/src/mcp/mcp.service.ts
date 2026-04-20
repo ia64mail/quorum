@@ -96,7 +96,12 @@ export class McpService implements OnModuleInit {
           target: z
             .enum(INVOCABLE_AGENT_ROLES as unknown as [string, ...string[]])
             .describe('Target agent role to invoke'),
-          action: z.string().describe('Task description for the target agent'),
+          action: z
+            .string()
+            .describe(
+              'Task for the target agent. Use a slash command (e.g. "/code-review") ' +
+                'to invoke a built-in skill directly, or natural language for general tasks',
+            ),
           context: z
             .record(z.string(), z.unknown())
             .optional()
@@ -117,6 +122,10 @@ export class McpService implements OnModuleInit {
             .min(0)
             .default(0)
             .describe('Current call depth (0-based)'),
+          sessionId: z
+            .string()
+            .optional()
+            .describe('Resume a prior SDK session instead of starting fresh'),
         },
       },
       async (args) => {
@@ -137,9 +146,22 @@ export class McpService implements OnModuleInit {
           context: args.context,
           wait: args.wait,
           depth: args.depth,
+          sessionId: args.sessionId,
         };
 
+        const handlerStart = Date.now();
         const response = await this.messageBroker.invoke(request);
+
+        // QRM5-BUG-003 Phase 1 instrumentation: SDK write boundary.
+        // Logged after broker resolution, immediately before the SDK serializes
+        // and writes the tool result to the transport. Pairs with controller
+        // `POST finish/close` to localize stalls between handler return and
+        // on-wire response.
+        this.logger.debug(
+          `invoke_agent returning: correlationId=${correlationId} ` +
+            `target=${args.target} success=${response.success} ` +
+            `handlerMs=${Date.now() - handlerStart}`,
+        );
 
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(response) }],

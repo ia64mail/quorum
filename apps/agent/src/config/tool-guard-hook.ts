@@ -20,11 +20,24 @@ export function createToolGuardHook(
 ): (toolName: string, toolInput: Record<string, unknown>) => ToolGuardResult {
   const deniedPrefixes = profile.deniedBashCommands.map((p) => p.toLowerCase());
   const writePaths = profile.allowedWritePaths;
+  const allowedSkills = profile.allowedSkills;
 
   return (
     toolName: string,
     toolInput: Record<string, unknown>,
   ): ToolGuardResult => {
+    // --- Skill filtering ---
+    if (toolName === 'Skill') {
+      const skillName = toolInput.skill as string | undefined;
+      if (skillName && !allowedSkills.includes(skillName)) {
+        return {
+          allowed: false,
+          reason: `Skill '${skillName}' not permitted for this role`,
+        };
+      }
+      return { allowed: true };
+    }
+
     // --- Bash command filtering ---
     if (toolName === 'Bash') {
       const raw = toolInput.command;

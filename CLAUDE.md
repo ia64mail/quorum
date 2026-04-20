@@ -62,6 +62,7 @@ Tickets complement `docs/` — documentation describes the current system; ticke
 | [docs/context-management.md](docs/context-management.md) | Context sharing concepts, MCP resources/tools API |
 | [docs/context-store.md](docs/context-store.md) | Context Store implementation, InMemoryStore, file persistence |
 | [docs/claude-code-sdk.md](docs/claude-code-sdk.md) | Claude Code SDK integration, tool bridge, permissions, hardening |
+| [docs/knowledge-management.md](docs/knowledge-management.md) | Knowledge management philosophy, three domains, KB concept |
 | [tickets/README.md](tickets/README.md) | Ticket library conventions and structure guide |
 | [tools/session-report/SESSION-REPORT.md](tools/session-report/SESSION-REPORT.md) | Session log parser and report writing guide |
 

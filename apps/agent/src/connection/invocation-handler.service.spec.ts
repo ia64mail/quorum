@@ -20,6 +20,7 @@ const mockExec = childProcess.exec as unknown as jest.Mock;
 const mockExecute = jest.fn<Promise<ExecuteResult>, [unknown]>();
 const mockCreateBridge = jest.fn();
 const mockGetDisallowedTools = jest.fn();
+const mockGetPlugins = jest.fn();
 const mockGetToolGuardHook = jest.fn();
 const mockGetSystemPrompt = jest.fn();
 
@@ -68,6 +69,7 @@ describe('InvocationHandler', () => {
     mockGetSystemPrompt.mockReturnValue('Mocked system prompt');
     mockCreateBridge.mockReturnValue({ quorum: { name: 'quorum' } });
     mockGetDisallowedTools.mockReturnValue(['AskUserQuestion']);
+    mockGetPlugins.mockReturnValue([]);
     mockGetToolGuardHook.mockReturnValue(() => ({ allowed: true }));
 
     // Default: git status returns clean (no uncommitted changes)
@@ -100,6 +102,7 @@ describe('InvocationHandler', () => {
           provide: RolePermissionService,
           useValue: {
             getDisallowedTools: mockGetDisallowedTools,
+            getPlugins: mockGetPlugins,
             getToolGuardHook: mockGetToolGuardHook,
           },
         },
@@ -115,7 +118,7 @@ describe('InvocationHandler', () => {
   });
 
   describe('success path', () => {
-    it('should return success result from execute()', async () => {
+    it('should return success result with sessionId from execute()', async () => {
       mockExecute.mockResolvedValue(successResult);
 
       const result = await handler.handle(baseRequest);
@@ -125,6 +128,7 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
         totalCostUsd: 0.0123,
         durationMs: 5000,
+        sessionId: 'sess-abc',
       });
     });
   });
@@ -211,6 +215,39 @@ describe('InvocationHandler', () => {
       const call = mockExecute.mock.calls[0][0] as { prompt: string };
       expect(call.prompt).not.toContain('Additional context');
     });
+
+    it('should prefix regular actions with "Task: "', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('Task: design auth system');
+    });
+
+    it('should pass slash-command actions verbatim without "Task: " prefix (BUG-002)', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        action: '/code-review\n\nFocus on auth changes',
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('/code-review');
+      expect(call.prompt).toContain('Focus on auth changes');
+      expect(call.prompt).not.toContain('Task: /code-review');
+    });
+
+    it('should pass /simplify skill action verbatim (BUG-002)', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({ ...baseRequest, action: '/simplify' });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      expect(call.prompt).toContain('/simplify');
+      expect(call.prompt).not.toContain('Task: ');
+    });
   });
 
   describe('system prompt', () => {
@@ -256,6 +293,44 @@ describe('InvocationHandler', () => {
         expect.objectContaining({
           mcpServers: bridgeResult,
         }),
+      );
+    });
+  });
+
+  describe('plugin integration (BUG-002)', () => {
+    it('should call RolePermissionService.getPlugins()', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockGetPlugins).toHaveBeenCalled();
+    });
+
+    it('should pass plugins to execute()', async () => {
+      const plugins = [
+        {
+          type: 'local' as const,
+          path: '/mnt/quorum/workspace/.claude/plugins/code-review',
+        },
+      ];
+      mockGetPlugins.mockReturnValue(plugins);
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        expect.objectContaining({ plugins }),
+      );
+    });
+
+    it('should pass empty plugins array for roles without plugins', async () => {
+      mockGetPlugins.mockReturnValue([]);
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        expect.objectContaining({ plugins: [] }),
       );
     });
   });
@@ -356,6 +431,48 @@ describe('InvocationHandler', () => {
       )?.[0] as string;
       expect(warnMessage).toBeDefined();
       expect(warnMessage).toContain('turns=?');
+    });
+  });
+
+  describe('session resume forwarding', () => {
+    it('should pass request.sessionId as resume to execute()', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        sessionId: 'sess-resume-1',
+      });
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resume: 'sess-resume-1',
+        }),
+      );
+    });
+
+    it('should pass undefined resume when sessionId is absent', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const call = mockExecute.mock.calls[0][0] as { resume: unknown };
+      expect(call.resume).toBeUndefined();
+    });
+
+    it('should include sessionId in success response', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.sessionId).toBe('sess-abc');
+    });
+
+    it('should not include sessionId in failure response', async () => {
+      mockExecute.mockResolvedValue(failureResult);
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.sessionId).toBeUndefined();
     });
   });
 
@@ -595,6 +712,7 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
         totalCostUsd: 0.0123,
         durationMs: 5000,
+        sessionId: 'sess-abc',
       });
     });
 
@@ -613,6 +731,7 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
         totalCostUsd: 0.0123,
         durationMs: 5000,
+        sessionId: 'sess-abc',
       });
     });
 
@@ -638,6 +757,7 @@ describe('InvocationHandler', () => {
         result: 'Here is my design.',
         totalCostUsd: 0.0123,
         durationMs: 5000,
+        sessionId: 'sess-abc',
       });
     });
 

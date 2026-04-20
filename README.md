@@ -273,7 +273,8 @@ Starts the MCP server, terminal with moderator, and all agent containers. Agents
 | [Agent Messaging](docs/agent-messaging.md) | Bidirectional MCP, `invoke_agent`, communication patterns |
 | [Message Broker](docs/message-broker.md) | Routing, safeguards, transport, availability |
 | [Context Management](docs/context-management.md) | MCP tools/resources API, usage patterns |
-| [Context Store](docs/context-store.md) | Storage backend, InMemoryStore, file persistence |
+| [Context Store](docs/context-store.md) | OpenSearch backend with hybrid BM25 + vector search, async embedding pipeline, InMemoryStore for tests |
+| [Knowledge Management](docs/knowledge-management.md) | Knowledge management philosophy, three domains, KB concept |
 | [Claude Code SDK](docs/claude-code-sdk.md) | Claude Code SDK integration, tool bridge, permissions, hardening |
 | [Ticket Library](tickets/README.md) | Ticket conventions and structure guide |
 

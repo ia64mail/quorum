@@ -291,8 +291,8 @@ describe('ClaudeCodeService', () => {
       model: 'claude-sonnet-4-5-20250929',
       systemPrompt: 'You are a developer.',
       permissionMode: 'default',
-      persistSession: false,
-      settingSources: [],
+      persistSession: true,
+      settingSources: ['project'],
       includePartialMessages: false,
       maxTurns: 10,
       allowedTools: ['Read', 'Write'],
@@ -334,6 +334,42 @@ describe('ClaudeCodeService', () => {
     expect(callArgs.options.mcpServers).toBe(mcpServers);
   });
 
+  // 6a. Plugins passthrough (BUG-002)
+  it('should pass plugins to SDK when provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    const plugins = [
+      {
+        type: 'local' as const,
+        path: '/mnt/quorum/workspace/.claude/plugins/code-review',
+      },
+    ];
+
+    await service.execute({ ...baseParams, plugins });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.plugins).toBe(plugins);
+  });
+
+  it('should not pass plugins to SDK when not provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options).not.toHaveProperty('plugins');
+  });
+
   // 7. maxTurns omitted when undefined (BUG-010)
   it('should not pass maxTurns to the SDK when not specified', async () => {
     mockQuery.mockReturnValue(
@@ -364,7 +400,147 @@ describe('ClaudeCodeService', () => {
     expect(callArgs.options.maxTurns).toBe(60);
   });
 
-  // 8. Graceful shutdown
+  // 8. Resume parameter
+  it('should pass resume option to SDK when provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({ ...baseParams, resume: 'sess-resume-1' });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.resume).toBe('sess-resume-1');
+  });
+
+  it('should not pass resume option to SDK when not provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options).not.toHaveProperty('resume');
+  });
+
+  // 8a. Graceful fallback on resume failure
+  it('should retry without resume when resume fails', async () => {
+    // First call (with resume) throws
+    mockQuery
+      .mockReturnValueOnce(
+        // eslint-disable-next-line require-yield
+        (async function* () {
+          throw new Error('Session not found');
+        })(),
+      )
+      // Second call (fresh) succeeds
+      .mockReturnValueOnce(
+        generateMessages([
+          initMessage('sess-new'),
+          successResult({ session_id: 'sess-new' }),
+        ]),
+      );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-stale',
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+
+    // First call had resume
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const firstCallArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(firstCallArgs.options.resume).toBe('sess-stale');
+
+    // Second call did not have resume
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const secondCallArgs = mockQuery.mock.calls[1][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(secondCallArgs.options).not.toHaveProperty('resume');
+  });
+
+  it('should return error when execution fails without resume', async () => {
+    mockQuery.mockReturnValue(
+      // eslint-disable-next-line require-yield
+      (async function* () {
+        throw new Error('API failure');
+      })(),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('API failure');
+    }
+    // Should NOT retry — no resume was requested
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not retry when controller is aborted during resume', async () => {
+    const controller = new AbortController();
+
+    mockQuery.mockReturnValueOnce(
+      // eslint-disable-next-line require-yield
+      (async function* () {
+        controller.abort();
+        throw new Error('aborted');
+      })(),
+    );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-stale',
+      abortController: controller,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('aborted');
+    }
+    // Should NOT retry — abort means shutdown, not a stale session
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('should return error when retry itself fails', async () => {
+    mockQuery
+      .mockReturnValueOnce(
+        // eslint-disable-next-line require-yield
+        (async function* () {
+          throw new Error('Session not found');
+        })(),
+      )
+      .mockReturnValueOnce(
+        // eslint-disable-next-line require-yield
+        (async function* () {
+          throw new Error('API outage');
+        })(),
+      );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-stale',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('API outage');
+    }
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
+
+  // 9. Graceful shutdown
   it('should abort all active controllers on shutdown', async () => {
     const controller1 = new AbortController();
     const controller2 = new AbortController();

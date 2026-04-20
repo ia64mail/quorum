@@ -31,6 +31,11 @@ export interface ExecuteParams {
   maxTurns?: number;
   /** Optional controller for cancelling the execution from outside. */
   abortController?: AbortController;
+  /** SDK plugins to load for this execution (e.g. code-review plugin).
+   *  Roles without plugin access pass an empty array. */
+  plugins?: Array<{ type: 'local'; path: string }>;
+  /** Resume a persisted session by ID. */
+  resume?: string;
 }
 
 /**
