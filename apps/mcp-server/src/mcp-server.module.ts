@@ -1,5 +1,6 @@
 import { Module, Type } from '@nestjs/common';
 import { McpServerConfigModule } from './config';
+import { ContextStoreModule } from './context-store';
 import { HealthModule } from './health';
 import { McpModule } from './mcp';
 import { TestModule } from './testing';
@@ -12,6 +13,7 @@ if (process.env.ENABLE_TEST_ENDPOINTS === 'true') {
 @Module({
   imports: [
     McpServerConfigModule,
+    ContextStoreModule.forRoot(),
     HealthModule.forRoot(),
     McpModule,
     ...conditionalImports,

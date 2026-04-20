@@ -385,6 +385,47 @@ QRM5 hybrid search foundation operates correctly under normal conditions: backen
 | `conversation:conv-A:chat-topic-A` | Scenario 6 scope isolation |
 | `conversation:conv-B:chat-topic-B` | Scenario 6 scope isolation |
 
+## Run 2 — 2026-04-19
+
+### Execution model
+
+Driven by a Claude Code orchestrator against the live Docker stack after the Run 1 bug fixes were merged to the working branch (`qrm5-semantic-search-foundation`): QRM5-BUG-004 (periodic backfill sweep in `EmbeddingPipelineService`) and QRM5-BUG-005 (agent session-not-found reconnect + SSE keepalive in `McpClientService`). Stack rebuilt via `./scripts/start.sh -d` from the branch tip and all scenarios executed in order.
+
+### Pre-run fixes applied
+
+None needed at runbook execution time — both Run 1 bug fixes were already merged and the rebuilt stack came up clean (`/health` reported both dependencies `up` on first probe; all six containers healthy). Anthropic's public API intermittently returned HTTP 529/500 during Scenarios 4 and 5, which caused two harmless retries of the same invocation before succeeding — not a QRM5 defect.
+
+### Results
+
+| Scenario | Result | Notes |
+|----------|--------|-------|
+| 1. Backend & Health | **PASS** | `CONTEXT_STORE_BACKEND=opensearch`; `/health` returned `{status:ok, dependencies:{opensearch:up, ollama:up}}` |
+| 2. Index & Pipeline | **PASS** | Mapping properties: `scope, id, key, value, embedding, embeddingText, expiresAt, createdAt, createdBy`. `embedding` is `knn_vector` dim=1024, engine `faiss`, `space_type: cosinesimil`, method `hnsw`. Hybrid pipeline present with `normalization-processor` (min_max, arithmetic_mean, weights `[0.3, 0.7]`) |
+| 3. Migration | **PASS** | Pre-existing index carried forward from prior runs; logs showed `Index already contains 90 records — skipping migration`. Idempotent skip confirmed |
+| 4. Write → Hybrid Search | **PASS** | Architect wrote `project:_:run2-auth-decision` (natural prose). Embedding populated within ~10s (`EmbeddingPipelineService Embedded document [project:_:run2-auth-decision]`). Developer's semantic query `"what is the authentication mechanism and token lifetimes"` returned `run2-auth-decision` as the top hit with accurate summary (JWT, 15-min access, 7-day refresh). Two architect invocations failed upstream (Anthropic 529) and were retried — not a system defect |
+| 5. Graceful Degradation | **PASS** (BUG-004 fix validated) | `docker compose stop ollama` → `/health` reported `ollama: down`, `status: ok`. Architect wrote `run2-degraded-write` while down; record present in OpenSearch with `has_embedding: false`. Pipeline abandoned the record after 3 retries (expected — Ollama still down). Ollama restarted → `/health` flipped back to `ollama: up`. **Periodic backfill sweep at 12:35:39 re-embedded the abandoned record automatically — no mcp-server restart required.** Logs: `Backfilling embeddings for 1 document(s)` → `Embedded document [project:_:run2-degraded-write]`. Final `has_embedding: true`, `embedding_dims: 1024` |
+| 6. Scope & Budget | **PASS** | Wrote `chat-topic-A`@run2-conv-A (Barcelona trip) and `chat-topic-B`@run2-conv-B (Postgres performance). Developer search scoped to `run2-conv-A` returned only `chat-topic-A`; `chat-topic-B` isolated (no leakage). `maxTokens: 200` path exercised |
+| 7. Text-first Writes | **PASS** | Teamlead wrote `run2-qrm5-test-strategy` at project scope. Stored `value` and `embeddingText` are descriptive natural-language prose (no JSON-stringified blob). QRM5-007 prompt guidelines effective |
+| 8. Log Correlation | **PASS** | `qrm5-smoke-run2-004*` correlation IDs visible in both architect and developer `InvocationHandler` logs. Record composite keys (`project:_:run2-auth-decision`, `project:_:run2-degraded-write`, `conversation:run2-conv-A:chat-topic-A`, `conversation:run2-conv-B:chat-topic-B`, `project:_:run2-qrm5-test-strategy`) all traceable through `EmbeddingPipelineService` logs with full `scope:id:key` form |
+
+### Bugs filed
+
+None. Both Run 1 bugs (QRM5-BUG-004, QRM5-BUG-005) validated as resolved through live observation — Scenario 5 is the direct regression test for BUG-004 and passed without manual intervention.
+
+### Verdict
+
+**8/8 scenarios pass.** The QRM5 hybrid search foundation is end-to-end correct and operationally resilient: backend activated, index/pipeline provisioned, migration idempotent, write→embed→hybrid search, scope isolation, text-first agent writes, and — crucially for production readiness — automatic recovery from transient Ollama outages via the periodic backfill sweep (the Run 1 reliability gap).
+
+### Artifacts from this run (in OpenSearch)
+
+| Composite key | Purpose |
+|---|---|
+| `project:_:run2-auth-decision` | Scenario 4 capstone |
+| `project:_:run2-degraded-write` | Scenario 5 degradation + auto-backfill (BUG-004 fix) |
+| `project:_:run2-qrm5-test-strategy` | Scenario 7 text-first via teamlead |
+| `conversation:run2-conv-A:chat-topic-A` | Scenario 6 scope isolation |
+| `conversation:run2-conv-B:chat-topic-B` | Scenario 6 scope isolation |
+
 ## Acceptance Criteria
 
 - [ ] Part 1 (Coverage Audit) explicitly documented as deferred with rationale in this ticket

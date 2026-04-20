@@ -28,6 +28,7 @@ export class ContextStoreModule {
     if (backend === 'opensearch') {
       return {
         module: ContextStoreModule,
+        global: true,
         imports: [
           EventEmitterModule.forRoot(),
           OpenSearchModule,
@@ -46,6 +47,7 @@ export class ContextStoreModule {
     // Default: inmemory
     return {
       module: ContextStoreModule,
+      global: true,
       imports: [EventEmitterModule.forRoot()],
       providers: [{ provide: ContextStore, useClass: InMemoryStore }],
       exports: [ContextStore],
