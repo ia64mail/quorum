@@ -105,6 +105,18 @@ Dogfooding spanned 7 days (2026-04-13 → 2026-04-19). 3 unique committers: Ihor
 
 Spec code grew at ~2× the rate of source code — a direct consequence of front-loading unit tests on every new component (OpenSearch store, embedding pipeline, migration service, health controller) before integration.
 
+### Cost Analysis
+
+| Metric | Value |
+|--------|-------|
+| **Total milestone spend** | **$100** |
+| Cost per feature ticket | ~$11 |
+| Cost per commit | ~$1.54 |
+| Cost per 1,000 net lines | ~$8.63 |
+| Cost per net TypeScript LoC (src + spec) | ~$0.017 |
+
+The $100 budget covered all agent invocations across 9 feature tickets, 6 bug tickets, and two live runbook executions — inclusive of the failed Run 1 session that surfaced BUG-001 and the re-runs it forced. Cost-per-commit tracks well against the QRM4 baseline despite QRM5's larger net-lines footprint (11.6k vs 6.8k), a direct consequence of prompt caching (tool definitions + sliding user-message breakpoint) in the terminal moderator landing in QRM4-BUG-012/013 and carrying forward into QRM5 without regression.
+
 ### Effectiveness Ratios
 
 | Ratio | Value |
