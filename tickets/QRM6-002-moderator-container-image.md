@@ -199,19 +199,43 @@ The developer should verify the following before marking implementation complete
 
 ## Acceptance Criteria
 
-- [ ] Dockerfile contains a `moderator` target based on `node:24-bookworm-slim` with CC CLI installed globally
-- [ ] `docker/moderator/settings.json` exists with MCP server connection config and D7 tool restrictions (deny Write, Edit, NotebookEdit)
-- [ ] `docker-compose.yml` defines a `moderator` service with correct build target, depends_on, volumes, networking, and `stdin_open`/`tty`
-- [ ] Moderator service applies the `agent-security` anchor (or documents why a deviation is needed)
-- [ ] `docker compose build moderator` completes successfully
-- [ ] `docker compose up -d` starts the moderator container; it remains running (idle) until a user attaches
-- [ ] `docker compose exec -it moderator claude --version` returns the installed CC CLI version
-- [ ] CC CLI launched via `docker compose exec -it moderator claude` connects to the Quorum MCP server and lists its tools
-- [ ] Write/Edit/NotebookEdit tools are denied by default in the CC CLI session
-- [ ] `scripts/moderator.sh` convenience wrapper exists and launches the moderator session
-- [ ] Container stays running after the user detaches from the exec session
-- [ ] No changes to `apps/terminal/` — the existing terminal service remains untouched (deletion is QRM6-009)
-- [ ] `npm run build` and `npm run lint` pass (no regressions from Dockerfile/compose changes)
+- [x] Dockerfile contains a `moderator` target based on `node:24-bookworm-slim` with CC CLI installed globally
+- [x] `docker/moderator/settings.json` exists with MCP server connection config and D7 tool restrictions (deny Write, Edit, NotebookEdit)
+- [x] `docker-compose.yml` defines a `moderator` service with correct build target, depends_on, volumes, networking, and `stdin_open`/`tty`
+- [x] Moderator service applies the `agent-security` anchor (or documents why a deviation is needed)
+- [x] `docker compose build moderator` completes successfully
+- [x] `docker compose up -d` starts the moderator container; it remains running (idle) until a user attaches
+- [x] `docker compose exec -it moderator claude --version` returns the installed CC CLI version
+- [x] CC CLI launched via `docker compose exec -it moderator claude` connects to the Quorum MCP server and lists its tools
+- [x] Write/Edit/NotebookEdit tools are denied by default in the CC CLI session
+- [x] `scripts/moderator.sh` convenience wrapper exists and launches the moderator session
+- [x] Container stays running after the user detaches from the exec session
+- [x] No changes to `apps/terminal/` — the existing terminal service remains untouched (deletion is QRM6-009)
+- [x] `npm run build` and `npm run lint` pass (no regressions from Dockerfile/compose changes)
+
+## Implementation Notes
+
+**Status:** Accepted (re-review after fix)
+
+**Implementation commits:**
+- `f9710f2` — Initial implementation (6 deliverables)
+- `b9ac714` — Fix: added `.claude.json` symlink to moderator Dockerfile target
+
+**Files modified:**
+- `Dockerfile` — Added `moderator` target (lines 76–108): `node:24-bookworm-slim` base, system packages matching agent, `quorum` user via `groupmod`/`usermod` with `HOST_UID`/`HOST_GID`, CC CLI 2.1.117 pinned via `npm install -g`, settings template baked to `/etc/claude/settings.json`, entrypoint at `/usr/local/bin/entrypoint.sh`, `.claude.json` symlink to `/tmp/` for read-only rootfs compatibility
+- `docker-compose.yml` — Added `moderator` service (lines 147–169): build target `moderator`, `agent-security` anchor, `stdin_open`/`tty` for exec-attach, `depends_on` mcp-server healthy, `MCP_SERVER_URL` env var, named volume `moderator-claude-data` for `/home/quorum/.claude` persistence, workspace+logs volumes, `quorum-net` network
+- `docker/moderator/settings.json` — MCP server connection config (`__MCP_SERVER_URL__` placeholder) + D7 tool deny list (`Write`, `Edit`, `NotebookEdit`)
+- `docker/moderator/entrypoint.sh` — Copies baked settings to tmpfs, substitutes `MCP_SERVER_URL` at runtime (default `http://mcp-server:3000/mcp`), execs `tail -f /dev/null`
+- `scripts/moderator.sh` — Convenience wrapper: `exec docker compose exec -it moderator claude "$@"`
+- `.dockerignore` — Added `!docker/moderator/**` exception
+
+**Deviations from ticket:** None. Implementation follows all six deliverables as specified.
+
+**Review history:**
+- v1: Declined — missing `.claude.json` symlink in moderator Dockerfile target (agent target has `ln -s /tmp/.claude.json /home/quorum/.claude.json` at line 64; moderator omitted it, risking EROFS on read-only rootfs)
+- v2 (re-review): Accepted — symlink added at Dockerfile line 99, matching agent target pattern exactly
+
+**Verification results:** `npm run build` ✅, `npm run lint` ✅, `npm run test` ✅ (760 tests, 49 suites)
 
 ## Dependencies and References
 
