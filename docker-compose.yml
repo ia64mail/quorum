@@ -144,6 +144,30 @@ services:
     networks:
       - quorum-net
 
+  moderator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: moderator
+      args:
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
+    <<: *agent-security
+    stdin_open: true
+    tty: true
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    environment:
+      <<: *shared-env
+      MCP_SERVER_URL: http://mcp-server:3000/mcp
+    volumes:
+      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
+      - ./logs:/app/logs
+      - moderator-claude-data:/home/quorum/.claude
+    networks:
+      - quorum-net
+
   architect:
     build:
       context: .
@@ -219,6 +243,7 @@ services:
 volumes:
   ollama-data:
   opensearch-data:
+  moderator-claude-data:
 
 networks:
   quorum-net:

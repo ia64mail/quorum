@@ -72,3 +72,36 @@ ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"
 USER quorum
 
 CMD ["sh", "-c", "mkdir -p /home/quorum/.claude/debug && exec node dist/main.js"]
+
+# --- Runtime: moderator (Claude Code CLI + MCP client config) ---
+FROM node:24-bookworm-slim AS moderator
+
+WORKDIR /app
+
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git bash ripgrep curl jq openssh-client ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+# Bookworm ships groupmod/usermod — rename default `node` user and adjust uid/gid to match host
+RUN groupmod -n quorum -g ${HOST_GID} node && \
+    usermod -l quorum -u ${HOST_UID} -g ${HOST_GID} -d /home/quorum -m -s /bin/bash node
+
+# Install Claude Code CLI globally (pinned version from QRM6-001 spike)
+RUN npm install -g @anthropic-ai/claude-code@2.1.117
+
+RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude \
+    /mnt/quorum/workspace/.claude /etc/claude \
+ && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
+    /mnt/quorum/workspace/.claude /etc/claude
+
+# Bake settings template into a read-only path; entrypoint copies to tmpfs at runtime
+COPY --chown=quorum:quorum docker/moderator/settings.json /etc/claude/settings.json
+COPY --chown=quorum:quorum docker/moderator/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+USER quorum
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

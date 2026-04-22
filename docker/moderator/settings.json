@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "deny": ["Write", "Edit", "NotebookEdit"]
+  },
+  "mcpServers": {
+    "quorum": {
+      "type": "url",
+      "url": "__MCP_SERVER_URL__"
+    }
+  }
+}
