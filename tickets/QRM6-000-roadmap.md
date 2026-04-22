@@ -1,5 +1,7 @@
 # QRM6 Roadmap — Containerized Moderator via Claude Code CLI
 
+> **Post-Spike Update (2026-04-22):** QRM6-001 closed GO. MCP elicitation works end-to-end on CC CLI 2.1.117. D1 is cleared; the "cut the back-channel" fallback is no longer on the critical path. See [`tmp/QRM6-001-elicitation-spike-findings.md`](tmp/QRM6-001-elicitation-spike-findings.md) for the empirical record and implications for QRM6-003/-007.
+
 ## Goal
 
 Replace the custom terminal app (NestJS + raw Anthropic SDK + manual tool loop + `ClarificationHandler`) with a **Claude Code CLI moderator running in its own Docker container**, connected to the Quorum MCP server as a standard MCP client. The moderator gains the full CC CLI capability surface — filesystem inspection, activity feed, slash commands, skills, permission enforcement — and the clarification back-channel is preserved through **MCP elicitation**, a server-to-client primitive in the existing MCP session.
@@ -93,6 +95,8 @@ All design decisions are resolved. This section consolidates findings from pre-p
 - The `ClarificationHandler.persistDecision()` auto-store logic (writing `clarification:{caller}:{correlationId}` to project scope) moves into the broker's elicitation-response path — behavior preserved, location changed.
 
 **Risk:** CC CLI elicitation client support needs empirical verification before committing. QRM6-001 is a spike ticket that answers the question before any other work starts. If elicitation is unsupported or broken, the fallback is the "cut the back-channel" plan (agents return structured clarification requests as normal responses).
+
+> **Resolved 2026-04-22 (QRM6-001):** Verified on CC CLI 2.1.117 — accept/decline/cancel actions round-trip, rich form schemas supported, decline UX is weakly discoverable (surface in QRM6-007). Full findings: [`tmp/QRM6-001-elicitation-spike-findings.md`](tmp/QRM6-001-elicitation-spike-findings.md).
 
 ### D2: Moderator Deployment — Docker Container, Exec-Attach
 
@@ -704,7 +708,7 @@ QRM6-006 (Agent Prompts) ──────────▶ QRM6-007 (CLAUDE.md) 
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| CC CLI elicitation support missing/broken | **High** | QRM6-001 spike is gating; fallback plan to "cut the back-channel" approach ready |
+| CC CLI elicitation support missing/broken | ~~**High**~~ **Mitigated (2026-04-22)** | QRM6-001 closed GO on CC CLI 2.1.117 — see [`tmp/QRM6-001-elicitation-spike-findings.md`](tmp/QRM6-001-elicitation-spike-findings.md); fallback plan archived |
 | Moderator prompt drift during CLAUDE.md migration | Medium | Single-source: delete inline `TERMINAL_MODERATOR_PROMPT` in same PR that adds CLAUDE.md (QRM6-009) |
 | Correlation ID confusion across turns (moderator forgets `new_conversation`) | Medium | Server fallback auto-mints a correlation ID; prompt guidance strong; log warning on missed turn |
 | User attaches to moderator, mid-turn disconnect, reattaches — does CC CLI resume its session? | Medium | CC CLI session history bind-mount persists across detach/reattach; verify in QRM6-002 smoke test |

@@ -110,15 +110,15 @@ This report is what unblocks QRM6-002 onward.
 
 ## Acceptance Criteria
 
-- [ ] Minimal MCP server standalone (not in `apps/mcp-server/`) registers a tool that issues `elicitation/create`
-- [ ] CC CLI connects to the spike server and the tool is discoverable
-- [ ] At least one successful end-to-end round trip: tool call → inline user prompt → user answer → tool call returns
-- [ ] Round-trip latency measured and recorded
-- [ ] JSON Schema surface area probed (at minimum: single-string, multi-field object)
-- [ ] Failure modes probed: Ctrl+C during prompt, server-side session drop
-- [ ] `tickets/tmp/QRM6-001-elicitation-spike-findings.md` written with all required sections
-- [ ] Explicit GO or NO-GO verdict recorded in findings
-- [ ] No code committed to `apps/`, `libs/`, or `docs/` under this ticket
+- [x] Minimal MCP server standalone (not in `apps/mcp-server/`) registers a tool that issues `elicitation/create`
+- [x] CC CLI connects to the spike server and the tool is discoverable
+- [x] At least one successful end-to-end round trip: tool call → inline user prompt → user answer → tool call returns
+- [x] Round-trip latency measured and recorded
+- [x] JSON Schema surface area probed (at minimum: single-string, multi-field object)
+- [x] Failure modes probed: Ctrl+C during prompt, server-side session drop
+- [x] `tickets/tmp/QRM6-001-elicitation-spike-findings.md` written with all required sections
+- [x] Explicit GO or NO-GO verdict recorded in findings
+- [x] No code committed to `apps/`, `libs/`, or `docs/` under this ticket
 
 ## Dependencies and References
 
@@ -130,3 +130,31 @@ This report is what unblocks QRM6-002 onward.
   - [`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk) — version pinned in Quorum's `package.json`
   - `@anthropic-ai/claude-code` — CC CLI package; version under test is the same one the moderator image will pin in QRM6-002
   - [QRM6-000-roadmap.md](QRM6-000-roadmap.md) — D1 (Back-Channel), Risk table entry "CC CLI elicitation support missing/broken"
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-22
+
+**Verdict:** GO — see [`tmp/QRM6-001-elicitation-spike-findings.md`](tmp/QRM6-001-elicitation-spike-findings.md).
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `tickets/tmp/QRM6-001-elicitation-spike-findings.md` | Created | Findings report — verdict, per-test results, schema surface, implications for QRM6-002/003/007 |
+
+Per ticket scope (D: "No code committed to `apps/`, `libs/`, or `docs/`"), no Quorum source was touched. Scaffolding lived in `/tmp/qrm6-001-spike/` — stdio MCP server with 3 tools (`ask_user_simple`, `ask_user_form`, `echo`), a protocol-level harness (`protocol-test.mjs`) acting as a fake elicitation-capable client, a project-scoped `.mcp.json`, and a step-by-step `RUNBOOK.md` capturing the 6 interactive CC CLI tests. Scaffolding is throwaway and can be deleted once findings are reviewed.
+
+### Verification
+
+- **Protocol-level harness:** Headless client connected to the spike server; exercised `accept`/`decline`/`cancel` on simple-string schema and `accept` on a rich form schema (`oneOf` enum, integer with min/max, boolean, maxLength string). All four paths returned correct shapes; round-trip 19–34 ms.
+- **CC CLI interactive (Tests 1–6):** All six runbook tests passed against CC CLI 2.1.117. Wall-clock dominated by user read/type time; protocol overhead negligible. Server-side `spike.log` corroborated client-side observations 1:1.
+- **Key factual finding:** `oneOf` enum responses return the `const` value (`"hybrid"`), not the human label (`"Hybrid"`) — broker in QRM6-003 can flow them through without label lookup.
+- **Notable UX finding:** Decline affordance is not obviously discoverable on first encounter (Test 3 accidentally returned `accept` before succeeding on retry). Captured as a CLAUDE.md / QRM6-007 concern, not a protocol blocker.
+
+### Downstream
+
+- QRM6-002, -003, -004, -005, -007, -008, -009, -010 are cleared to proceed.
+- Fallback plan ("cut the back-channel") stays on the shelf — no changes to `QRM6-000-roadmap.md` are required.
