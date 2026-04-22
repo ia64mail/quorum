@@ -95,7 +95,8 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.117
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude \
     /mnt/quorum/workspace/.claude /etc/claude \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
-    /mnt/quorum/workspace/.claude /etc/claude
+    /mnt/quorum/workspace/.claude /etc/claude \
+ && ln -s /tmp/.claude.json /home/quorum/.claude.json
 
 # Bake settings template into a read-only path; entrypoint copies to tmpfs at runtime
 COPY --chown=quorum:quorum docker/moderator/settings.json /etc/claude/settings.json
