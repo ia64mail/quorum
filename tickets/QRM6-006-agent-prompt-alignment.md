@@ -141,18 +141,18 @@ This ticket modifies only `libs/common/src/prompts/role-prompt-templates.ts`. No
 
 ## Acceptance Criteria
 
-- [ ] `SYSTEM_PREAMBLE` JSDoc (above the export) accurately describes the two prompt pathways: (1) `ROLE_PROMPT_TEMPLATES` for agent invocations, (2) `CLAUDE.md` for the user-facing moderator. No references to `TERMINAL_MODERATOR_PROMPT` or `apps/terminal/`.
-- [ ] `ROLE_PROMPT_TEMPLATES` block JSDoc accurately describes the templates' purpose without drift warnings, terminal references, or clarification-only scope limitations.
-- [ ] Inline comment above `[AgentRole.moderator]` describes the entry as the moderator's agent-facing role prompt, not a clarification-only fallback. No references to `apps/terminal/` or `TERMINAL_MODERATOR_PROMPT`.
-- [ ] Moderator template body reviewed — content is transport-neutral and accurate for the post-QRM6 architecture. No terminal-specific language.
-- [ ] All five non-moderator role prompts (architect, teamlead, developer, qa, productowner) audited for terminal-specific language. Findings documented in implementation notes (expected: none found).
-- [ ] `SYSTEM_PREAMBLE` content audited for terminal-specific language. Findings documented in implementation notes (expected: none found).
-- [ ] `getRolePromptTemplate()` function signature and behavior unchanged.
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (existing tests, no regressions)
-- [ ] No changes to `apps/terminal/` — the terminal app remains untouched
-- [ ] No changes to files outside `libs/common/src/prompts/role-prompt-templates.ts`
+- [x] `SYSTEM_PREAMBLE` JSDoc (above the export) accurately describes the two prompt pathways: (1) `ROLE_PROMPT_TEMPLATES` for agent invocations, (2) `CLAUDE.md` for the user-facing moderator. No references to `TERMINAL_MODERATOR_PROMPT` or `apps/terminal/`.
+- [x] `ROLE_PROMPT_TEMPLATES` block JSDoc accurately describes the templates' purpose without drift warnings, terminal references, or clarification-only scope limitations.
+- [x] Inline comment above `[AgentRole.moderator]` describes the entry as the moderator's agent-facing role prompt, not a clarification-only fallback. No references to `apps/terminal/` or `TERMINAL_MODERATOR_PROMPT`.
+- [x] Moderator template body reviewed — content is transport-neutral and accurate for the post-QRM6 architecture. No terminal-specific language.
+- [x] All five non-moderator role prompts (architect, teamlead, developer, qa, productowner) audited for terminal-specific language. Findings documented in implementation notes (expected: none found).
+- [x] `SYSTEM_PREAMBLE` content audited for terminal-specific language. Findings documented in implementation notes (expected: none found).
+- [x] `getRolePromptTemplate()` function signature and behavior unchanged.
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (existing tests, no regressions)
+- [x] No changes to `apps/terminal/` — the terminal app remains untouched
+- [x] No changes to files outside `libs/common/src/prompts/role-prompt-templates.ts`
 
 ## Dependencies and References
 
@@ -176,3 +176,33 @@ This ticket modifies only `libs/common/src/prompts/role-prompt-templates.ts`. No
 - [docs/QRM6-mid-milestone-design-review.md](../docs/QRM6-mid-milestone-design-review.md) — confirms no gaps for QRM6-006
 
 **Architect review before implementation:** Not required. The roadmap defines the scope precisely, the mid-milestone design review found no gaps, and the changes are to prompt text and JSDoc comments — no architectural decisions are involved.
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-23
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `libs/common/src/prompts/role-prompt-templates.ts` | Modified | Updated JSDoc on `SYSTEM_PREAMBLE`, `GENERIC_PROMPT_TEMPLATE`, and `ROLE_PROMPT_TEMPLATES`; replaced inline comment above `[AgentRole.moderator]`. No template body content changed. |
+
+### Audit Findings
+
+- **SYSTEM_PREAMBLE content** (lines 24–104): No terminal-specific language found. Content is transport-neutral.
+- **Moderator template body** (lines 144–210): No terminal-specific language found. Content references `invoke_agent`, MCP tools, and agent collaboration — all transport-neutral.
+- **Non-moderator role prompts** (architect, teamlead, developer, qa, productowner): No terminal-specific language found in any of the five templates.
+- **`getRolePromptTemplate()` function** (lines 439–442): Unchanged — same signature, same behavior, same consumer (`RolePromptService` at `apps/agent/src/prompts/role-prompt.service.ts`).
+
+### Deviations from Ticket Spec
+
+None. All six implementation steps executed as described. The GENERIC_PROMPT_TEMPLATE JSDoc was also updated (replacing "not the terminal moderator" with a positive description), which was not explicitly called out as a numbered step but falls within scope.
+
+### Verification
+
+- `npm run build` — 4 apps compile successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 49 suites, 760 tests passing (no regressions)
+- `git diff --stat` confirms single file changed: 25 insertions, 34 deletions
