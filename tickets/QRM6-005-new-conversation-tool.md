@@ -116,22 +116,22 @@ The broker receives fully-formed `InvokeRequest` objects with `correlationId` al
 
 ## Acceptance Criteria
 
-- [ ] `new_conversation` tool is registered on every per-session `McpServer` instance (via `registerTools`)
-- [ ] Tool input schema has an optional `description` string field
-- [ ] Tool handler generates a fresh `correlationId` via `randomUUID()` and returns `{ correlationId: "<uuid>" }`
-- [ ] Handler writes the new `correlationId` to `McpSessionState.correlationId` for the calling session
-- [ ] Handler clears `McpSessionState.agentSessions` for the calling session (resets session resume cache)
-- [ ] After calling `new_conversation`, subsequent `invoke_agent` / `context_store` / `context_query` / `context_summarize` calls from the same session auto-inject the new correlation ID (verified via the existing QRM6-004 injection chain)
-- [ ] After calling `new_conversation`, subsequent `invoke_agent` calls do NOT auto-inject cached `sessionId` values from prior turns (cache was cleared)
-- [ ] Multiple `new_conversation` calls in the same session are idempotent — last one wins, no errors
-- [ ] Calling `new_conversation` on a session without prior `register_agent` succeeds (returns correlation ID, writes to session state)
-- [ ] Calling `new_conversation` on the singleton server path (no session state) returns a correlation ID but logs a warning
-- [ ] Tool description clearly communicates purpose and usage guidance for the LLM
-- [ ] Handler logs at `info` level: new correlation ID, description (if provided), number of cleared agent sessions
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (existing tests, no regressions — new tests deferred to QRM6-008)
-- [ ] No changes to `apps/terminal/` — the existing terminal service remains untouched
+- [x] `new_conversation` tool is registered on every per-session `McpServer` instance (via `registerTools`)
+- [x] Tool input schema has an optional `description` string field
+- [x] Tool handler generates a fresh `correlationId` via `randomUUID()` and returns `{ correlationId: "<uuid>" }`
+- [x] Handler writes the new `correlationId` to `McpSessionState.correlationId` for the calling session
+- [x] Handler clears `McpSessionState.agentSessions` for the calling session (resets session resume cache)
+- [x] After calling `new_conversation`, subsequent `invoke_agent` / `context_store` / `context_query` / `context_summarize` calls from the same session auto-inject the new correlation ID (verified via the existing QRM6-004 injection chain)
+- [x] After calling `new_conversation`, subsequent `invoke_agent` calls do NOT auto-inject cached `sessionId` values from prior turns (cache was cleared)
+- [x] Multiple `new_conversation` calls in the same session are idempotent — last one wins, no errors
+- [x] Calling `new_conversation` on a session without prior `register_agent` succeeds (returns correlation ID, writes to session state)
+- [x] Calling `new_conversation` on the singleton server path (no session state) returns a correlation ID but logs a warning
+- [x] Tool description clearly communicates purpose and usage guidance for the LLM
+- [x] Handler logs at `info` level: new correlation ID, description (if provided), number of cleared agent sessions
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (existing tests, no regressions — new tests deferred to QRM6-008)
+- [x] No changes to `apps/terminal/` — the existing terminal service remains untouched
 
 ## Dependencies and References
 
@@ -159,3 +159,21 @@ The broker receives fully-formed `InvokeRequest` objects with `correlationId` al
 **Design references:**
 - [QRM6-000-roadmap.md](QRM6-000-roadmap.md) — D5 (Correlation ID — Per-Turn, Minted by the Moderator), Correlation ID Lifecycle diagram, Tool Call Auto-Augmentation table
 - [QRM6-004-server-side-caller-identity-session-tracking.md](QRM6-004-server-side-caller-identity-session-tracking.md) — Session state infrastructure, auto-injection pattern
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-23
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Modified | Added `registerNewConversationTool()` private method (lines 666-721), called from `registerTools()` (line 111). Updated `McpSessionState` JSDoc (line 30) and `McpService` class docblock (line 54) to list the new tool. |
+
+### Verification
+
+- `npm run build` — compiles successfully (all 4 webpack targets)
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 760 tests passing, 49 suites (0 new tests — deferred to QRM6-008)
