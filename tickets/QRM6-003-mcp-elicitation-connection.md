@@ -136,20 +136,20 @@ Update `apps/mcp-server/src/registry/index.ts` to export `McpElicitationConnecti
 
 ## Acceptance Criteria
 
-- [ ] `McpElicitationConnection` class exists in `apps/mcp-server/src/registry/mcp-elicitation-connection.ts`, extends `AgentConnection`, implements `handle()` via `McpServer.elicitInput()`
-- [ ] `McpElicitationConnection.handle()` maps `ElicitResult.action` to `InvokeResponse`: accept→success, decline→error, cancel→error
-- [ ] `McpElicitationConnection.handle()` never throws — transport errors are caught and returned as `{ success: false, error }` envelopes
-- [ ] `register_agent` tool schema accepts `callbackUrl` as optional; omitting it for `role=moderator` creates an `McpElicitationConnection`
-- [ ] `register_agent` rejects non-moderator roles that omit `callbackUrl` (agents must provide a callback URL)
-- [ ] `AgentRegistry` can store and retrieve `McpElicitationConnection` alongside `HttpAgentConnection` without code changes (verify in tests)
-- [ ] `MessageBroker` auto-persists successful clarifications to context store: key `clarification:{caller}:{correlationId}`, project scope, value contains question/answer/askedBy/correlationId
-- [ ] Auto-persist is non-fatal — failure is logged but does not affect the `InvokeResponse` returned to the caller
-- [ ] `ROLE_TIMEOUTS` includes an explicit moderator timeout entry
-- [ ] `McpElicitationConnection` is exported from `apps/mcp-server/src/registry/index.ts`
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (existing 760 tests, 49 suites — no regressions)
-- [ ] No changes to `apps/terminal/` — the existing terminal service remains untouched
+- [x] `McpElicitationConnection` class exists in `apps/mcp-server/src/registry/mcp-elicitation-connection.ts`, extends `AgentConnection`, implements `handle()` via `McpServer.elicitInput()`
+- [x] `McpElicitationConnection.handle()` maps `ElicitResult.action` to `InvokeResponse`: accept→success, decline→error, cancel→error
+- [x] `McpElicitationConnection.handle()` never throws — transport errors are caught and returned as `{ success: false, error }` envelopes
+- [x] `register_agent` tool schema accepts `callbackUrl` as optional; omitting it for `role=moderator` creates an `McpElicitationConnection`
+- [x] `register_agent` rejects non-moderator roles that omit `callbackUrl` (agents must provide a callback URL)
+- [x] `AgentRegistry` can store and retrieve `McpElicitationConnection` alongside `HttpAgentConnection` without code changes (verify in tests)
+- [x] `MessageBroker` auto-persists successful clarifications to context store: key `clarification:{caller}:{correlationId}`, project scope, value contains question/answer/askedBy/correlationId
+- [x] Auto-persist is non-fatal — failure is logged but does not affect the `InvokeResponse` returned to the caller
+- [x] `ROLE_TIMEOUTS` includes an explicit moderator timeout entry
+- [x] `McpElicitationConnection` is exported from `apps/mcp-server/src/registry/index.ts`
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (existing 760 tests, 49 suites — no regressions)
+- [x] No changes to `apps/terminal/` — the existing terminal service remains untouched
 
 ## Dependencies and References
 
@@ -182,3 +182,26 @@ Update `apps/mcp-server/src/registry/index.ts` to export `McpElicitationConnecti
 - [QRM6-001-elicitation-spike.md](QRM6-001-elicitation-spike.md) — GO verdict, schema surface area, round-trip latency, accept/decline/cancel behavior
 - [docs/agent-messaging.md](../docs/agent-messaging.md) — Current clarification flow (will be updated in QRM6-010)
 - [docs/message-broker.md](../docs/message-broker.md) — Broker safeguards, delivery semantics
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-23
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/registry/mcp-elicitation-connection.ts` | Created | New `AgentConnection` subclass — delivers invocations via `McpServer.server.elicitInput()`. Maps ElicitResult actions to InvokeResponse envelopes. Never throws. |
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Modified | `register_agent` schema: `callbackUrl` now optional. Handler branches: callbackUrl present → HttpAgentConnection; absent + moderator → McpElicitationConnection (Approach A — closure capture of per-session server); absent + non-moderator → isError. |
+| `apps/mcp-server/src/messaging/message-broker.service.ts` | Modified | Added ContextStore injection. After `deliverWithTimeout()`, auto-persists successful moderator responses to project scope with key `clarification:{caller}:{correlationId}`. Non-fatal try/catch. |
+| `apps/mcp-server/src/messaging/role-timeouts.ts` | Modified | Added moderator entry: 5 min (5 * 60_000). |
+| `apps/mcp-server/src/registry/index.ts` | Modified | Barrel export for McpElicitationConnection. |
+| `apps/mcp-server/src/messaging/message-broker.service.spec.ts` | Modified | Added mockContextStore provider. Timeout test saves/restores moderator ROLE_TIMEOUT to avoid interference. |
+
+### Verification
+
+- `npm run build` — 4 webpack compilations successful
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 760 tests passing (49 suites, 0 regressions)
