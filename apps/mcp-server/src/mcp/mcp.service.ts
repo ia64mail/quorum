@@ -51,6 +51,7 @@ export interface McpSessionState {
  * - `context_query` — Read context by keys, free-text search, or get-all.
  * - `context_summarize` — POC truncation-based conversation summarization.
  * - `context_stats` — Aggregate item count and token estimates.
+ * - `new_conversation` — Mint a per-turn correlation ID and clear session cache.
  *
  * **Resources:**
  * - `context://project` — All project-scoped context items.
@@ -107,6 +108,7 @@ export class McpService implements OnModuleInit {
     this.registerContextQueryTool(server);
     this.registerContextSummarizeTool(server);
     this.registerContextStatsTool(server);
+    this.registerNewConversationTool(server);
     this.registerProjectResource(server);
     this.registerConversationResource(server);
   }
@@ -655,6 +657,64 @@ export class McpService implements OnModuleInit {
         return {
           content: [
             { type: 'text' as const, text: JSON.stringify(stats, null, 2) },
+          ],
+        };
+      },
+    );
+  }
+
+  private registerNewConversationTool(server: McpServer): void {
+    server.registerTool(
+      'new_conversation',
+      {
+        description:
+          'Start a new conversation scope. Mints a fresh correlation ID for the current user turn ' +
+          'and clears cached agent sessions so subsequent invocations start fresh. ' +
+          'Call this at the beginning of each new user turn.',
+        inputSchema: {
+          description: z
+            .string()
+            .optional()
+            .describe(
+              'Human-readable note for logging and context store traceability',
+            ),
+        },
+      },
+      async (args) => {
+        const state = this.sessionStates.get(server);
+        const correlationId = randomUUID();
+
+        if (!state) {
+          this.logger.warn(
+            `new_conversation: no session state found — returning correlationId=${correlationId} ` +
+              'but it will not be auto-injected into subsequent calls',
+          );
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({ correlationId }),
+              },
+            ],
+          };
+        }
+
+        const clearedSessions = state.agentSessions.size;
+        state.correlationId = correlationId;
+        state.agentSessions.clear();
+
+        this.logger.log(
+          `new_conversation: correlationId=${correlationId}` +
+            `${args.description ? ` description="${args.description}"` : ''}` +
+            ` clearedSessions=${clearedSessions}`,
+        );
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({ correlationId }),
+            },
           ],
         };
       },
