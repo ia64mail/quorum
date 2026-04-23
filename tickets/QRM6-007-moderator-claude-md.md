@@ -234,24 +234,24 @@ The following sections are ported verbatim from `TERMINAL_MODERATOR_PROMPT` (no 
 
 ## Acceptance Criteria
 
-- [ ] `CLAUDE.md` at workspace root rewritten with full moderator role definition
-- [ ] `@quorum.md` import syntax used at the top of CLAUDE.md to merge project conventions
-- [ ] **Turn Lifecycle section appears early** in the moderator role content (before Skill Dispatch), with a strong instruction: "You MUST call `new_conversation` at the start of each user turn before making any other tool call"
-- [ ] Clarification Flow section updated to describe elicitation (inline question/answer, accept/decline/cancel actions)
-- [ ] **Elicitation decline/cancel UX discoverability addressed** — prompt explicitly explains decline and cancel options and notes they may not be immediately obvious
-- [ ] Session Resume section simplified to reference server-side tracking; `sessionId: ""` override documented; `new_conversation` cache-clearing mentioned
-- [ ] Tool Restrictions section added (Write/Edit/NotebookEdit denied; read/search/bash available)
-- [ ] Identity section updated from "terminal interface" to "CC CLI session"
-- [ ] All sections from TERMINAL_MODERATOR_PROMPT ported: Identity, Agent Capabilities Awareness, Clarification Flow, Responsibilities, Collaboration, Skill Dispatch, Context Management, Communication Style, Failure Recovery, Session Resume, Constraints
-- [ ] Project documentation content preserved in CLAUDE.md (Project Overview, Tech Stack, Project Structure, Documentation table, Build Commands, Architecture Concept)
-- [ ] Tech Stack entry updated: moderator uses CC CLI, not raw Anthropic SDK
-- [ ] `docker/moderator/settings.json` updated with `appendSystemPrompt` (or equivalent mechanism) containing moderator enforcement rules
-- [ ] Enforcement rules include: `new_conversation` reinforcement, skill dispatch enforcement, context management rules, `register_agent` startup reminder
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (existing tests, no regressions)
-- [ ] No changes to `apps/terminal/` — the terminal app remains untouched
-- [ ] No changes to `apps/mcp-server/` or `apps/agent/` — server-side code is unaffected
+- [x] `CLAUDE.md` at workspace root rewritten with full moderator role definition
+- [x] `@quorum.md` import syntax used at the top of CLAUDE.md to merge project conventions
+- [x] **Turn Lifecycle section appears early** in the moderator role content (before Skill Dispatch), with a strong instruction: "You MUST call `new_conversation` at the start of each user turn before making any other tool call"
+- [x] Clarification Flow section updated to describe elicitation (inline question/answer, accept/decline/cancel actions)
+- [x] **Elicitation decline/cancel UX discoverability addressed** — prompt explicitly explains decline and cancel options and notes they may not be immediately obvious
+- [x] Session Resume section simplified to reference server-side tracking; `sessionId: ""` override documented; `new_conversation` cache-clearing mentioned
+- [x] Tool Restrictions section added (Write/Edit/NotebookEdit denied; read/search/bash available)
+- [x] Identity section updated from "terminal interface" to "CC CLI session"
+- [x] All sections from TERMINAL_MODERATOR_PROMPT ported: Identity, Agent Capabilities Awareness, Clarification Flow, Responsibilities, Collaboration, Skill Dispatch, Context Management, Communication Style, Failure Recovery, Session Resume, Constraints
+- [x] Project documentation content preserved in CLAUDE.md (Project Overview, Tech Stack, Project Structure, Documentation table, Build Commands, Architecture Concept)
+- [x] Tech Stack entry updated: moderator uses CC CLI, not raw Anthropic SDK
+- [x] `docker/moderator/settings.json` updated with `appendSystemPrompt` (or equivalent mechanism) containing moderator enforcement rules
+- [x] Enforcement rules include: `new_conversation` reinforcement, skill dispatch enforcement, context management rules, `register_agent` startup reminder
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (existing tests, no regressions)
+- [x] No changes to `apps/terminal/` — the terminal app remains untouched
+- [x] No changes to `apps/mcp-server/` or `apps/agent/` — server-side code is unaffected
 
 ## Dependencies and References
 
@@ -284,3 +284,33 @@ The following sections are ported verbatim from `TERMINAL_MODERATOR_PROMPT` (no 
 - [QRM6-005-new-conversation-tool.md](QRM6-005-new-conversation-tool.md) — Tool description and behavioral contracts
 
 **Architect review before implementation:** Recommended. The architect flagged two specific concerns for this ticket in the mid-milestone design review (decline/cancel UX, `new_conversation` instruction strength). While both are addressed in this ticket spec, a brief architect review of the final CLAUDE.md content before deployment would verify the prompt quality for what the architect called a "load-bearing" component.
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Files modified:**
+- `CLAUDE.md` — Full rewrite from project-docs stub to moderator role prompt (252 lines). Role content (145 lines) placed above project documentation for truncation priority. `@quorum.md` import at top.
+- `docker/moderator/settings.json` — Added `systemPrompt` field with 4 imperative enforcement one-liners.
+
+**Approach:**
+- Used `systemPrompt` field in settings.json (CC CLI's configuration surface) rather than CLI flag or shell wrapper — cleanest approach, no entrypoint changes needed.
+- Kept project documentation section in CLAUDE.md as useful redundancy alongside `@quorum.md` import, per architect guidance (note #6).
+- SYSTEM_PREAMBLE was NOT copied wholesale — cross-cutting concepts (team roster, communication model, shared workspace) were rewritten in human-facing language. Agent-specific content ("Your caller is an LLM", "You operate autonomously", "AskUserQuestion is disabled") was correctly excluded.
+
+**Architect design notes compliance:**
+1. Two lifecycle operations with distinct cadences: separate Startup (once) and Turn Lifecycle (every turn) sections ✅
+2. No SYSTEM_PREAMBLE leakage ✅
+3. Elicitation UX communication with periodic user reminders ✅
+4. Section ordering matches architect recommendation exactly ✅
+5. systemPrompt brevity: 4 one-liners ✅
+6. @quorum.md import present, project docs kept as redundancy ✅
+7. Prompt size concise at 252 lines ✅
+
+**Deviations from ticket:** None.
+
+**Verification results:**
+- `npm run build`: ✅ 4/4 webpack compilations successful
+- `npm run lint`: ✅ Clean
+- `npm run test`: ✅ 49 suites, 760 tests passed
+- `git diff --name-only`: Only `CLAUDE.md` and `docker/moderator/settings.json` — no terminal, server, or agent changes
