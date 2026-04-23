@@ -22,6 +22,24 @@ import {
 import { McpServerConfigService } from '../config';
 
 /**
+ * Per-session state tracked by the MCP server. Keyed by the per-session
+ * {@link McpServer} instance created in {@link McpService.connect}.
+ *
+ * Populated progressively:
+ * - `role` is set when the client calls `register_agent`.
+ * - `correlationId` will be set by `new_conversation` (QRM6-005).
+ * - `agentSessions` is updated after each `invoke_agent` response.
+ */
+export interface McpSessionState {
+  /** The role bound to this session, populated at `register_agent` time. */
+  role?: AgentRole;
+  /** Active conversation correlation ID; set by `new_conversation` (QRM6-005). */
+  correlationId?: string;
+  /** Cached sessionId per target role, updated after `invoke_agent` responses. */
+  agentSessions: Map<AgentRole, string>;
+}
+
+/**
  * Core MCP protocol wrapper that bridges the SDK's {@link McpServer} with
  * NestJS-managed services ({@link MessageBroker}, {@link ContextStore}).
  *
@@ -46,6 +64,9 @@ export class McpService implements OnModuleInit {
   private readonly logger = new Logger(McpService.name);
   readonly server: McpServer;
 
+  /** Per-session state map. Only per-session instances (from connect()) are tracked. */
+  private readonly sessionStates = new Map<McpServer, McpSessionState>();
+
   constructor(
     private readonly messageBroker: MessageBroker,
     private readonly contextStore: ContextStore,
@@ -61,10 +82,20 @@ export class McpService implements OnModuleInit {
   }
 
   /** Attach a **new** MCP server instance to a transport (one per client session). */
-  async connect(transport: Transport): Promise<void> {
+  async connect(transport: Transport): Promise<McpServer> {
     const session = new McpServer({ name: 'quorum', version: '0.1.0' });
+    this.sessionStates.set(session, { agentSessions: new Map() });
     this.registerTools(session);
     await session.connect(transport);
+    return session;
+  }
+
+  /** Remove session state for a closed session. */
+  disconnect(server: McpServer): void {
+    const deleted = this.sessionStates.delete(server);
+    if (deleted) {
+      this.logger.log('Session state cleaned up');
+    }
   }
 
   /** Register all tools and resources on the given server instance. */
@@ -94,7 +125,10 @@ export class McpService implements OnModuleInit {
         inputSchema: {
           callerRole: z
             .enum(agentRoleValues)
-            .describe('Role of the calling agent'),
+            .optional()
+            .describe(
+              'Role of the calling agent. Auto-injected from MCP session identity if omitted.',
+            ),
           // Cast: MCP SDK bundles its own Zod which expects mutable [string, ...string[]],
           // while our INVOCABLE_AGENT_ROLES is readonly. Remove cast if SDK aligns with Zod v4.
           target: z
@@ -118,7 +152,7 @@ export class McpService implements OnModuleInit {
             .string()
             .optional()
             .describe(
-              'Correlation ID for call chain tracing (generated if omitted)',
+              'Correlation ID for call chain tracing. Auto-injected from session state if omitted, generated if neither available.',
             ),
           depth: z
             .number()
@@ -129,32 +163,75 @@ export class McpService implements OnModuleInit {
           sessionId: z
             .string()
             .optional()
-            .describe('Resume a prior SDK session instead of starting fresh'),
+            .describe(
+              'Resume a prior SDK session. Auto-injected from session cache if omitted. Pass empty string to force a fresh session.',
+            ),
         },
       },
       async (args) => {
-        const correlationId = args.correlationId ?? randomUUID();
+        const state = this.sessionStates.get(server);
+        const target = args.target as AgentRole;
+
+        // Resolve callerRole: explicit > session state
+        const callerRole =
+          (args.callerRole as AgentRole | undefined) ?? state?.role;
+        if (!callerRole) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: 'callerRole is required: not provided and no session identity registered',
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Resolve correlationId: explicit > session state > random
+        const correlationId =
+          args.correlationId ?? state?.correlationId ?? randomUUID();
+
+        // Resolve sessionId: explicit empty string ("") forces fresh;
+        // explicit non-empty uses as-is; omitted falls back to session cache
+        let sessionId: string | undefined;
+        if (args.sessionId === '') {
+          sessionId = undefined;
+        } else if (args.sessionId) {
+          sessionId = args.sessionId;
+        } else {
+          sessionId = state?.agentSessions.get(target);
+        }
+
         const parentRequestId = args.depth > 0 ? correlationId : undefined;
 
         this.logger.log(
-          `invoke_agent: ${args.callerRole} → ${args.target} ` +
+          `invoke_agent: ${callerRole} → ${args.target} ` +
             `[depth=${args.depth}, correlationId=${correlationId}]`,
         );
 
         const request: InvokeRequest = {
           correlationId,
           parentRequestId,
-          caller: args.callerRole as AgentRole,
-          target: args.target as AgentRole,
+          caller: callerRole,
+          target,
           action: args.action,
           context: args.context,
           wait: args.wait,
           depth: args.depth,
-          sessionId: args.sessionId,
+          sessionId,
         };
 
         const handlerStart = Date.now();
         const response = await this.messageBroker.invoke(request);
+
+        // Update session cache with returned sessionId
+        if (
+          state &&
+          typeof response.sessionId === 'string' &&
+          response.sessionId
+        ) {
+          state.agentSessions.set(target, response.sessionId);
+        }
 
         // QRM5-BUG-003 Phase 1 instrumentation: SDK write boundary.
         // Logged after broker resolution, immediately before the SDK serializes
@@ -196,6 +273,12 @@ export class McpService implements OnModuleInit {
       },
       async (args) => {
         const role = args.role as AgentRole;
+
+        // Bind the role to this session's state
+        const state = this.sessionStates.get(server);
+        if (state) {
+          state.role = role;
+        }
 
         if (args.callbackUrl) {
           // Standard HTTP-based agent registration
@@ -284,11 +367,15 @@ export class McpService implements OnModuleInit {
           correlationId: z
             .string()
             .optional()
-            .describe('Required for conversation scope'),
+            .describe(
+              'Required for conversation scope. Auto-injected from session state if omitted.',
+            ),
           agentRole: z
             .enum(agentRoleValues)
             .optional()
-            .describe('Agent role creating this item'),
+            .describe(
+              'Agent role creating this item. Auto-injected from session identity if omitted.',
+            ),
           ttl: z
             .number()
             .int()
@@ -298,9 +385,18 @@ export class McpService implements OnModuleInit {
         },
       },
       async (args) => {
+        const state = this.sessionStates.get(server);
+
+        // Resolve correlationId: explicit > session state
+        const correlationId = args.correlationId ?? state?.correlationId;
+
+        // Resolve agentRole: explicit > session state
+        const agentRole =
+          (args.agentRole as AgentRole | undefined) ?? state?.role;
+
         if (
           (args.scope as ContextScope) === ContextScope.conversation &&
-          !args.correlationId
+          !correlationId
         ) {
           return {
             content: [
@@ -317,15 +413,14 @@ export class McpService implements OnModuleInit {
 
         // Project scope is global — never include an id in the key.
         // Conversation/agent scopes use correlationId as the id partition.
-        const id =
-          scope === ContextScope.project ? undefined : args.correlationId;
+        const id = scope === ContextScope.project ? undefined : correlationId;
 
         await this.contextStore.set({
           scope,
           key: args.key,
           value: args.value,
           id,
-          createdBy: args.agentRole,
+          createdBy: agentRole,
           ttl: args.ttl,
         });
 
@@ -360,7 +455,7 @@ export class McpService implements OnModuleInit {
             .string()
             .optional()
             .describe(
-              'Scope identifier (correlationId for conversation, agentId for agent)',
+              'Scope identifier. Auto-injected from session state if omitted.',
             ),
           maxTokens: z
             .number()
@@ -371,9 +466,13 @@ export class McpService implements OnModuleInit {
         },
       },
       async (args) => {
+        const state = this.sessionStates.get(server);
+
+        // Resolve correlationId: explicit > session state
+        const correlationId = args.correlationId ?? state?.correlationId;
+
         const scope = args.scope as ContextScope;
-        const id =
-          scope === ContextScope.project ? undefined : args.correlationId;
+        const id = scope === ContextScope.project ? undefined : correlationId;
 
         if (args.mode === 'keys') {
           const results: Record<string, unknown> = {};
@@ -426,7 +525,12 @@ export class McpService implements OnModuleInit {
       {
         description: 'Summarize conversation context by truncation (POC)',
         inputSchema: {
-          correlationId: z.string().describe('Conversation correlation ID'),
+          correlationId: z
+            .string()
+            .optional()
+            .describe(
+              'Conversation correlation ID. Auto-injected from session state if omitted.',
+            ),
           maxTokens: z
             .number()
             .int()
@@ -442,6 +546,23 @@ export class McpService implements OnModuleInit {
       // TODO: Replace POC truncation with LLM-based semantic summarization.
       // Use contextStore.search() for ranked results instead of getAll().
       async (args) => {
+        const state = this.sessionStates.get(server);
+
+        // Resolve correlationId: explicit > session state
+        const correlationId = args.correlationId ?? state?.correlationId;
+
+        if (!correlationId) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: 'correlationId is required for context_summarize',
+              },
+            ],
+            isError: true,
+          };
+        }
+
         const maxTokens =
           args.maxTokens ?? this.config.context.defaultMaxTokens;
         const totalCharBudget = maxTokens * this.config.context.tokenCharRatio;
@@ -449,7 +570,7 @@ export class McpService implements OnModuleInit {
 
         const all = await this.contextStore.getAll(
           ContextScope.conversation,
-          args.correlationId,
+          correlationId,
         );
 
         const preserved: Record<string, unknown> = {};
@@ -484,7 +605,7 @@ export class McpService implements OnModuleInit {
           scope: ContextScope.conversation,
           key: '_summary',
           value: { preserved, summary },
-          id: args.correlationId,
+          id: correlationId,
         });
 
         return {

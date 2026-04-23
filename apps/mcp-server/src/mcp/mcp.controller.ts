@@ -10,6 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { McpService } from './mcp.service';
 
 /** QRM5-BUG-005: interval between SSE keepalive pings (ms). */
@@ -30,6 +31,7 @@ const SSE_KEEPALIVE_INTERVAL_MS = 30_000;
 export class McpController {
   private readonly logger = new Logger(McpController.name);
   private readonly sessions = new Map<string, StreamableHTTPServerTransport>();
+  private readonly mcpServers = new Map<string, McpServer>();
 
   constructor(private readonly mcpService: McpService) {}
 
@@ -73,7 +75,7 @@ export class McpController {
       sessionIdGenerator: () => randomUUID(),
     });
 
-    await this.mcpService.connect(transport);
+    const mcpServer = await this.mcpService.connect(transport);
 
     // handleRequest processes the initialize message and generates the session ID
     await transport.handleRequest(req, res, req.body);
@@ -83,13 +85,16 @@ export class McpController {
     if (newSessionId) {
       capturedSessionId = newSessionId;
       this.sessions.set(newSessionId, transport);
+      this.mcpServers.set(newSessionId, mcpServer);
       this.logger.log(`Session created: ${newSessionId}`);
     }
 
     // Clean up on close
     transport.onclose = () => {
       if (newSessionId) {
+        this.mcpService.disconnect(mcpServer);
         this.sessions.delete(newSessionId);
+        this.mcpServers.delete(newSessionId);
         this.logger.log(`Session closed: ${newSessionId}`);
       }
     };
@@ -127,8 +132,13 @@ export class McpController {
     }
 
     const transport = this.sessions.get(sessionId)!;
+    const mcpServer = this.mcpServers.get(sessionId);
     await transport.handleRequest(req, res);
+    if (mcpServer) {
+      this.mcpService.disconnect(mcpServer);
+    }
     this.sessions.delete(sessionId);
+    this.mcpServers.delete(sessionId);
     this.logger.log(`Session deleted: ${sessionId}`);
   }
 
