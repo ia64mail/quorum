@@ -168,28 +168,28 @@ Update the following tool schema descriptions to reflect auto-injection:
 
 ## Acceptance Criteria
 
-- [ ] `McpSessionState` interface exists with `role`, `correlationId`, and `agentSessions` fields
-- [ ] `McpService` maintains a `Map<McpServer, McpSessionState>` for per-session state tracking
-- [ ] `connect()` creates a session state entry and returns the `McpServer` instance
-- [ ] `disconnect(server)` method removes the session state entry and logs the cleanup
-- [ ] `McpController` calls `disconnect()` on transport close and explicit session deletion
-- [ ] `register_agent` handler populates `sessionState.role` from the registered role
-- [ ] `invoke_agent` schema: `callerRole` is optional (was required); server injects from session state when omitted
-- [ ] `invoke_agent` handler: auto-injects `callerRole` from session state when client omits it
-- [ ] `invoke_agent` handler: auto-injects `correlationId` from session state; falls back to `randomUUID()` if neither provided nor in state
-- [ ] `invoke_agent` handler: auto-injects `sessionId` from `agentSessions` cache when client omits it
-- [ ] `invoke_agent` handler: `sessionId=""` forces fresh session (no cache injection, `undefined` passed to broker)
-- [ ] `invoke_agent` handler: updates `agentSessions` cache from `response.sessionId` after broker returns
-- [ ] `context_store` handler: auto-injects `correlationId` and `agentRole` from session state when omitted
-- [ ] `context_query` handler: auto-injects `correlationId` from session state when omitted
-- [ ] `context_summarize` handler: auto-injects `correlationId` from session state when omitted
-- [ ] Explicit client-provided values always override session-state defaults (all tools)
-- [ ] Singleton `McpServer` (registered in `onModuleInit`) has no session state entry — injection gracefully skips
-- [ ] Tool schema descriptions updated to document auto-injection behavior
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
-- [ ] `npm run test` passes (existing 760 tests, 49 suites — no regressions)
-- [ ] No changes to `apps/terminal/` — the existing terminal service remains untouched
+- [x] `McpSessionState` interface exists with `role`, `correlationId`, and `agentSessions` fields
+- [x] `McpService` maintains a `Map<McpServer, McpSessionState>` for per-session state tracking
+- [x] `connect()` creates a session state entry and returns the `McpServer` instance
+- [x] `disconnect(server)` method removes the session state entry and logs the cleanup
+- [x] `McpController` calls `disconnect()` on transport close and explicit session deletion
+- [x] `register_agent` handler populates `sessionState.role` from the registered role
+- [x] `invoke_agent` schema: `callerRole` is optional (was required); server injects from session state when omitted
+- [x] `invoke_agent` handler: auto-injects `callerRole` from session state when client omits it
+- [x] `invoke_agent` handler: auto-injects `correlationId` from session state; falls back to `randomUUID()` if neither provided nor in state
+- [x] `invoke_agent` handler: auto-injects `sessionId` from `agentSessions` cache when client omits it
+- [x] `invoke_agent` handler: `sessionId=""` forces fresh session (no cache injection, `undefined` passed to broker)
+- [x] `invoke_agent` handler: updates `agentSessions` cache from `response.sessionId` after broker returns
+- [x] `context_store` handler: auto-injects `correlationId` and `agentRole` from session state when omitted
+- [x] `context_query` handler: auto-injects `correlationId` from session state when omitted
+- [x] `context_summarize` handler: auto-injects `correlationId` from session state when omitted
+- [x] Explicit client-provided values always override session-state defaults (all tools)
+- [x] Singleton `McpServer` (registered in `onModuleInit`) has no session state entry — injection gracefully skips
+- [x] Tool schema descriptions updated to document auto-injection behavior
+- [x] `npm run build` passes
+- [x] `npm run lint` passes
+- [x] `npm run test` passes (existing 760 tests, 49 suites — no regressions)
+- [x] No changes to `apps/terminal/` — the existing terminal service remains untouched
 
 ## Dependencies and References
 
@@ -217,3 +217,25 @@ Update the following tool schema descriptions to reflect auto-injection:
 - [QRM6-000-roadmap.md](QRM6-000-roadmap.md) — D4 (Caller Identity), D6 (Session Tracking), Tool Call Auto-Augmentation table, Agent Session Resume flow diagram
 - [QRM6-003-mcp-elicitation-connection.md](QRM6-003-mcp-elicitation-connection.md) — Approach A closure capture pattern (foundation for session state lookup)
 - [docs/message-broker.md](../docs/message-broker.md) — Broker safeguards (circular call prevention uses `caller` — must not be undefined)
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-04-23
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Modified | Added `McpSessionState` interface, `sessionStates` map, `disconnect()` method, changed `connect()` to return `McpServer`, auto-injection logic in all 4 tool handlers (`invoke_agent`, `context_store`, `context_query`, `context_summarize`), session cache update after `invoke_agent`, role binding in `register_agent`, updated schema descriptions |
+| `apps/mcp-server/src/mcp/mcp.controller.ts` | Modified | Added `mcpServers` map alongside `sessions`, captures `McpServer` from `connect()`, calls `disconnect()` in `transport.onclose` and `handleDelete` |
+| `apps/mcp-server/src/mcp/mcp.controller.spec.ts` | Modified | Updated mock to return `McpServer` from `connect()`, added `disconnect` mock |
+| `apps/mcp-server/src/mcp/index.ts` | Modified | Added `export type { McpSessionState }` for downstream consumers (QRM6-005) |
+
+### Verification
+
+- `npm run build` — 4/4 webpack compilations successful
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 760 tests passing (49 suites), 0 new tests (QRM6-008 covers session-state testing)
+- `git diff -- apps/terminal/` — empty (no terminal changes)
