@@ -1,11 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { AgentRole } from '@app/common';
+import { AgentRole, ContextStore } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { AgentRegistry } from '../registry/agent-registry.service';
 import { MockConnection } from '../registry/mock-connection';
 import { McpServerConfigService } from '../config';
 import { BootstrapContextService } from './bootstrap-context.service';
 import { MessageBroker } from './message-broker.service';
+import { ROLE_TIMEOUTS } from './role-timeouts';
 
 function makeRequest(overrides: Partial<InvokeRequest> = {}): InvokeRequest {
   return {
@@ -33,8 +34,17 @@ describe('MessageBroker', () => {
     assemble: jest.fn().mockResolvedValue(null),
   };
 
+  const mockContextStore = {
+    set: jest.fn().mockResolvedValue(undefined),
+    get: jest.fn(),
+    getAll: jest.fn(),
+    search: jest.fn(),
+    getStats: jest.fn(),
+  };
+
   beforeEach(async () => {
     mockBootstrapService.assemble.mockResolvedValue(null);
+    mockContextStore.set.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -42,6 +52,7 @@ describe('MessageBroker', () => {
         MessageBroker,
         { provide: McpServerConfigService, useValue: mockConfig },
         { provide: BootstrapContextService, useValue: mockBootstrapService },
+        { provide: ContextStore, useValue: mockContextStore },
       ],
     }).compile();
 
@@ -156,8 +167,11 @@ describe('MessageBroker', () => {
 
   describe('timeout', () => {
     it('should return timeout error when agent.handle exceeds timeout', async () => {
-      // Use moderator as target — it has no role-specific timeout,
-      // so the short defaultTimeoutMs (50ms) applies.
+      // Temporarily override moderator role timeout so the short
+      // defaultTimeoutMs (50ms) applies.
+      const savedModeratorTimeout = ROLE_TIMEOUTS[AgentRole.moderator];
+      delete ROLE_TIMEOUTS[AgentRole.moderator];
+
       const shortConfig = {
         ...mockConfig,
         broker: { maxCallDepth: 5, defaultTimeoutMs: 50 },
@@ -169,6 +183,7 @@ describe('MessageBroker', () => {
           MessageBroker,
           { provide: McpServerConfigService, useValue: shortConfig },
           { provide: BootstrapContextService, useValue: mockBootstrapService },
+          { provide: ContextStore, useValue: mockContextStore },
         ],
       }).compile();
 
@@ -182,12 +197,17 @@ describe('MessageBroker', () => {
       };
       shortRegistry.register(connection);
 
-      const response = await shortBroker.invoke(
-        makeRequest({ target: AgentRole.moderator }),
-      );
+      try {
+        const response = await shortBroker.invoke(
+          makeRequest({ target: AgentRole.moderator }),
+        );
 
-      expect(response.success).toBe(false);
-      expect(response.error).toContain('timed out after');
+        expect(response.success).toBe(false);
+        expect(response.error).toContain('timed out after');
+      } finally {
+        // Restore moderator timeout
+        ROLE_TIMEOUTS[AgentRole.moderator] = savedModeratorTimeout;
+      }
     });
   });
 

@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { AgentRole, ContextScope, ContextStore } from '@app/common';
 import type {
-  AgentRole,
   BootstrapContext,
   InvokeRequest,
   InvokeResponse,
@@ -19,6 +19,8 @@ export class MessageBroker {
     private readonly registry: AgentRegistry,
     private readonly config: McpServerConfigService,
     private readonly bootstrapContext: BootstrapContextService,
+    @Inject(ContextStore)
+    private readonly contextStore: ContextStore,
   ) {}
 
   async invoke(request: InvokeRequest): Promise<InvokeResponse> {
@@ -88,6 +90,35 @@ export class MessageBroker {
         timeout,
         target,
       );
+
+      // Auto-persist successful moderator clarifications to the context store.
+      // Mirrors ClarificationHandler.persistDecision() — same key format, scope,
+      // and value shape. Non-fatal: persist failure is logged but does not affect
+      // the InvokeResponse returned to the caller.
+      if (
+        target === AgentRole.moderator &&
+        response.success &&
+        response.result
+      ) {
+        try {
+          await this.contextStore.set({
+            scope: ContextScope.project,
+            key: `clarification:${caller}:${correlationId}`,
+            value: {
+              question: request.action,
+              answer: response.result,
+              askedBy: caller,
+              correlationId,
+            },
+            createdBy: 'moderator',
+          });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.warn(
+            `Failed to persist clarification decision: ${message} [correlationId=${correlationId}]`,
+          );
+        }
+      }
 
       this.logger.log(
         `Completed: correlationId=${correlationId} target=${target} success=${response.success}`,

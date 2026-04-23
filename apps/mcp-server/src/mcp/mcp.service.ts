@@ -14,7 +14,11 @@ import {
 } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { MessageBroker } from '../messaging';
-import { AgentRegistry, HttpAgentConnection } from '../registry';
+import {
+  AgentRegistry,
+  HttpAgentConnection,
+  McpElicitationConnection,
+} from '../registry';
 import { McpServerConfigService } from '../config';
 
 /**
@@ -177,27 +181,61 @@ export class McpService implements OnModuleInit {
       'register_agent',
       {
         description:
-          'Register an agent with its callback URL for invocation delivery',
+          'Register an agent for invocation delivery. Provide callbackUrl for ' +
+          'agents (HTTP delivery) or omit it for moderator (MCP elicitation delivery).',
         inputSchema: {
           role: z.enum(agentRoleValues).describe('Agent role to register'),
           callbackUrl: z
             .string()
             .url()
-            .describe('Base URL where the agent accepts invocations'),
+            .optional()
+            .describe(
+              'Base URL where the agent accepts invocations (required for agents, omit for moderator)',
+            ),
         },
       },
       async (args) => {
-        const connection = new HttpAgentConnection(
-          args.role as AgentRole,
-          args.callbackUrl,
-        );
+        const role = args.role as AgentRole;
+
+        if (args.callbackUrl) {
+          // Standard HTTP-based agent registration
+          const connection = new HttpAgentConnection(role, args.callbackUrl);
+          this.registry.register(connection);
+          this.logger.log(`Agent ${role} registered at ${args.callbackUrl}`);
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Agent ${role} registered at ${args.callbackUrl}`,
+              },
+            ],
+          };
+        }
+
+        // No callbackUrl — only valid for moderator (elicitation delivery)
+        if (role !== AgentRole.moderator) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `callbackUrl is required for non-moderator roles (got ${role})`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Create elicitation-based connection using the per-session McpServer
+        const connection = new McpElicitationConnection(role, server);
         this.registry.register(connection);
-        this.logger.log(`Agent ${args.role} registered at ${args.callbackUrl}`);
+        this.logger.log(
+          `Agent ${role} registered via MCP elicitation (session-bound)`,
+        );
         return {
           content: [
             {
               type: 'text' as const,
-              text: `Agent ${args.role} registered at ${args.callbackUrl}`,
+              text: `Agent ${role} registered via MCP elicitation`,
             },
           ],
         };
