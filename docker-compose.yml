@@ -12,12 +12,20 @@ x-shared-env: &shared-env
   GIT_COMMITTER_NAME: Quorum Agent
   GIT_COMMITTER_EMAIL: quorum-agent@noreply.local
 
-x-agent-security: &agent-security
+x-base-security: &base-security
   security_opt:
     - no-new-privileges:true
   cap_drop:
     - ALL
   read_only: true
+  tmpfs:
+    - /tmp:size=512m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.config:size=64m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.local:size=64m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /home/quorum/.cache:size=128m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+
+x-agent-security: &agent-security
+  <<: *base-security
   tmpfs:
     - /tmp:size=512m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
     - /home/quorum/.claude:size=256m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
@@ -152,7 +160,7 @@ services:
       args:
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1000}
-    <<: *agent-security
+    <<: *base-security
     stdin_open: true
     tty: true
     depends_on:
