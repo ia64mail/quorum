@@ -1,0 +1,164 @@
+# QRM5-BUG-007: SDK `resume` Parameter Does Not Resume Agent Session
+
+**Status: Open**
+
+## Summary
+
+`ClaudeCodeService.execute({ resume: <sessionId> })` forwards `resume` to the Claude Agent SDK's `query()` call, but the SDK starts a *fresh* session anyway: it emits a new `session_id` and the agent has no recollection of the previous turn. Session resume — the foundation laid by QRM5-001 and relied on by QRM6-004's server-side `agentSessions` cache — is non-functional in the live Docker stack. Server-side auto-injection of the prior `sessionId` works correctly (confirmed at the MCP layer); the regression is downstream, at the agent.
+
+## Problem Statement
+
+Minimal reproduction, bypassing the MCP server entirely by posting directly to the developer's `/invoke` endpoint (the same endpoint `HttpAgentConnection.handle` uses):
+
+```
+$ docker compose exec mcp-server node -e '
+const http = require("http");
+function invoke(data) { /* POST /invoke to developer */ }
+(async () => {
+  const r1 = await invoke({ correlationId: "resume-test", caller: "moderator",
+    target: "developer", action: "Remember this number: 4242. Reply with OK.",
+    wait: true, depth: 0 });
+  console.log("R1:", JSON.stringify(r1));
+  const r2 = await invoke({ correlationId: "resume-test", caller: "moderator",
+    target: "developer",
+    action: "What number did I just tell you to remember? Reply with only the number.",
+    wait: true, depth: 0, sessionId: r1.sessionId });
+  console.log("R2:", JSON.stringify(r2));
+})();
+'
+
+R1: {"success":true,"result":"OK","sessionId":"0a0118c6-15fc-45c4-8ba1-563ce0267b80",...}
+R2: {"success":true,
+     "result":"I don't have any record of you telling me to remember a number. ...",
+     "sessionId":"d6978e5c-8456-4017-b068-71ffbf61f729", ...}
+```
+
+The second call:
+1. Received `sessionId: 0a0118c6-...` in the request (confirmed by the `resume-test` correlation)
+2. Started a fresh session (`d6978e5c-...`) rather than resuming the first
+3. Has no memory of the `4242` from R1
+
+Developer container logs confirm: `Session started: <fresh-id>` rather than any resume-specific log. No `Session resume failed` warning is emitted — the SDK does not error; it silently ignores or mishandles the `resume` option and returns a new session.
+
+Because QRM6-004 correctly auto-injects `sessionId` into the outgoing `invoke_agent` request (verified with debug instrumentation — `QRM6DBG state=true agentSessions=[["developer","..."]] resolvedSessionId=<id>`), the *visible* failure is attributed to QRM6, but the actual break is at the SDK wrapper. Any workflow that relies on multi-turn agent continuity within a conversation — session resume after timeout, developer continuing a refinement, architect returning to an earlier design — is degraded.
+
+### Scope of impact
+
+- **QRM5-001** (agent session resume) — the deliverable that introduced resume is not behaving as accepted.
+- **QRM6-004** (server-side session tracking) — the server-side cache is functioning, but the downstream resume it enables does not take effect, so the end-to-end user-visible behavior matches "no resume at all."
+- **QRM6-008** (playbook E2E) — Scenario 5 (server-side session tracking) fails the acceptance criterion "the server auto-injected the sessionId from Step 1; developer resumes its session, not a fresh start." Server-side injection happens; fresh start still occurs.
+
+## Design Context
+
+`ClaudeCodeService.execute` (at `apps/agent/src/llm/claude-code.service.ts`) wraps `query()` from `@anthropic-ai/claude-agent-sdk` (v0.2.110). The relevant options:
+
+```typescript
+query({
+  prompt,
+  options: {
+    cwd: this.config.agent.workspaceDir,
+    model: this.config.anthropic.model,
+    persistSession: true,            // line 83
+    settingSources: ['project'],     // line 84
+    ...
+    ...(params.resume ? { resume: params.resume } : {}),   // line 104
+  },
+});
+```
+
+The SDK also has a graceful fallback path (line 32–51) that catches *errors* during resume and retries without `resume`. But in this bug the SDK does not *throw* — it simply returns a fresh session silently, so the fallback never engages and no warning is logged.
+
+### Plausible causes to investigate
+
+Not investigated in this ticket; the implementer should triage:
+
+1. **`persistSession: true` does not activate session storage in this SDK version.** `persistSession` might require a matching `sessionStore` option or a specific `cwd` configuration that the current setup doesn't satisfy.
+2. **Session files written to a transient location.** The SDK typically persists sessions under `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. In the agent container, `~/.claude` is a tmpfs (per QRM4-era config) — sessions don't survive across the single-container boundary between calls in practice, but within the same long-running container they *should* persist until the tmpfs is cleared. Verify by listing `~/.claude/projects/*/` inside the developer container immediately after R1 returns and before R2 fires.
+3. **`resume` expects a different ID shape.** The SDK may distinguish between "session UUID" and "session store key" — the value returned from the `result` message may not be the correct key for `resume`. Check what the SDK emits for `session_id` vs what `resume` expects by reading the SDK's internal session-store code (`@anthropic-ai/claude-agent-sdk` package).
+4. **`settingSources: ['project']` suppresses session-store config.** The SDK loads settings from `project` level; if session-store behavior is configured at user level, the suppression could disable persistence.
+5. **Silent SDK bug / version skew.** v0.2.x pre-release. Upgrade + test is one triage path.
+6. **Docker rootfs is read-only (QRM6-BUG-001 context).** If session storage writes fail silently because the container FS is read-only *and* `~/.claude` tmpfs is too small or misconfigured, the SDK may downgrade to a non-persistent mode. Verify tmpfs sizing and writability.
+
+### Evidence that the server-side side of the chain is correct
+
+Instrumentation added during the QRM6-008 2026-04-24 run (a log line inside `invoke_agent`'s handler) produced:
+
+```
+[McpService] QRM6DBG state=true agentSessions=[] resolvedSessionId=null           # first call: nothing to inject
+[McpService] QRM6DBG state=true agentSessions=[["developer","ecb60da9-..."]] resolvedSessionId=ecb60da9-... # second call: injected
+```
+
+So `McpService` does populate `state.agentSessions` on R1's response and does pass `resolvedSessionId` into the broker request on R2. The broker logs:
+
+```
+[MessageBroker] Invoke: correlationId=... caller=moderator target=developer depth=0
+```
+
+And the developer logs:
+
+```
+[InvocationHandler] Invocation received: correlationId=... action="..." caller=moderator depth=0
+[ClaudeCodeService] Session started: 58c1a580-...    # fresh, not resumed
+```
+
+The gap is between InvocationHandler receiving `request.sessionId` (correctly passed as `resume: request.sessionId` to `ClaudeCodeService.execute`) and the SDK actually resuming. Everything upstream is doing its job.
+
+## Implementation Details
+
+### Step 1 — Reproduce inside the developer container
+
+Inside `quorum-developer-1`, list `~/.claude/projects/` after an invocation. If empty or absent, `persistSession` isn't writing — the resume target doesn't exist in the first place, so `resume: <id>` has nothing to load.
+
+```bash
+docker compose exec developer ls -la /home/quorum/.claude/projects/ 2>/dev/null || echo 'dir missing'
+```
+
+If missing: the fix is persistence-side (session storage not engaged). If present but resume still returns fresh: the fix is in how the SDK option is set or in the SDK version.
+
+### Step 2 — Engage the SDK's own fallback or error path
+
+Temporarily wrap `query()` with extra logging to emit:
+- The resolved `session_id` from the `system/init` message before any LLM turn executes
+- Whether the SDK emits a `session_loaded` or equivalent event when `resume` is accepted
+
+If the SDK emits no resume-specific signal, the silent no-op is confirmed. In that case the remediation is either:
+1. Update to a newer SDK version where resume is reliable (upgrade `@anthropic-ai/claude-agent-sdk` and retest)
+2. Configure a `sessionStore` explicitly — the SDK API may require a custom store to activate persistence in this runtime
+3. Switch from `resume` to an equivalent API (e.g. passing prior messages explicitly via `continueConversation` or similar — check SDK changelog)
+
+### Step 3 — Document the decision
+
+Whatever fix lands, append an `## Implementation Notes` section to this ticket explaining the mechanism (not just the patch). This is the second time session resume has churned (QRM5-001 originally, this ticket now); the next implementer needs to understand *why* the current approach works, so they don't re-break it.
+
+### Out of scope
+
+- Do not redesign the `agentSessions` cache. QRM6-004's server-side tracking is correct and verified (QRM6DBG instrumentation). The cache will naturally start working end-to-end once the SDK-level resume is fixed.
+- Do not change `HttpAgentConnection` or the `InvokeRequest` schema. `sessionId` already flows through unmodified — the failure is strictly inside `ClaudeCodeService.execute` and downstream.
+
+## Acceptance Criteria
+
+- [ ] Direct repro (two back-to-back `POST /invoke` to developer, second with `sessionId: <first's id>`) shows R2 returning a response that references R1's content (e.g. remembers "4242")
+- [ ] Developer log emits a distinct marker for resumed sessions (e.g. `Session resumed: <id>`) that we can grep for, instead of identical "Session started" messages
+- [ ] QRM6-008 playbook Scenario 5 passes: `invoke_agent(target=developer)` twice in a row without explicit `sessionId` results in the second call resuming the first (developer identifies the continuation, same `sessionId` in the response chain)
+- [ ] If upgrading SDK version, note the version bump in the ticket and run the full QRM5-008 and QRM6-008 playbooks to catch ripple effects
+- [ ] Unit coverage: `ClaudeCodeService` spec adds a test that verifies `resume: 'sess-x'` is honored — ideally by asserting the SDK query option is set, and a separate integration-style test that round-trips resume if mocking the SDK allows
+- [ ] `npm run build`, `npm run lint`, `npm run test` pass (no regressions)
+
+## Dependencies and References
+
+### Prerequisites
+- None — the fix lives in `apps/agent/src/llm/claude-code.service.ts` and possibly the SDK version pin in `package.json`
+
+### What This Blocks
+- QRM5-001 — acceptance of "session resume works end-to-end" needs this verified
+- QRM6-004 — acceptance is mechanically met (server-side cache works), but observable behavior depends on this fix
+- QRM6-008 — Scenario 5 cannot pass until resume works
+
+### References
+- `apps/agent/src/llm/claude-code.service.ts:104` — where `resume` is passed to the SDK
+- `apps/agent/src/llm/claude-code.service.ts:32–51` — existing fallback-to-fresh path (currently never engages because SDK does not throw on silent resume failure)
+- `apps/agent/src/connection/invocation-handler.service.ts:86` — `resume: request.sessionId` (working correctly; not the source of the bug)
+- `apps/mcp-server/src/mcp/mcp.service.ts:204, 235` — QRM6-004's auto-inject/update logic (working correctly; verified via instrumentation)
+- `@anthropic-ai/claude-agent-sdk` — current version 0.2.110; check changelog for `resume` / `persistSession` behavior changes
+- `tickets/QRM5-001-agent-session-resume.md` — original session-resume design; whatever we change here, align with (or update) that ticket's architecture
+- **Discovered during:** QRM6-008 playbook run 2026-04-24 — Scenario 5 exposed the bug while validating QRM6-004's auto-injection
