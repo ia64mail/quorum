@@ -1,4 +1,6 @@
-# QRM5-BUG-007: SDK `resume` Parameter Does Not Resume Agent Session
+# QRM6-BUG-005: SDK `resume` Parameter Does Not Resume Agent Session
+
+> **Note:** Originally filed as QRM5-BUG-007 (the underlying SDK behavior originated in QRM5-001). Renumbered into QRM6 since the bug was discovered during the QRM6-008 playbook run, blocks Scenario 5, and the user-visible regression manifests through QRM6-004's session-tracking surface.
 
 **Status: Open**
 
