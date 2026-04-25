@@ -2,7 +2,7 @@
 
 > **Note:** Originally filed as QRM5-BUG-007 (the underlying SDK behavior originated in QRM5-001). Renumbered into QRM6 since the bug was discovered during the QRM6-008 playbook run, blocks Scenario 5, and the user-visible regression manifests through QRM6-004's session-tracking surface.
 
-**Status: Open**
+**Status: Open — root cause narrowed, fix direction identified**
 
 ## Summary
 
@@ -136,6 +136,81 @@ Whatever fix lands, append an `## Implementation Notes` section to this ticket e
 
 - Do not redesign the `agentSessions` cache. QRM6-004's server-side tracking is correct and verified (QRM6DBG instrumentation). The cache will naturally start working end-to-end once the SDK-level resume is fixed.
 - Do not change `HttpAgentConnection` or the `InvokeRequest` schema. `sessionId` already flows through unmodified — the failure is strictly inside `ClaudeCodeService.execute` and downstream.
+
+## Investigation Findings (2026-04-25)
+
+Investigation session conducted by moderator with architect research and live developer container diagnostics.
+
+### Diagnostic Results
+
+**1. Session files ARE being written (persistSession works):**
+
+Live diagnostic inside developer container confirmed session `.jsonl` files exist at `~/.claude/projects/-mnt-quorum-workspace/` after invocations. `persistSession: true` correctly creates session files on the agent's tmpfs.
+
+```
+/home/quorum/.claude/projects/-mnt-quorum-workspace/:
+-rw------- 1 quorum quorum 20764 Apr 25 18:21 1845e0bd-cf3a-4ca9-bf63-368e55e7156c.jsonl
+-rw------- 1 quorum quorum  5853 Apr 25 18:21 894bbe80-4de4-46da-9fae-d44d5a8fad6d.jsonl
+```
+
+**2. Memory test confirms no resume (fresh session each time):**
+
+Developer invoked twice in sequence. Second invocation (with server-injected sessionId from first) reported "NO PRIOR MEMORY" and generated a new session file. Two distinct `.jsonl` files on disk, two distinct sessionIds in response.
+
+**3. Fallback catch block is NOT triggering:**
+
+Searched all developer container logs — zero instances of `"Session resume failed"` warning. The SDK is not throwing an error when resume fails. The graceful fallback path (claude-code.service.ts:32-51) never engages. This rules out the architect's hypothesis that SDK exits with code 1 on missing session files (Issue #47) — in our case the SDK silently starts fresh.
+
+**4. Log evidence from QRM6-008 playbook (correlation `a1b65a1c`):**
+
+```
+Session started: 49bc7b52...  → "SESSION_FIRST"  ($0.084, 2.5s)
+Session started: 20941083...  → "SESSION_SECOND" ($0.070, 1.9s)
+```
+
+Back-to-back invocations, same correlationId, no warning between them, different sessionIds. The `resume` parameter was passed (confirmed by QRM6DBG instrumentation) but silently ignored.
+
+### Architect SDK Research (stored in context: `QRM6-BUG-005-sdk-research`)
+
+Research across GitHub issues, SDK changelog, and documentation for `@anthropic-ai/claude-agent-sdk`:
+
+**Relevant SDK issues:**
+- **Issue #2778** (`@anthropic-ai/claude-code@1.0.35`): `resume` parameter completely ignored, session_ids always differ. Closed as "not planned."
+- **Issue #8069** (`@anthropic-ai/claude-code@1.0.120`): Even when resume WORKS (context preserved), it returns a DIFFERENT `session_id`. Closed as "not planned." **Key insight: checking session_id equality is NOT a valid way to verify resume worked.**
+- **Issue #47** (`@anthropic-ai/claude-agent-sdk`): Process exits code 1 if session file not found. Open bug. (Not observed in our case — no crash, no fallback trigger.)
+- **Issue #69**: AbortController cancel after init causes next resume to fail with exit code 1. Open. Relevant to our shutdown AbortController usage.
+
+**SDK changelog (v0.2.63 → v0.2.110 relevant entries):**
+- **v0.2.89**: Added `sessionStore` option (alpha) for mirroring session transcripts to external storage. Added `deleteSession()`.
+- **v0.2.79**: Added `'resume'` to `ExitReason` type.
+- **v0.2.76**: Added `forkSession()`.
+- **v0.2.75**: Added `getSessionInfo()`, offset for `listSessions`, `tagSession()`.
+- **v0.2.73**: Fixed `options.env` override when not using `'user'` in `settingSources`.
+- **v0.2.101**: Fixed resume-session temp directory leaking on Windows/macOS.
+- **v0.2.110**: Fixed `unstable_v2_createSession` not respecting cwd, settingSources, and allowDangerouslySkipPermissions.
+
+### Narrowed Root Cause Candidates
+
+1. **SDK silent no-op on `resume`** — Issue #2778 reports this exact behavior. The SDK accepts the parameter but ignores it. No fix planned upstream.
+2. **CWD path encoding mismatch** — Sessions stored at `~/.claude/projects/<encoded-cwd>/`. If any variation in path resolution between invocations (trailing slash, symlink), the encoded path differs and the session file isn't found. Worth verifying but unlikely given consistent `cwd` config.
+3. **`settingSources: ['project']` interaction** — Under-documented. v0.2.73 fixed an env override issue related to settingSources. Possible that session persistence requires user-level settings.
+
+### Recommended Fix Directions (updated)
+
+**Short-term (try first):**
+- Replace `resume: <sessionId>` with `continue: true` in `ClaudeCodeService`. The `continue` option auto-finds the most recent session by CWD without needing an explicit ID. Since each agent runs one session per workspace, this sidesteps the ID-matching issue entirely.
+- If `continue` works, the server-side `agentSessions` cache (QRM6-004) becomes unnecessary for resume but still useful for tracking.
+
+**Medium-term:**
+- Capture `session_id` from the `result` message (SDKResultMessage) rather than the `init` message — the docs recommend result as the canonical source.
+- Add distinct log markers: `"Session resumed: <id>"` vs `"Session started (fresh): <id>"` to differentiate in logs.
+
+**Long-term:**
+- Implement a `SessionStore` adapter (available since v0.2.89). The SDK ships reference implementations for S3, Redis, Postgres. For Docker, a shared store would make resume reliable across container restarts. `SessionStore.load()` is called BEFORE subprocess spawn, so even if local tmpfs is empty, the store provides session data. Note: `sessionStore` cannot be combined with `persistSession: false` (SDK throws). Our `persistSession: true` is compatible.
+
+### Related Issue Discovered
+
+Moderator container entrypoint (`docker/moderator/entrypoint.sh:8-9`) force-overwrites `~/.claude/settings.json` on every container start, wiping CC CLI onboarding state. Filed as **QRM6-BUG-009**.
 
 ## Acceptance Criteria
 
