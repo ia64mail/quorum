@@ -42,24 +42,27 @@ export class McpElicitationConnection extends AgentConnection {
 
   async handle(
     request: InvokeRequest,
-    _timeout: number,
+    timeout: number,
   ): Promise<InvokeResponse> {
     try {
       const message = `[${request.caller}] ${request.action}`;
 
-      const result: ElicitResult = await this.server.server.elicitInput({
-        message,
-        requestedSchema: {
-          type: 'object',
-          properties: {
-            answer: {
-              type: 'string',
-              description: 'Your answer',
+      const result: ElicitResult = await this.server.server.elicitInput(
+        {
+          message,
+          requestedSchema: {
+            type: 'object',
+            properties: {
+              answer: {
+                type: 'string',
+                description: 'Your answer',
+              },
             },
+            required: ['answer'],
           },
-          required: ['answer'],
         },
-      });
+        { timeout },
+      );
 
       // Map ElicitResult.action to InvokeResponse
       if (result.action === 'accept') {
