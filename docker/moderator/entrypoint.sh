@@ -10,14 +10,15 @@ cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 
 # CC CLI reads `mcpServers` from ~/.claude.json (user scope), not from
 # ~/.claude/settings.json. /home/quorum/.claude.json is a symlink to
-# /tmp/.claude.json (writable tmpfs under read-only rootfs); cp follows the
-# symlink, landing the real file in tmpfs.
-cp /etc/claude/claude.json /home/quorum/.claude.json
+# /tmp/.claude.json (writable tmpfs under read-only rootfs). Write to the
+# symlink target directly — GNU cp refuses to write through a dangling
+# symlink, and /tmp tmpfs is fresh on every container start.
+cp /etc/claude/claude.json /tmp/.claude.json
 
 # Substitute MCP server URL at runtime (allows override via env var).
 # Default: http://mcp-server:3000/mcp (Docker Compose service name).
 MCP_SERVER_URL="${MCP_SERVER_URL:-http://mcp-server:3000/mcp}"
-sed -i "s|__MCP_SERVER_URL__|${MCP_SERVER_URL}|g" /home/quorum/.claude.json
+sed -i "s|__MCP_SERVER_URL__|${MCP_SERVER_URL}|g" /tmp/.claude.json
 
 # Self-verify: fail loudly if CC CLI doesn't see the Quorum MCP server.
 # Catches the QRM6-BUG-003 class of defect (config file present but CLI ignores it)
