@@ -8,10 +8,28 @@ set -euo pipefail
 cp /etc/claude/settings.json /home/quorum/.claude/settings.json
 cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 
+# CC CLI reads `mcpServers` from ~/.claude.json (user scope), not from
+# ~/.claude/settings.json. /home/quorum/.claude.json is a symlink to
+# /tmp/.claude.json (writable tmpfs under read-only rootfs); cp follows the
+# symlink, landing the real file in tmpfs.
+cp /etc/claude/claude.json /home/quorum/.claude.json
+
 # Substitute MCP server URL at runtime (allows override via env var).
 # Default: http://mcp-server:3000/mcp (Docker Compose service name).
 MCP_SERVER_URL="${MCP_SERVER_URL:-http://mcp-server:3000/mcp}"
-sed -i "s|__MCP_SERVER_URL__|${MCP_SERVER_URL}|g" /home/quorum/.claude/settings.json
+sed -i "s|__MCP_SERVER_URL__|${MCP_SERVER_URL}|g" /home/quorum/.claude.json
+
+# Self-verify: fail loudly if CC CLI doesn't see the Quorum MCP server.
+# Catches the QRM6-BUG-003 class of defect (config file present but CLI ignores it)
+# at startup instead of silently leaving the moderator with zero MCP tools.
+if ! claude mcp list 2>&1 | grep -q "quorum:"; then
+  echo "FATAL: Quorum MCP server not registered in CC CLI config" >&2
+  echo "---- claude mcp list output ----" >&2
+  claude mcp list >&2 || true
+  echo "---- ~/.claude.json ----" >&2
+  cat /home/quorum/.claude.json >&2 || true
+  exit 1
+fi
 
 # Idle — the user attaches via `docker compose exec -it moderator claude`.
 exec tail -f /dev/null

@@ -1,7 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AgentRole, ContextStore } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { AgentRegistry } from '../registry/agent-registry.service';
+import { McpElicitationConnection } from '../registry/mcp-elicitation-connection';
 import { MockConnection } from '../registry/mock-connection';
 import { McpServerConfigService } from '../config';
 import { BootstrapContextService } from './bootstrap-context.service';
@@ -139,6 +141,90 @@ describe('MessageBroker', () => {
       expect(response.success).toBe(false);
       expect(response.error).toContain('Circular call');
       expect(response.error).toContain('architect');
+    });
+  });
+
+  describe('elicitation bypasses circular check', () => {
+    function makeElicitationConnection(
+      acceptAnswer: string,
+    ): McpElicitationConnection {
+      const fakeServer = {
+        server: {
+          elicitInput: jest.fn().mockResolvedValue({
+            action: 'accept',
+            content: { answer: acceptAnswer },
+          }),
+        },
+      } as unknown as McpServer;
+      return new McpElicitationConnection(AgentRole.moderator, fakeServer);
+    }
+
+    it('moderator → developer → moderator(elicitation) succeeds (QRM6-BUG-004)', async () => {
+      const moderatorConn = makeElicitationConnection('use option A');
+      const devConnection = new MockConnection(AgentRole.developer);
+
+      // Developer asks the moderator a clarification — via elicitation,
+      // which would previously trip safeguard 2 because moderator is in chain.
+      devConnection.handleFn = async () => {
+        return broker.invoke(
+          makeRequest({
+            correlationId: 'corr-elicit',
+            caller: AgentRole.developer,
+            target: AgentRole.moderator,
+            depth: 1,
+          }),
+        );
+      };
+
+      registry.register(moderatorConn);
+      registry.register(devConnection);
+
+      const response = await broker.invoke(
+        makeRequest({
+          correlationId: 'corr-elicit',
+          caller: AgentRole.moderator,
+          target: AgentRole.developer,
+          depth: 0,
+        }),
+      );
+
+      expect(response.success).toBe(true);
+      expect(response.result).toBe('use option A');
+    });
+
+    it('still rejects circular HTTP call (regression — fix is connection-type-specific)', async () => {
+      const httpModeratorConn = new MockConnection(AgentRole.moderator);
+      let nestedResponse: { success: boolean; error?: string } | undefined;
+
+      const devConnection = new MockConnection(AgentRole.developer);
+      devConnection.handleFn = async () => {
+        // Nested call back to moderator within the same correlation chain.
+        nestedResponse = await broker.invoke(
+          makeRequest({
+            correlationId: 'corr-circular',
+            caller: AgentRole.developer,
+            target: AgentRole.moderator,
+            depth: 1,
+          }),
+        );
+        return { success: true, result: 'developer continued' };
+      };
+
+      registry.register(httpModeratorConn);
+      registry.register(devConnection);
+
+      await broker.invoke(
+        makeRequest({
+          correlationId: 'corr-circular',
+          caller: AgentRole.moderator,
+          target: AgentRole.developer,
+          depth: 0,
+        }),
+      );
+
+      expect(nestedResponse).toBeDefined();
+      expect(nestedResponse!.success).toBe(false);
+      expect(nestedResponse!.error).toContain('Circular call');
     });
   });
 

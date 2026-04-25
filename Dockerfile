@@ -98,8 +98,10 @@ RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude \
     /mnt/quorum/workspace/.claude /etc/claude \
  && ln -s /tmp/.claude.json /home/quorum/.claude.json
 
-# Bake settings template and moderator prompt into a read-only path; entrypoint copies them to tmpfs at runtime
+# Bake settings template and moderator prompt into a read-only path; entrypoint copies them to tmpfs at runtime.
+# claude.json holds the mcpServers block — CC CLI reads it from ~/.claude.json (user scope), not settings.json.
 COPY --chown=quorum:quorum docker/moderator/settings.json /etc/claude/settings.json
+COPY --chown=quorum:quorum docker/moderator/claude.json /etc/claude/claude.json
 COPY --chown=quorum:quorum docker/moderator/CLAUDE.md /etc/claude/CLAUDE.md
 COPY --chown=quorum:quorum docker/moderator/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

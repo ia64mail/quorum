@@ -8,6 +8,7 @@ import type {
 import { BootstrapContextService } from './bootstrap-context.service';
 import { McpServerConfigService } from '../config';
 import { AgentRegistry } from '../registry';
+import { McpElicitationConnection } from '../registry/mcp-elicitation-connection';
 import { ROLE_TIMEOUTS } from './role-timeouts';
 
 @Injectable()
@@ -37,16 +38,9 @@ export class MessageBroker {
       return { success: false, error };
     }
 
-    // Safeguard 2 — Circular call prevention (O(1) amortized)
-    const chain = this.callChains.get(correlationId) ?? new Set<AgentRole>();
-
-    if (chain.has(target)) {
-      const error = `Circular call: ${[...chain].join(' → ')} → ${target}`;
-      this.logger.warn(`Rejected: ${error} [correlationId=${correlationId}]`);
-      return { success: false, error };
-    }
-
-    // Safeguard 3 — Agent availability (O(1) lookup)
+    // Safeguard 2 — Agent availability (O(1) lookup)
+    // Runs before the circular check so we know the connection type and can
+    // exempt elicitation targets (which are human prompts, not recursive LLM calls).
     const agent = this.registry.get(target);
 
     if (!agent) {
@@ -57,6 +51,20 @@ export class MessageBroker {
 
     if (!agent.isConnected()) {
       const error = `Agent ${target} not connected`;
+      this.logger.warn(`Rejected: ${error} [correlationId=${correlationId}]`);
+      return { success: false, error };
+    }
+
+    // Safeguard 3 — Circular call prevention (O(1) amortized)
+    // Skipped for elicitation targets: the moderator-via-elicitation path
+    // (moderator → developer → moderator) is the QRM6 clarification flow,
+    // not a recursive LLM loop. Elicitation delivers a user prompt that
+    // cannot itself emit further invoke_agent calls.
+    const chain = this.callChains.get(correlationId) ?? new Set<AgentRole>();
+    const isElicitation = agent instanceof McpElicitationConnection;
+
+    if (!isElicitation && chain.has(target)) {
+      const error = `Circular call: ${[...chain].join(' → ')} → ${target}`;
       this.logger.warn(`Rejected: ${error} [correlationId=${correlationId}]`);
       return { success: false, error };
     }

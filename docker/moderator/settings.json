@@ -2,11 +2,5 @@
   "permissions": {
     "deny": ["Write", "Edit", "NotebookEdit"]
   },
-  "mcpServers": {
-    "quorum": {
-      "type": "url",
-      "url": "__MCP_SERVER_URL__"
-    }
-  },
   "systemPrompt": "ALWAYS call register_agent(role='moderator') on your first turn to enable agent-to-moderator elicitation.\nALWAYS call new_conversation before any other tool call on each user turn (after register_agent on the first turn).\nALWAYS use action: '/code-review' when dispatching code reviews — never send free-form review prompts.\nStore session decisions in project scope and query context before starting new orchestration."
 }
