@@ -1,6 +1,6 @@
 # QRM6-BUG-010: Broker Role Timeout Causes Retry Storm With Duplicate Concurrent SDK Sessions
 
-**Status: Open**
+**Status: Ready**
 
 ## Summary
 
@@ -82,6 +82,22 @@ The architect ceiling was set in the original Safeguard 4 ticket without empiric
 ### What the moderator sees
 
 The broker's error message (`"Agent architect invocation timed out"`) does technically distinguish timeout from unreachability — but the moderator's prompt-level decision logic treats any `success: false` from the broker as a signal to escalate or retry. The error string is a hint, not a structured signal.
+
+## Decision
+
+**Scope: Layer 1 (required) + Layer 3 (recommended)**
+
+We are implementing:
+
+- **Layer 1 — Idempotency map in `InvocationHandler`** keyed by `correlationId`. This is the load-bearing fix: duplicate invocations with the same correlationId attach to the in-flight promise instead of spawning a new SDK session. Directly prevents the triple-charge duplication observed in the 2026-04-25 incident.
+- **Layer 3 — Architect timeout bump to 15 minutes.** Aligns the architect role timeout with empirical task durations (5–12 min observed) so the broker stops triggering timeouts on routine research/design tasks.
+
+We are **not** implementing in this ticket:
+
+- **Layer 2 (cancel SDK on HTTP socket close)** — The refcount complexity (cancel only when ALL requests for a correlationId have disconnected) is not justified until runaway-finishes-nobody-wants prove costly in practice. Layer 1 alone prevents duplicate work. See Icebox for the combined Layer 1 + Layer 2 future improvement.
+- **Layer 4 (structured `failureReason` in `InvokeResponse`)** — Useful long-term but larger than this ticket's scope. The moderator's retry behavior can be addressed independently.
+
+**Rationale:** Layer 1 alone solves the $7 triple-charge duplication problem from the 2026-04-25 incident. Layer 3 eliminates the most common trigger (architect tasks routinely exceeding 5 minutes). Together they address the immediate cost and reliability concern without introducing the refcount tracking complexity that Layer 2 requires.
 
 ## Implementation Details
 
@@ -184,9 +200,14 @@ interface InvokeResponse {
 - [ ] Unit test in `apps/agent/src/connection/invocation-handler.service.spec.ts` asserts the dedupe: two concurrent `handle()` calls with same correlationId result in **one** `claudeCode.execute()` invocation
 - [ ] Reproduce the 2026-04-25 incident in an integration setting (architect with 5-min timeout, research task that takes 7+ min). After the fix, broker reports timeout once; subsequent retries with the same correlationId return immediately without spawning new SDK sessions; logs show one `Session started` not three
 - [ ] Architect role timeout bumped to 15 minutes in `role-timeouts.ts` with a comment referencing this ticket
-- [ ] (If Layer 2 is taken) `req.on('close')` cancels the SDK abort controller, and a regression test verifies no orphaned SDK sessions after socket close
 - [ ] Smoke runbook (`docs/smoke-test-runbook.md`) gains a scenario: "architect long-running task + moderator retry should not double-charge"
 - [ ] `npm run build`, `npm run lint`, `npm run test` pass
+
+## Icebox
+
+### Layer 1 + Layer 2 with refcounting
+
+Cancel the SDK session only when ALL requests for a given correlationId have disconnected. This is the optimal solution — it prevents both duplicate work (Layer 1's idempotency map) AND runaway token spend on sessions nobody is waiting for (Layer 2's abort-on-close). However, it requires refcount tracking across HTTP requests mapped to the same in-flight promise: each new request for an existing correlationId increments the refcount, each `req.on('close')` decrements it, and the `AbortController` fires only when the count hits zero. Deferred because the complexity is not justified until runaway-finishes-nobody-wants prove costly in practice. Layer 1 alone solves the $7 triple-charge duplication problem from the 2026-04-25 incident — the first session's work is reused by retries, so even if it finishes after the broker has timed out, no additional SDK sessions are spawned.
 
 ## Dependencies and References
 
