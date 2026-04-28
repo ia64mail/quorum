@@ -755,6 +755,40 @@ describe('InvocationHandler', () => {
       expect(result2.success).toBe(true);
       expect(mockExecute).toHaveBeenCalledTimes(2);
     });
+
+    it('should propagate failure to all concurrent awaiters', async () => {
+      let rejectExec!: (e: Error) => void;
+      mockExecute.mockReturnValue(
+        new Promise<ExecuteResult>((_, reject) => {
+          rejectExec = reject;
+        }),
+      );
+      const p1 = handler.handle(baseRequest);
+      const p2 = handler.handle(baseRequest);
+      rejectExec(new Error('boom'));
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1).toEqual(r2);
+      expect(r1.success).toBe(false);
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+    });
+
+    it('should deduplicate three concurrent calls matching the 2026-04-25 incident', async () => {
+      let resolveExec!: (v: ExecuteResult) => void;
+      mockExecute.mockReturnValue(
+        new Promise<ExecuteResult>((resolve) => {
+          resolveExec = resolve;
+        }),
+      );
+      const p1 = handler.handle(baseRequest);
+      const p2 = handler.handle(baseRequest);
+      const p3 = handler.handle(baseRequest);
+      resolveExec(successResult);
+      const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+      expect(r1).toEqual(r2);
+      expect(r2).toEqual(r3);
+      expect(r1.success).toBe(true);
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('uncommitted changes check', () => {
