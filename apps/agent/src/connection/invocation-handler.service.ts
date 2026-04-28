@@ -60,6 +60,7 @@ export function toCanUseTool(
 @Injectable()
 export class InvocationHandler {
   private readonly logger = new Logger(InvocationHandler.name);
+  private readonly inflight = new Map<string, Promise<InvokeResponse>>();
 
   constructor(
     private readonly claudeCode: ClaudeCodeService,
@@ -75,6 +76,22 @@ export class InvocationHandler {
         `action="${request.action}" caller=${request.caller} depth=${request.depth}`,
     );
 
+    const existing = this.inflight.get(request.correlationId);
+    if (existing) {
+      this.logger.log(
+        `Duplicate invocation reusing in-flight: correlationId=${request.correlationId}`,
+      );
+      return existing;
+    }
+
+    const work = this.runInvocation(request).finally(() => {
+      this.inflight.delete(request.correlationId);
+    });
+    this.inflight.set(request.correlationId, work);
+    return work;
+  }
+
+  private async runInvocation(request: InvokeRequest): Promise<InvokeResponse> {
     try {
       const result = await this.claudeCode.execute({
         prompt: this.buildPrompt(request),

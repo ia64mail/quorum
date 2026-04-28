@@ -642,6 +642,121 @@ describe('InvocationHandler', () => {
       );
     });
   });
+  describe('in-flight idempotency (BUG-010)', () => {
+    it('should deduplicate concurrent calls with the same correlationId', async () => {
+      // Use a deferred promise to control when execute() resolves
+      let resolveExec!: (v: ExecuteResult) => void;
+      mockExecute.mockReturnValue(
+        new Promise<ExecuteResult>((resolve) => {
+          resolveExec = resolve;
+        }),
+      );
+
+      const promise1 = handler.handle(baseRequest);
+      const promise2 = handler.handle(baseRequest);
+
+      // Resolve the single execute call
+      resolveExec(successResult);
+
+      const [result1, result2] = await Promise.all([promise1, promise2]);
+
+      // Only one execute() call should have been made
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+      // Both callers get the same result
+      expect(result1).toEqual(result2);
+      expect(result1).toEqual({
+        success: true,
+        result: 'Here is my design.',
+        totalCostUsd: 0.0123,
+        durationMs: 5000,
+        sessionId: 'sess-abc',
+      });
+    });
+
+    it('should log duplicate invocation when reusing in-flight', async () => {
+      let resolveExec!: (v: ExecuteResult) => void;
+      mockExecute.mockReturnValue(
+        new Promise<ExecuteResult>((resolve) => {
+          resolveExec = resolve;
+        }),
+      );
+
+      const promise1 = handler.handle(baseRequest);
+      // Second call triggers duplicate log
+      const promise2 = handler.handle(baseRequest);
+
+      resolveExec(successResult);
+      await Promise.all([promise1, promise2]);
+
+      const dupLog = (logSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Duplicate invocation reusing in-flight'),
+      )?.[0] as string;
+      expect(dupLog).toBeDefined();
+      expect(dupLog).toContain('correlationId=corr-123');
+    });
+
+    it('should run separate execute() calls for different correlationIds', async () => {
+      let resolveExec1!: (v: ExecuteResult) => void;
+      let resolveExec2!: (v: ExecuteResult) => void;
+      mockExecute
+        .mockReturnValueOnce(
+          new Promise<ExecuteResult>((resolve) => {
+            resolveExec1 = resolve;
+          }),
+        )
+        .mockReturnValueOnce(
+          new Promise<ExecuteResult>((resolve) => {
+            resolveExec2 = resolve;
+          }),
+        );
+
+      const request2: InvokeRequest = {
+        ...baseRequest,
+        correlationId: 'corr-456',
+      };
+
+      const promise1 = handler.handle(baseRequest);
+      const promise2 = handler.handle(request2);
+
+      resolveExec1(successResult);
+      resolveExec2(successResult);
+
+      await Promise.all([promise1, promise2]);
+
+      // Two distinct correlationIds → two execute() calls
+      expect(mockExecute).toHaveBeenCalledTimes(2);
+    });
+
+    it('should allow fresh invocation after prior one completes (map cleanup)', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      // First call — completes fully
+      await handler.handle(baseRequest);
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+
+      // Second call with same correlationId — should start fresh
+      await handler.handle(baseRequest);
+      expect(mockExecute).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clean up map entry even when invocation fails', async () => {
+      mockExecute
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValueOnce(successResult);
+
+      // First call — throws, but should clean up map
+      const result1 = await handler.handle(baseRequest);
+      expect(result1.success).toBe(false);
+
+      // Second call with same correlationId — should start fresh
+      const result2 = await handler.handle(baseRequest);
+      expect(result2.success).toBe(true);
+      expect(mockExecute).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('uncommitted changes check', () => {
     it('should run git status --porcelain after execution completes', async () => {
       mockExecute.mockResolvedValue(successResult);
