@@ -81,14 +81,14 @@ No `allow` key is added. The user builds their allow list incrementally through 
 
 ## Acceptance Criteria
 
-- [ ] `settings.json` in the named volume retains CC CLI state (onboarding, theme, trust) across container restarts
-- [ ] Quorum-controlled keys (`permissions`, `systemPrompt`) update from the baked file on every start
-- [ ] First boot (empty volume) seeds `settings.json` from the baked file
-- [ ] User does not see the onboarding flow after `docker compose restart moderator` if already completed
-- [ ] `CLAUDE.md` remains unconditional force-copy
-- [ ] Merge uses `jq -s '.[0] * .[1]'` with write-to-tmp-then-mv atomicity pattern
-- [ ] `set -euo pipefail` ensures malformed JSON aborts before corrupting the volume
-- [ ] Baked `settings.json` is not modified (no pre-baked `allow` list)
+- [x] `settings.json` in the named volume retains CC CLI state (onboarding, theme, trust) across container restarts
+- [x] Quorum-controlled keys (`permissions`, `systemPrompt`) update from the baked file on every start
+- [x] First boot (empty volume) seeds `settings.json` from the baked file
+- [x] User does not see the onboarding flow after `docker compose restart moderator` if already completed
+- [x] `CLAUDE.md` remains unconditional force-copy
+- [x] Merge uses `jq -s '.[0] * .[1]'` with write-to-tmp-then-mv atomicity pattern
+- [x] `set -euo pipefail` ensures malformed JSON aborts before corrupting the volume
+- [x] Baked `settings.json` is not modified (no pre-baked `allow` list)
 
 ## Dependencies and References
 
@@ -105,3 +105,18 @@ No `allow` key is added. The user builds their allow list incrementally through 
 - `Dockerfile:103-105` — bake step copying files into `/etc/claude/`
 - [QRM6-BUG-005](QRM6-BUG-005-sdk-resume-not-resuming-session.md) — discovered during the BUG-005 investigation session
 - [QRM6-BUG-006](QRM6-BUG-006-moderator-entrypoint-dangling-symlink.md) — related entrypoint fix (dangling symlink for `.claude.json`)
+
+## Implementation Notes
+
+**Review status:** Accepted
+
+**Files modified:**
+- `docker/moderator/entrypoint.sh` — replaced unconditional `cp` for `settings.json` with conditional `jq -s '.[0] * .[1]'` merge; updated comment block to describe merge semantics
+
+**Deviations from ticket:** None — implementation matches the ticket spec exactly.
+
+**Verification results:**
+- `npm run build` — pass
+- `npm run lint` — pass (0 errors, 0 warnings)
+- `npm run test` — 50 suites, 771 tests, all pass
+- Edge cases verified by code inspection: empty file, malformed JSON, first boot, permissions allow/deny coexistence, cross-filesystem `mv` safety
