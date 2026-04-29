@@ -1,35 +1,30 @@
 # QRM6-BUG-009: Moderator Entrypoint Force-Overwrites `settings.json` on Every Container Start
 
-**Status: Open**
+**Status: Ready for Implementation**
 
 ## Summary
 
-The moderator container's entrypoint unconditionally copies the baked `settings.json` from `/etc/claude/` into the named volume at `/home/quorum/.claude/` on every start. This wipes CC CLI state written during prior sessions — onboarding completion, theme choice, and directory trust decisions — forcing the user through the full onboarding flow every time they reconnect after a container restart. The same issue affects `CLAUDE.md`: user edits in the volume are silently overwritten.
+The moderator container's entrypoint unconditionally copies the baked `settings.json` into the named volume on every start, wiping CC CLI state from prior sessions. This forces the user through the full onboarding flow after every container restart. The fix: merge baked keys over the existing file instead of replacing it.
 
 ## Problem Statement
 
-The moderator uses a named volume (`moderator-claude-data:/home/quorum/.claude`) specifically to persist CC CLI data across restarts. However, `docker/moderator/entrypoint.sh:8-9` runs:
+The moderator uses a named volume (`moderator-claude-data:/home/quorum/.claude`) to persist CC CLI data across restarts. However, `docker/moderator/entrypoint.sh:8` runs:
 
 ```bash
 cp /etc/claude/settings.json /home/quorum/.claude/settings.json
-cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 ```
 
-The baked `settings.json` contains only `permissions` and `systemPrompt` — the two keys Quorum needs to control. CC CLI adds its own keys during use (onboarding state, theme, trust decisions, etc.). The unconditional `cp` replaces the entire file, destroying those additions.
+The baked `settings.json` contains only `permissions.deny` and `systemPrompt` — the two areas Quorum needs to control. CC CLI adds its own keys during use (`hasCompletedOnboarding`, `preferredTheme`, `trustedDirectories`, etc.). The unconditional `cp` replaces the entire file, destroying those additions.
 
-**User-visible symptom:** After `docker compose restart moderator`, running `docker compose exec -it moderator claude` presents the full first-time onboarding flow (theme selection, directory trust prompt, API key entry) instead of resuming a configured session.
+**User-visible symptom:** After `docker compose restart moderator`, running `docker compose exec -it moderator claude` presents the full first-time onboarding flow instead of resuming a configured session.
 
-The entrypoint comment explains the intent: *"the latest baked prompt/settings always wins on container start."* The goal — keeping Quorum's config current across image updates — is valid, but the mechanism is too aggressive. A full file replacement is appropriate for first boot but destructive on subsequent starts.
-
-**Severity:** Low. The user can complete onboarding again in under a minute, and no data beyond UX preferences is lost. But it's a recurring annoyance that undermines the purpose of the named volume.
+**Severity:** Low — the user can complete onboarding again in under a minute, but it's a recurring annoyance that undermines the purpose of the named volume.
 
 ## Implementation Details
 
-Three fix directions, in order of recommendation:
+### settings.json — Merge baked keys over existing
 
-### Option A: Merge baked keys into existing settings (recommended)
-
-On container start, if `settings.json` already exists in the volume, merge only the `permissions` and `systemPrompt` keys from the baked file into the existing file — preserving everything CC CLI added. Use `jq` (already available in the image) for a simple JSON merge:
+Replace the unconditional `cp` for `settings.json` (entrypoint line 8) with a conditional merge. If `settings.json` already exists in the volume, use `jq` to merge the baked file's keys over it. First boot (no existing file) seeds from the baked copy.
 
 ```bash
 if [ -f /home/quorum/.claude/settings.json ]; then
@@ -43,46 +38,70 @@ else
 fi
 ```
 
-This ensures Quorum's `permissions` and `systemPrompt` stay current on image updates while preserving CC CLI's state. The `jq -s '.[0] * .[1]'` pattern gives the baked file precedence for shared keys, which is the desired behavior.
+**Merge semantics:** `jq -s '.[0] * .[1]'` performs a recursive object merge. The existing file is `.[0]` (base), the baked file is `.[1]` (wins for shared keys). This gives the correct precedence: Quorum-controlled keys (`permissions`, `systemPrompt`) always update from the baked file, while CC CLI state keys survive because the baked file doesn't define them.
 
-Apply the same pattern to `CLAUDE.md` if user edits should be preserved, or accept the overwrite if `CLAUDE.md` is meant to be fully controlled by the image.
+**Permissions allow list behavior:** The baked `settings.json` contains only `permissions.deny` — it has no `allow` key. As the user gradually approves permissions during sessions, CC CLI writes `permissions.allow` entries into the volume's `settings.json`. Because `jq`'s `*` operator does recursive object merge on nested objects, the merge produces `permissions: { allow: [...from volume...], deny: [...from baked...] }` — both keys coexist. The user's accumulated allow list survives restarts without any pre-baked allow configuration.
 
-### Option B: Copy only if absent
+**Array handling:** `jq`'s `*` operator replaces arrays wholesale rather than appending. The baked `deny` array is authoritative — this is correct behavior.
+
+**Atomicity:** Write to `/tmp/merged-settings.json` then `mv` to the final path. If `jq` fails (malformed JSON), `set -euo pipefail` aborts before `mv`, leaving the existing file untouched.
+
+**jq availability:** `jq` is installed via `apt-get` in the moderator Dockerfile target (bookworm-slim base).
+
+### CLAUDE.md — Unconditional force-copy (no change)
+
+The existing `cp` for `CLAUDE.md` (entrypoint line 9) remains as-is:
 
 ```bash
-[ -f /home/quorum/.claude/settings.json ] || cp /etc/claude/settings.json /home/quorum/.claude/settings.json
+cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 ```
 
-Simplest fix, but means Quorum config updates in new image builds won't propagate to existing volumes until the volume is wiped. Acceptable for `CLAUDE.md` (where full image control may be desirable) but problematic for `settings.json` if permissions or system prompt evolve.
+CLAUDE.md is the moderator's role prompt and changes only via commits to the quorum repository. In-container edits are not a supported workflow — the image is the source of truth.
 
-### Option C: Separate baked config path
+### Baked settings.json — No changes
 
-Move Quorum-controlled settings to a path CC CLI reads alongside user settings (e.g., project-level `.claude/settings.json`). This avoids the collision entirely but requires understanding CC CLI's settings precedence and may not be supported for all keys.
+`docker/moderator/settings.json` remains unchanged:
 
-### CLAUDE.md consideration
+```json
+{
+  "permissions": {
+    "deny": ["Write", "Edit", "NotebookEdit"]
+  },
+  "systemPrompt": "..."
+}
+```
 
-The `CLAUDE.md` overwrite (line 9) is arguably correct — the moderator's `CLAUDE.md` defines its role prompt and should stay in sync with the image. But if users or agents modify it during a session (e.g., adding project-specific notes), those edits are lost. Consider whether `CLAUDE.md` should follow the same merge strategy or remain force-copied.
+No `allow` key is added. The user builds their allow list incrementally through interactive permission grants during sessions. The merge logic preserves these grants across restarts.
+
+### Edge Cases
+
+1. **Volume-less operation:** If the container runs without the named volume mount, `/home/quorum/.claude/` is tmpfs from the base security anchor. The `if/else` handles this — every start is a first boot, equivalent to current behavior.
+
+2. **Concurrent access:** Not a concern — only the entrypoint writes settings.json, and it runs before the container idles. The user attaches CC CLI later via exec.
 
 ## Acceptance Criteria
 
 - [ ] `settings.json` in the named volume retains CC CLI state (onboarding, theme, trust) across container restarts
-- [ ] Quorum-controlled keys (`permissions`, `systemPrompt`) are updated from the baked file on every start
-- [ ] First boot (empty volume) still seeds `settings.json` from the baked file
-- [ ] User does not see the onboarding flow after `docker compose restart moderator` if they already completed it
-- [ ] `CLAUDE.md` handling is explicitly decided (merge, skip-if-exists, or keep force-copy) and documented in the entrypoint
+- [ ] Quorum-controlled keys (`permissions`, `systemPrompt`) update from the baked file on every start
+- [ ] First boot (empty volume) seeds `settings.json` from the baked file
+- [ ] User does not see the onboarding flow after `docker compose restart moderator` if already completed
+- [ ] `CLAUDE.md` remains unconditional force-copy
+- [ ] Merge uses `jq -s '.[0] * .[1]'` with write-to-tmp-then-mv atomicity pattern
+- [ ] `set -euo pipefail` ensures malformed JSON aborts before corrupting the volume
+- [ ] Baked `settings.json` is not modified (no pre-baked `allow` list)
 
 ## Dependencies and References
 
 ### Prerequisites
-- None — self-contained entrypoint change; may require `jq` if Option A is chosen (verify availability in the image)
+- None — self-contained entrypoint change. `jq` is already available in the moderator image.
 
 ### What This Blocks
-- Nothing directly — low-severity UX issue
+- Nothing directly — low-severity UX fix.
 
 ### References
-- `docker/moderator/entrypoint.sh:8-9` — the unconditional `cp` commands
-- `docker/moderator/settings.json` — baked source (contains only `permissions` and `systemPrompt`)
+- `docker/moderator/entrypoint.sh:8-9` — the unconditional `cp` commands to replace
+- `docker/moderator/settings.json` — baked source (contains only `permissions.deny` and `systemPrompt`)
 - `docker-compose.yml:175` — named volume mount `moderator-claude-data:/home/quorum/.claude`
 - `Dockerfile:103-105` — bake step copying files into `/etc/claude/`
-- [QRM6-BUG-005](QRM6-BUG-005-sdk-resume-not-resuming-session.md) — discovered during the BUG-005 investigation session (2026-04-25)
+- [QRM6-BUG-005](QRM6-BUG-005-sdk-resume-not-resuming-session.md) — discovered during the BUG-005 investigation session
 - [QRM6-BUG-006](QRM6-BUG-006-moderator-entrypoint-dangling-symlink.md) — related entrypoint fix (dangling symlink for `.claude.json`)
