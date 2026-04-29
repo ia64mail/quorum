@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Copy baked config into the writable home directory (tmpfs in the agent profile,
+# Restore baked config into the writable home directory (tmpfs in the agent profile,
 # named volume in the moderator profile). The build-time COPY at /etc/claude/ is the
-# source of truth — this entrypoint restores it so the latest baked prompt/settings
-# always wins on container start.
-cp /etc/claude/settings.json /home/quorum/.claude/settings.json
+# source of truth.
+#
+# settings.json: If a file already exists in the volume (from a prior session), merge
+# the baked keys over it so Quorum-controlled keys (permissions, systemPrompt) always
+# update while CC CLI state (onboarding, theme, trust) survives. First boot (no
+# existing file) seeds from the baked copy. Uses jq recursive merge (.[0] * .[1])
+# with write-to-tmp-then-mv for atomicity — if jq fails, set -euo pipefail aborts
+# before mv, leaving the existing file untouched.
+if [ -f /home/quorum/.claude/settings.json ]; then
+  jq -s '.[0] * .[1]' \
+    /home/quorum/.claude/settings.json \
+    /etc/claude/settings.json \
+    > /tmp/merged-settings.json
+  mv /tmp/merged-settings.json /home/quorum/.claude/settings.json
+else
+  cp /etc/claude/settings.json /home/quorum/.claude/settings.json
+fi
 cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 
 # CC CLI reads `mcpServers` from ~/.claude.json (user scope), not from

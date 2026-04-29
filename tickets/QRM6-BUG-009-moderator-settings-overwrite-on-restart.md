@@ -1,6 +1,6 @@
 # QRM6-BUG-009: Moderator Entrypoint Force-Overwrites `settings.json` on Every Container Start
 
-**Status: Ready for Implementation**
+**Status: Done**
 
 ## Summary
 
