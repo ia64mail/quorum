@@ -642,6 +642,52 @@ Update system documentation to reflect the new architecture.
 
 **Depends on:** QRM6-002, QRM6-003, QRM6-009
 
+### QRM6-011 — Unified Moderator Log Adapter
+
+Bridge the moderator's CC CLI session log into the project's structured-logger format so `tools/session-report/parse-logs.mjs` can ingest it on equal terms with agent logs.
+
+**Background — why the moderator breaks log uniformity.**
+
+Agents run as NestJS processes that embed the Claude Agent SDK as a library. `ClaudeCodeService` (`apps/agent/src/llm/claude-code.service.ts`) iterates the SDK's async `SDKMessage` stream and translates each message into a `QuorumLogger` call, producing canonical `{timestamp, level, context, message, agentRole}` JSONL at `logs/{role}-{timestamp}.jsonl`. `InvocationHandler`, `McpClientService`, `MessageBroker`, `AgentRegistry`, `InMemoryStore` all log through the same logger — that is why `parse-logs.mjs` can key on `context` to classify events (`SESSION-REPORT.md:181–190`).
+
+The post-QRM6 moderator has no such app-code wrapper. CC CLI is a standalone binary; the JSONL it writes to `~/.claude/projects/-app/<sessionId>.jsonl` is a per-turn session transcript with a different schema (`{type: user|assistant|tool_use_result|summary|permission-mode, message, ...}`). When QRM6-009 deletes `apps/terminal/`, the legacy `logs/terminal-*.jsonl` stream (produced by the NestJS terminal app's `QuorumLogger`) disappears entirely — `parse-logs.mjs` is left without a moderator-side input in its expected format.
+
+**Decision: post-process, do not redirect or repurpose `terminal-*.jsonl`.** Three bridges were considered:
+
+| Option | Verdict |
+|--------|---------|
+| Reuse the `terminal-*.jsonl` filename for the CC CLI session JSONL | Rejected — reuses a name for unrelated content; breaks `parse-logs.mjs` (different field schema); confuses historical session reports |
+| Run an out-of-band adapter that reads `<sessionId>.jsonl` and emits `logs/moderator-{timestamp}.jsonl` in QuorumLogger shape | **Chosen** — does not touch the moderator process; keeps the raw CC CLI log intact for forensics; lets `parse-logs.mjs` continue to key on `context` |
+| CC CLI hooks (`UserPromptSubmit`, `Stop`, `PostToolUse`, …) emitting structured lines on each turn | Rejected as the primary path — hooks fire on a fixed event set, miss internal events, and diverge from the SDK message stream the agent path uses; viable as a complement if specific events are missing |
+
+**Why not folded into QRM6-009.** QRM6-009 is scoped as a pure deletion ("no behavioral changes in this ticket" — D8). Adding adapter plumbing, a `parse-logs.mjs` rewrite, a volume change, and a docs migration breaks that property and tangles the revert path. QRM6-011 lands after QRM6-009 so the adapter targets the post-deletion world directly.
+
+**Key decisions:**
+
+- **Raw log storage:** switch the `quorum_moderator-claude-data` named volume to a bind-mount under `logs/moderator-sessions/`, so raw CC CLI session JSONLs land on the host directly. Retires the `docker run --rm -v ... alpine cat` recipe currently in `SESSION-REPORT.md:79–98`.
+- **Adapter location:** `tools/session-report/cc-session-adapter.mjs` (sibling of `parse-logs.mjs`). Reads `logs/moderator-sessions/*.jsonl`, emits `logs/moderator-{timestamp}.jsonl` in `{timestamp, level, context, message, agentRole: 'moderator'}` shape. Idempotent — safe to re-run as a session grows.
+- **Event mapping (initial):**
+    - `type=user` → `context: 'UserPrompt'`
+    - `type=assistant` text → `context: 'ModeratorResponse'`
+    - `type=assistant` with `tool_use` blocks → `context: 'ToolCall'`, message includes tool name + correlationId
+    - `type=tool_use_result` → `context: 'ToolResult'`
+    - `type=summary` → `context: 'SessionSummary'`
+    - Refine during implementation against actual session captures.
+- **Run mode:** invoked by `parse-logs.mjs` as a pre-step (or explicit `node tools/session-report/cc-session-adapter.mjs` invocation). No daemon, no in-container process.
+- **Filename convention:** `logs/moderator-{timestamp}.jsonl`. The legacy `terminal-*.jsonl` name is retired with `apps/terminal/`.
+- **`parse-logs.mjs` updates:** treat `moderator-*.jsonl` as a first-class input; remove the moderator-gap caveat ("Does not cover the moderator" in `SESSION-REPORT.md:70`); fold user prompts and moderator narration into the agent-activity table.
+- **`SESSION-REPORT.md` updates:** rewrite the "Moderator Session Log (post-QRM6-002)" section to describe the adapter; remove the manual `jq` recipes; update the "Tips for Claude Code" bullet that currently sources the Goal/User Prompt from a separate manual extraction.
+
+**Touches:**
+
+- `tools/session-report/cc-session-adapter.mjs` — new adapter
+- `tools/session-report/parse-logs.mjs` — ingest moderator-shaped logs as first-class
+- `tools/session-report/SESSION-REPORT.md` — rewrite moderator section, drop manual recipes
+- `docker-compose.yml` — moderator log volume from named volume to bind-mount under `logs/moderator-sessions/`
+- `docs/system-design.md` — note moderator log flow if applicable
+
+**Depends on:** QRM6-009 (terminal deletion retires the legacy filename), QRM6-010 (docs reflect post-QRM6 architecture before the adapter rewrites the SESSION-REPORT section)
+
 ---
 
 ## Dependency Graph
@@ -655,7 +701,7 @@ QRM6-003 (Elicitation Conn) ◀─┴──▶ QRM6-004 (Caller ID) ────
                                                             │
 QRM6-006 (Agent Prompts) ──────────▶ QRM6-007 (CLAUDE.md) ──┤
                                                             │
-                                                            └──▶ QRM6-009 (Delete terminal) ──▶ QRM6-010 (Docs)
+                                                            └──▶ QRM6-009 (Delete terminal) ──▶ QRM6-010 (Docs) ──▶ QRM6-011 (Unified logs)
 ```
 
 **Parallel tracks:**
@@ -668,6 +714,7 @@ QRM6-006 (Agent Prompts) ──────────▶ QRM6-007 (CLAUDE.md) 
 - QRM6-008 (tests) consolidates test coverage for QRM6-003, QRM6-004, QRM6-005.
 - QRM6-009 (terminal deletion) is the final behavioral change — all alternatives must be working first.
 - QRM6-010 (docs) lands after deletion to avoid documenting a transient state.
+- QRM6-011 (unified logs) lands after deletion + docs — once `apps/terminal/` is gone, the moderator becomes the only "moderator-shaped" log producer and the adapter can replace the missing `terminal-*.jsonl` stream with parser-compatible output.
 
 ## Implementation Notes for Agents
 
@@ -716,7 +763,7 @@ QRM6-006 (Agent Prompts) ──────────▶ QRM6-007 (CLAUDE.md) 
 | MCP session drops mid-elicitation (agent still waiting) | Low | Broker treats as timeout; returns error to calling agent; current behavior for agent timeouts applies |
 | Workspace mount read-write enables role-boundary drift (moderator edits code) | Low | D7: `--deny Write,Edit` by default; role boundary becomes mechanical |
 | CC CLI version skew between development and production images | Low | Version-pin `@anthropic-ai/claude-code` in Dockerfile |
-| Session log format mismatch with `tools/session-report/parse-logs.mjs` | Low | Adjust parser if CC CLI log format diverges from current terminal JSONL; or emit compatible logs via CC CLI hook |
+| Session log format mismatch with `tools/session-report/parse-logs.mjs` (CC CLI session JSONL is a per-turn transcript, not the structured-logger schema; legacy `terminal-*.jsonl` disappears with QRM6-009) | Medium | QRM6-011 introduces a post-processor that emits QuorumLogger-shaped `moderator-{timestamp}.jsonl` from the raw CC CLI session JSONL; `parse-logs.mjs` ingests it as a first-class agent-style input |
 
 ## Phase Forward References
 
