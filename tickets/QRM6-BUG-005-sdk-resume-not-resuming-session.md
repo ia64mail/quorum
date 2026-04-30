@@ -153,6 +153,8 @@ Live diagnostic inside developer container confirmed session `.jsonl` files exis
 -rw------- 1 quorum quorum  5853 Apr 25 18:21 894bbe80-4de4-46da-9fae-d44d5a8fad6d.jsonl
 ```
 
+> **Clarification on root cause attribution:** The investigation doc (`docs/session-resume-investigation.md`) attributes the root cause to container ephemerality — session files not surviving container recreation. This is **wrong for the primary scenario**. The original reproduction (and every subsequent confirmation) involved back-to-back calls to the *same running container* where session files were confirmed present on disk at the time of the second call. Container ephemerality is a secondary concern relevant to cross-restart resume, but it does not explain the primary bug: resume fails even when the session file exists and the container has not been recreated.
+
 **2. Memory test confirms no resume (fresh session each time):**
 
 Developer invoked twice in sequence. Second invocation (with server-injected sessionId from first) reported "NO PRIOR MEMORY" and generated a new session file. Two distinct `.jsonl` files on disk, two distinct sessionIds in response.
@@ -195,10 +197,12 @@ Research across GitHub issues, SDK changelog, and documentation for `@anthropic-
 2. **CWD path encoding mismatch** — Sessions stored at `~/.claude/projects/<encoded-cwd>/`. If any variation in path resolution between invocations (trailing slash, symlink), the encoded path differs and the session file isn't found. Worth verifying but unlikely given consistent `cwd` config.
 3. **`settingSources: ['project']` interaction** — Under-documented. v0.2.73 fixed an env override issue related to settingSources. Possible that session persistence requires user-level settings.
 
+> **Note on the ephemeral filesystem hypothesis:** The investigation doc (`docs/session-resume-investigation.md`) hypothesizes that ephemeral container filesystems are the root cause. This does not explain the primary scenario: the original reproduction and all subsequent confirmations ran back-to-back against the same container with session `.jsonl` files confirmed present on disk. The open question is whether the SDK subprocess actually reads the file that `persistSession` wrote when `resume` is passed, or whether Issue #2778 (SDK silently ignoring `resume`) is the true cause regardless of file presence. The `continue: true` diagnostic experiment (see fix directions above) should help disambiguate — if `continue` also fails with files present, the issue is deeper than parameter handling.
+
 ### Recommended Fix Directions (updated)
 
-**Short-term (try first):**
-- Replace `resume: <sessionId>` with `continue: true` in `ClaudeCodeService`. The `continue` option auto-finds the most recent session by CWD without needing an explicit ID. Since each agent runs one session per workspace, this sidesteps the ID-matching issue entirely.
+**Short-term (diagnostic experiment):**
+- Replace `resume: <sessionId>` with `continue: true` in `ClaudeCodeService` as a controlled test. The `continue` option uses a different SDK code path — it auto-finds the most recent session by CWD rather than matching an explicit ID. Testing this against the same running container (where session files are confirmed present) will produce one of two valuable outcomes: **(a)** resume works via this path, giving us a quick fix and confirming the issue is specific to the `resume` parameter's handling, or **(b)** resume still fails, ruling out the `resume` code path as the sole problem and narrowing the root cause further (likely confirming Issue #2778's scope extends to `continue` as well).
 - If `continue` works, the server-side `agentSessions` cache (QRM6-004) becomes unnecessary for resume but still useful for tracking.
 
 **Medium-term:**
