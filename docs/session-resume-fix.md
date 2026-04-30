@@ -95,6 +95,22 @@ class InMemorySessionStore {
 
 Verified importable: `import { InMemorySessionStore } from '@anthropic-ai/claude-agent-sdk'`.
 
+## Prerequisite: SDK Upgrade
+
+**Upgrade `@anthropic-ai/claude-agent-sdk` to v0.2.124** (latest) before implementing.
+
+The `InMemorySessionStore` class and `sessionStore` option exist in the runtime code (`sdk.mjs`) of v0.2.110, but their **TypeScript types are only exported starting v0.2.113**. In v0.2.110, `sdk.d.ts` has no `InMemorySessionStore` export and the `Options` type has no `sessionStore` property.
+
+The `^0.2.110` constraint in `package.json` allows the upgrade without changing the version pin:
+
+```bash
+npm update @anthropic-ai/claude-agent-sdk
+```
+
+This brings: proper TS types for `InMemorySessionStore`, `SessionStore`, `SessionStoreEntry`, `SessionKey`, and the `sessionStore` property on `Options`. Plus 14 patches of general bug fixes. No resume-related changes in the changelog (the CLI flag issue is closed "not planned" — our sessionStore approach is the correct workaround).
+
+If upgrade is not desired, use type assertion: `sessionStore: this.sessionStore as any` on v0.2.110.
+
 ## Implementation Specification
 
 ### Change 1: Add `sessionStore` singleton to `ClaudeCodeService`

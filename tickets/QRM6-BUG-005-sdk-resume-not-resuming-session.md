@@ -2,7 +2,7 @@
 
 > **Note:** Originally filed as QRM5-BUG-007 (the underlying SDK behavior originated in QRM5-001). Renumbered into QRM6 since the bug was discovered during the QRM6-008 playbook run, blocks Scenario 5, and the user-visible regression manifests through QRM6-004's session-tracking surface.
 
-**Status: Open — root cause CONFIRMED, implementation spec ready**
+**Status: Open — architect-approved, ready for implementation (sessionStore adapter approach)**
 
 ## Summary
 
@@ -302,3 +302,50 @@ The SDK also automatically mirrors session writes to the store via `TranscriptMi
 5. Add distinct log markers: `"Session resumed: <id>"` vs `"Session started: <id>"`
 
 Full specification at: **[docs/session-resume-fix.md](../docs/session-resume-fix.md)**
+
+## Architect Review (2026-04-30 post-test)
+
+### Test Result Review
+
+Reviewed the `continue: true` test results (commit `f8ec8c3`). Result matches prediction (b) from the investigation: resume fails even with session files on disk. Both `--resume` and `--continue` CLI flags are silently ignored by the subprocess. This definitively rules out parameter-specific issues — the entire CLI-flag-based resume mechanism is broken in the SDK.
+
+### SDK Source Verification
+
+Independently verified the `query()` function source in `sdk.mjs` v0.2.110:
+
+```javascript
+// Actual query() entry point (deobfuscated):
+function query({prompt, options}) {
+  if (options?.resume && options?.sessionStore) {
+    // STORE PATH — bypasses CLI flags entirely
+    // 1. sessionStore.load() → temp dir → CLAUDE_CONFIG_DIR
+    // 2. spawn subprocess against temp dir
+  }
+  // ELSE: normal path → pushes --resume/--continue as CLI args (broken)
+}
+```
+
+Confirmed: the `if(options?.resume && options?.sessionStore)` branch is the **only** working resume mechanism. The `continue` option does NOT have a sessionStore branch — `continue: true` always goes to the CLI-flag path.
+
+### InMemorySessionStore Verification
+
+Verified `InMemorySessionStore` is exported at runtime from `sdk.mjs` v0.2.110:
+- **Methods**: `load`, `append`, `list`, `delete`, `listSubkeys`, `getEntries`, `size`, `clear`
+- **Backing**: Simple `Map<string, entry[]>` keyed by `"projectKey/sessionId[/subpath]"`
+- **Auto-population**: `TranscriptMirrorBatcher` intercepts disk writes and calls `store.append()` — no manual plumbing needed
+
+### Typing Issue Discovered
+
+**`InMemorySessionStore` and `sessionStore` option are NOT in the TypeScript type definitions** (`sdk.d.ts`) for v0.2.110. They exist in the runtime code but types were added in v0.2.113.
+
+**Recommendation**: Upgrade SDK to v0.2.124 (latest) before implementing. The `^0.2.110` constraint in `package.json` allows it — just `npm update @anthropic-ai/claude-agent-sdk`. This gives:
+- Proper TypeScript types for `InMemorySessionStore`, `SessionStore`, `SessionStoreEntry`
+- `sessionStore` property on the `Options` type
+- 14 patches of general bug fixes
+- No resume-related changelog entries (confirming CLI flag issue is "not planned")
+
+If the developer prefers not to upgrade, a type assertion (`sessionStore: this.sessionStore as any`) works on v0.2.110.
+
+### Decision: Approved for Implementation
+
+The `sessionStore` adapter approach is **approved**. Implementation details in `docs/session-resume-fix.md` and Context Store key `QRM6-BUG-005-design-notes`.
