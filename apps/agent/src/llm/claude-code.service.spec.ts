@@ -400,8 +400,9 @@ describe('ClaudeCodeService', () => {
     expect(callArgs.options.maxTurns).toBe(60);
   });
 
-  // 8. Resume parameter
-  it('should pass resume option to SDK when provided', async () => {
+  // 8. Resume parameter — QRM6-BUG-005 diagnostic: forwards `continue: true`
+  //    instead of `resume: <id>` to test an alternative SDK code path.
+  it('should pass continue option to SDK when resume is provided', async () => {
     mockQuery.mockReturnValue(
       generateMessages([initMessage(), successResult()]),
     );
@@ -412,10 +413,11 @@ describe('ClaudeCodeService', () => {
     const callArgs = mockQuery.mock.calls[0][0] as {
       options: Record<string, unknown>;
     };
-    expect(callArgs.options.resume).toBe('sess-resume-1');
+    expect(callArgs.options.continue).toBe(true);
+    expect(callArgs.options).not.toHaveProperty('resume');
   });
 
-  it('should not pass resume option to SDK when not provided', async () => {
+  it('should not pass continue option to SDK when resume is not provided', async () => {
     mockQuery.mockReturnValue(
       generateMessages([initMessage(), successResult()]),
     );
@@ -426,12 +428,13 @@ describe('ClaudeCodeService', () => {
     const callArgs = mockQuery.mock.calls[0][0] as {
       options: Record<string, unknown>;
     };
+    expect(callArgs.options).not.toHaveProperty('continue');
     expect(callArgs.options).not.toHaveProperty('resume');
   });
 
-  // 8a. Graceful fallback on resume failure
-  it('should retry without resume when resume fails', async () => {
-    // First call (with resume) throws
+  // 8a. Graceful fallback on resume failure (QRM6-BUG-005: continue path)
+  it('should retry without continue when resume fails', async () => {
+    // First call (with continue: true) throws
     mockQuery
       .mockReturnValueOnce(
         // eslint-disable-next-line require-yield
@@ -455,18 +458,20 @@ describe('ClaudeCodeService', () => {
     expect(result.success).toBe(true);
     expect(mockQuery).toHaveBeenCalledTimes(2);
 
-    // First call had resume
+    // First call had continue: true (not resume)
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const firstCallArgs = mockQuery.mock.calls[0][0] as {
       options: Record<string, unknown>;
     };
-    expect(firstCallArgs.options.resume).toBe('sess-stale');
+    expect(firstCallArgs.options.continue).toBe(true);
+    expect(firstCallArgs.options).not.toHaveProperty('resume');
 
-    // Second call did not have resume
+    // Second call had neither continue nor resume
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const secondCallArgs = mockQuery.mock.calls[1][0] as {
       options: Record<string, unknown>;
     };
+    expect(secondCallArgs.options).not.toHaveProperty('continue');
     expect(secondCallArgs.options).not.toHaveProperty('resume');
   });
 

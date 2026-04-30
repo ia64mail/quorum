@@ -101,7 +101,10 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           ? { disallowedTools: params.disallowedTools }
           : {}),
         ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
-        ...(params.resume ? { resume: params.resume } : {}),
+        // QRM6-BUG-005 diagnostic: test `continue: true` instead of `resume: <id>`
+        // `continue` auto-finds the most recent session by CWD rather than
+        // matching an explicit session ID, using a different SDK code path.
+        ...(params.resume ? { continue: true } : {}),
       },
     });
 
