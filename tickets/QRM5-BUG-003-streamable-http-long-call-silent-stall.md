@@ -1,6 +1,6 @@
 # QRM5-BUG-003: Silent Stall of Long-Running Tool Responses over Streamable HTTP
 
-**Status:** Re-opened 2026-04-29. Pass-2 client-dispatcher fix resolved the stall for the legacy terminal moderator and agent-to-agent calls but does NOT cover the new QRM6 Claude Code CLI moderator (third-party MCP client we cannot patch from our side). Same 5-minute body-timeout fingerprint reproduced 2026-04-28 EDT (2026-04-29 UTC) during the QRM6-BUG-009 implementation session — see "Implementation Notes — Re-opened (2026-04-29)" below. Server-side hardening (Phase 2 fixes #2 + #3) is now the primary remaining work.
+**Status:** Closed 2026-04-30. Client-side fix (Pass 2 undici dispatcher) resolved the stall for all Quorum-controlled clients (legacy terminal moderator, agent-to-agent calls). Server-side hardening for third-party MCP clients (CC CLI moderator) tracked in [QRM6-BUG-011](QRM6-BUG-011-server-side-sse-heartbeat-tcp-keepalive.md).
 
 ## Summary
 
@@ -292,14 +292,14 @@ The detailed plan, file list, and validation procedure live in **Implementation 
 ## Acceptance Criteria
 
 ### Ancillary (tool-loop budget)
-- [ ] `MAX_TOOL_ROUNDS` = 15 in `apps/terminal/src/chat/chat.service.ts`
+- [x] `MAX_TOOL_ROUNDS` = 15 in `apps/terminal/src/chat/chat.service.ts`
 
 ### Phase 1 (instrumentation)
-- [ ] `McpController` logs POST response `close` and `finish` events with session ID
-- [ ] `McpService.registerInvokeAgentTool` logs immediately before returning the tool result (with correlationId)
-- [ ] Terminal `McpClientService` fetch wrapper logs first-byte and stream-close events per request
-- [ ] A reproduced stall captures these logs and narrows the failure layer to: (a) SDK server write never happens, (b) server write happens but response never closes, or (c) server closes cleanly but client never sees bytes
-- [ ] Diagnostic findings are documented in this ticket's Implementation Notes before Phase 2 begins
+- [x] `McpController` logs POST response `close` and `finish` events with session ID
+- [x] `McpService.registerInvokeAgentTool` logs immediately before returning the tool result (with correlationId)
+- [x] Terminal `McpClientService` fetch wrapper logs first-byte and stream-close events per request
+- [x] A reproduced stall captures these logs and narrows the failure layer to: (a) SDK server write never happens, (b) server write happens but response never closes, or (c) server closes cleanly but client never sees bytes
+- [x] Diagnostic findings are documented in this ticket's Implementation Notes before Phase 2 begins
 
 ### Phase 2 (hardening) — original
 
@@ -307,21 +307,22 @@ The detailed plan, file list, and validation procedure live in **Implementation 
 - [x] Custom `UndiciAgent` dispatcher with `headersTimeout`/`bodyTimeout` = 35 min applied to the terminal fetch wrapper (`apps/terminal/src/connection/mcp-client.service.ts`) — primary fix for legacy terminal moderator
 - [x] Same dispatcher applied to the agent fetch wrapper (`apps/agent/src/connection/mcp-client.service.ts`) for nested-invoke symmetry
 
-### Phase 2 (hardening) — re-opened 2026-04-29 for the QRM6 CC CLI moderator
+### Phase 2 (hardening) — re-opened 2026-04-29 for the QRM6 CC CLI moderator → Moved to [QRM6-BUG-011](QRM6-BUG-011-server-side-sse-heartbeat-tcp-keepalive.md)
 
-- [ ] **Fix #2 (SSE heartbeat)** — `McpController.handlePost` starts the existing `startSseKeepalive(res)` helper once `res.headersSent` is true and `content-type` includes `text/event-stream`; clears on `close`/`finish`. Reuse the QRM5-BUG-005 helper unchanged so behavior matches the GET path.
-- [ ] **Fix #2 logging** — extend the existing `POST close` debug line in `McpController.handlePost` to include `keepaliveFired=<bool>` so future stalls can be triaged from the log alone.
-- [ ] **Fix #3 (server-side TCP keepalive)** — `apps/mcp-server/src/main.ts` attaches `connection` listener after `app.listen` that calls `socket.setKeepAlive(true, 30_000)` on every incoming socket.
-- [ ] **Fix #3 (client-side TCP keepalive)** — extend the existing `UndiciAgent` instances in `apps/terminal/src/connection/mcp-client.service.ts` and `apps/agent/src/connection/mcp-client.service.ts` with `connect: { keepAlive: true, keepAliveInitialDelay: 30_000 }`.
-- [ ] **Reproducible CC CLI long-call repro** — moderator container, one `invoke_agent` to a slow target (≥6 min synthetic delay or a real architect/teamlead task) on the same MCP session. Pre-fix logs show the 300 s `writableFinished=false` close pattern; post-fix logs show normal completion with periodic `: ping\n\n` writes interleaved.
-- [ ] **No "Session identity was lost" recovery narration** in the moderator's CC CLI session log for the validation run.
-- [ ] **Same-session two-in-a-row** — two consecutive long calls on a single MCP session, both deliver cleanly (regression guard for the original session-degradation hypothesis).
-- [ ] **Dead-flow detection** — kill the moderator container mid-call; mcp-server observes `POST close` within ~30–60 s rather than indefinitely. (Validates fix #3.)
-- [ ] **No latency regression** — short-duration ops (`register_agent`, `context_query`, `context_store`, `new_conversation`) still complete in <100 ms.
-- [ ] **Build + lint + tests pass** (`npm run build && npm run lint && npm run test`).
+- [ ] **Fix #2 (SSE heartbeat)** — Moved to QRM6-BUG-011
+- [ ] **Fix #2 logging** — Moved to QRM6-BUG-011
+- [ ] **Fix #3 (server-side TCP keepalive)** — Moved to QRM6-BUG-011
+- [ ] **Fix #3 (client-side TCP keepalive)** — Moved to QRM6-BUG-011
+- [ ] **Reproducible CC CLI long-call repro** — Moved to QRM6-BUG-011
+- [ ] **No "Session identity was lost" recovery narration** — Moved to QRM6-BUG-011
+- [ ] **Same-session two-in-a-row** — Moved to QRM6-BUG-011
+- [ ] **Dead-flow detection** — Moved to QRM6-BUG-011
+- [ ] **No latency regression** — Moved to QRM6-BUG-011
+- [ ] **Build + lint + tests pass** — Moved to QRM6-BUG-011
 
 ## Dependencies and References
 
+- **Follow-up: [QRM6-BUG-011](QRM6-BUG-011-server-side-sse-heartbeat-tcp-keepalive.md)** — Server-side SSE heartbeat and TCP keepalive for third-party MCP clients. Carries the re-opened Phase 2 (#2 + #3) work that was split out of this ticket on close.
 - Discovered: 2026-04-17 QRM5-004/QRM5-005 session. Stalled invocations:
   - `c0792d0b-0d61-4a20-98a3-3b300ad0578f` (developer, duration 401029ms)
   - `368d62f7-5225-4f4f-bf36-58ad80a76e4a` (teamlead, duration 309073ms)
