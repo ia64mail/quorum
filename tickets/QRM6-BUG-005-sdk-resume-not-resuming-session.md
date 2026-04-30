@@ -2,7 +2,7 @@
 
 > **Note:** Originally filed as QRM5-BUG-007 (the underlying SDK behavior originated in QRM5-001). Renumbered into QRM6 since the bug was discovered during the QRM6-008 playbook run, blocks Scenario 5, and the user-visible regression manifests through QRM6-004's session-tracking surface.
 
-**Status: Open — root cause narrowed, fix direction identified**
+**Status: Open — root cause CONFIRMED, implementation spec ready**
 
 ## Summary
 
@@ -244,3 +244,61 @@ Moderator container entrypoint (`docker/moderator/entrypoint.sh:8-9`) force-over
 - `tickets/QRM5-001-agent-session-resume.md` — original session-resume design; whatever we change here, align with (or update) that ticket's architecture
 - **Discovered during:** QRM6-008 playbook run 2026-04-24 — Scenario 5 exposed the bug while validating QRM6-004's auto-injection
 - **Re-confirmed:** QRM6-008 playbook run 2026-04-25 (correlationId `a1b65a1c-50fd-40cb-9dba-be5ec273f8a3`) — Scenario 5 reproduced in production with no instrumentation. Two consecutive `invoke_agent(target=developer)` calls in the same MCP turn returned distinct session IDs (first `49bc7b52-df3b-4447-8ef9-bf0a4126a3f5`, second `20941083-eea0-49fe-a6a3-d84a7cd44d96`). Server-side cache update fired on R1 (per `mcp.service.ts:235`); auto-injection fired on R2 (per `:204`); developer SDK still emitted a fresh session — confirming the regression is downstream of the broker.
+
+## Root Cause Confirmation (2026-04-30)
+
+### Confirmed: CLI flags `--resume` and `--continue` are silently ignored by the subprocess
+
+Deep analysis of the minified SDK source (`sdk.mjs`) confirmed the mechanism:
+
+```
+if(I) p.push("--continue");    // option → CLI flag
+if(x) p.push("--resume", x);   // option → CLI flag
+```
+
+Both `resume` and `continue` are converted to CLI flags passed to the Claude Code subprocess. The subprocess silently ignores them (Issue #2778, closed "not planned"). The `continue: true` diagnostic experiment (commit `f8ec8c3`) confirmed `--continue` is also ignored — two sessions, no memory, same behavior.
+
+### Confirmed fix: `sessionStore` adapter (completely different code path)
+
+When **both** `resume` and `sessionStore` are provided, the SDK takes a separate code path that **does not use CLI flags at all**:
+
+```javascript
+// Deobfuscated from sdk.mjs query() function:
+if (options?.resume && options?.sessionStore) {
+  // 1. Load session from store BEFORE spawning subprocess
+  const entries = await sessionStore.load({ projectKey, sessionId });
+  // 2. Write to temp directory
+  const tmpDir = createTempDir("claude-resume-<random>");
+  writeSessionFile(tmpDir, projectKey, sessionId, entries);
+  // 3. Copy credentials
+  copyCredentials(tmpDir);
+  // 4. Point subprocess at temp dir via CLAUDE_CONFIG_DIR
+  transport.updateEnv({ CLAUDE_CONFIG_DIR: tmpDir });
+  // 5. Spawn — subprocess finds session data at expected relative path
+  transport.spawn();
+}
+```
+
+The SDK also automatically mirrors session writes to the store via `TranscriptMirrorBatcher` — when `sessionStore` is set, every disk write is intercepted and `store.append()` is called. This means a first invocation populates the store, and a second invocation with `resume` loads from it.
+
+### Alternatives ruled out
+
+| Approach | Status | Why |
+|----------|--------|-----|
+| `resume: <id>` alone | ❌ Broken | CLI `--resume` flag silently ignored (Issue #2778) |
+| `continue: true` alone | ❌ Broken | CLI `--continue` flag silently ignored (confirmed 2026-04-30) |
+| `unstable_v2_resumeSession` | ❌ Same bug | Internally passes `resume` to same transport constructor, no sessionStore support |
+| SDK upgrade to v0.2.123 | ❌ Insufficient | 13 patches, no resume-related fixes in changelog |
+| `resume + sessionStore` | ✅ Fix | Completely bypasses CLI flags; loads session externally via CLAUDE_CONFIG_DIR |
+
+### Implementation spec
+
+**~6 lines changed in `apps/agent/src/llm/claude-code.service.ts`:**
+
+1. Import `InMemorySessionStore` from `@anthropic-ai/claude-agent-sdk`
+2. Add singleton field: `private readonly sessionStore = new InMemorySessionStore()`
+3. Pass `sessionStore: this.sessionStore` in `query()` options
+4. Revert line 107 from `{ continue: true }` back to `{ resume: params.resume }`
+5. Add distinct log markers: `"Session resumed: <id>"` vs `"Session started: <id>"`
+
+Full specification at: **[docs/session-resume-fix.md](../docs/session-resume-fix.md)**
