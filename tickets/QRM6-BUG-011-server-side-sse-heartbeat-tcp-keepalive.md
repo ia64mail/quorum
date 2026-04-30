@@ -163,7 +163,6 @@ CC CLI is unreachable client-side, but this cleans up agent-side and legacy-term
 - **[QRM6-BUG-007](QRM6-BUG-007-mcp-session-cleanup-not-firing.md)** — Server-side cleanup of dead moderator MCP sessions. Complementary: cleanup runs *after* a session has died; this ticket prevents the session from dying due to idle-timeout stalls.
 - **[QRM6-BUG-010](QRM6-BUG-010-broker-timeout-causes-retry-storm-duplicate-sdk-sessions.md)** — Agent-side dedup for retry storms. Orthogonal cause but interacts: the 2026-04-29 stall produced a same-correlationId retry that the dedup did not catch because v1 had already returned before v2 fired.
 - **[ICEBOX #1](ICEBOX.md#1-duplicate-invocation-prevention-message-broker)** — Duplicate-invocation risk amplified by each stall/retry cycle.
-- **Architect review:** `docs/reviews/QRM5-BUG-003-split-review.md` — validates the technical plan and recommends the `writableEnded` early-exit, try/catch hardening, and short-call validation improvements incorporated above.
 - `apps/mcp-server/src/mcp/mcp.controller.ts` — Primary modification target (Fix #2 heartbeat + logging). Existing `startSseKeepalive(res)` at lines 154–166.
 - `apps/mcp-server/src/main.ts` — Modification target for Fix #3 server-side `setKeepAlive`. Existing `requestTimeout`/`headersTimeout` block provides the insertion point.
 - `apps/terminal/src/connection/mcp-client.service.ts` — Fix #3 client-side keepalive addition to existing `UndiciAgent`.
