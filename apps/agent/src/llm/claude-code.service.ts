@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import {
   query,
+  InMemorySessionStore,
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -13,6 +14,7 @@ import { createObservabilityHooks } from './sdk-hooks.factory';
 export class ClaudeCodeService implements OnApplicationShutdown {
   private readonly logger = new Logger(ClaudeCodeService.name);
   private readonly activeControllers = new Set<AbortController>();
+  private readonly sessionStore = new InMemorySessionStore();
 
   constructor(private readonly config: AgentConfigService) {}
 
@@ -101,16 +103,19 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           ? { disallowedTools: params.disallowedTools }
           : {}),
         ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
-        // QRM6-BUG-005 diagnostic: test `continue: true` instead of `resume: <id>`
-        // `continue` auto-finds the most recent session by CWD rather than
-        // matching an explicit session ID, using a different SDK code path.
-        ...(params.resume ? { continue: true } : {}),
+        // QRM6-BUG-005: sessionStore enables the SDK's store-based resume path.
+        // Without it, `resume` only passes --resume to the CLI which silently
+        // starts fresh when the session file is missing (e.g. ephemeral containers).
+        // The InMemorySessionStore is auto-populated by TranscriptMirrorBatcher
+        // on first invocation and loaded back via store.load() on resume.
+        sessionStore: this.sessionStore,
+        ...(params.resume ? { resume: params.resume } : {}),
       },
     });
 
     for await (const message of gen) {
       messageCount++;
-      const mapped = this.processMessage(message, sessionId);
+      const mapped = this.processMessage(message, sessionId, !!params.resume);
       if (mapped) return mapped;
       if (message.type === 'system' && message.subtype === 'init') {
         sessionId = message.session_id;
@@ -143,11 +148,16 @@ export class ClaudeCodeService implements OnApplicationShutdown {
   private processMessage(
     message: SDKMessage,
     sessionId: string | undefined,
+    isResume: boolean,
   ): ExecuteResult | null {
     switch (message.type) {
       case 'system':
         if (message.subtype === 'init') {
-          this.logger.debug(`Session started: ${message.session_id}`);
+          if (isResume) {
+            this.logger.debug(`Session resumed: ${message.session_id}`);
+          } else {
+            this.logger.debug(`Session started: ${message.session_id}`);
+          }
         }
         return null;
 
