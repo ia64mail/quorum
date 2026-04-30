@@ -30,9 +30,12 @@ export class McpClientService implements OnApplicationShutdown {
   // than that; without this dispatcher the caller's response stream is killed
   // at 5 min regardless of MCP_REQUEST_TIMEOUT_MS. Mirrors the outgoing-side
   // dispatcher in apps/mcp-server/src/registry/http-agent-connection.ts.
+  // QRM6-BUG-011 Fix #3: TCP keepalive for dead-flow detection alongside
+  // the existing undici timeout overrides.
   private readonly dispatcher = new UndiciAgent({
     headersTimeout: 35 * 60_000,
     bodyTimeout: 35 * 60_000,
+    connect: { keepAlive: true, keepAliveInitialDelay: 30_000 },
   });
 
   constructor(private readonly config: AgentConfigService) {}

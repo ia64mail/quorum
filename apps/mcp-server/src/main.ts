@@ -25,6 +25,14 @@ async function bootstrap() {
   httpServer.requestTimeout = serverTimeoutMs;
   httpServer.headersTimeout = serverTimeoutMs;
 
+  // QRM6-BUG-011 Fix #3: enable TCP keepalive on every incoming connection.
+  // When a flow goes truly dead (route flap, container restart, conntrack
+  // eviction), the kernel detects the dead socket within ~30s instead of
+  // leaving a zombie ESTABLISHED connection.
+  httpServer.on('connection', (socket) => {
+    socket.setKeepAlive(true, 30_000);
+  });
+
   await app.listen(config.app.port);
 }
 void bootstrap();

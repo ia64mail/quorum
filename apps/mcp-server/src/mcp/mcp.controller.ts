@@ -45,6 +45,8 @@ export class McpController {
     // pick up the SDK-assigned id after `handleRequest`.
     let capturedSessionId = sessionId;
     const postStart = Date.now();
+    // QRM6-BUG-011: track whether SSE keepalive was engaged for this POST.
+    let keepaliveFired = false;
     res.on('finish', () => {
       this.logger.debug(
         `POST finish: sessionId=${capturedSessionId ?? 'new'} ` +
@@ -55,9 +57,30 @@ export class McpController {
       this.logger.debug(
         `POST close: sessionId=${capturedSessionId ?? 'new'} ` +
           `status=${res.statusCode} writableFinished=${res.writableFinished} ` +
+          `keepaliveFired=${keepaliveFired} ` +
           `durationMs=${Date.now() - postStart}`,
       );
     });
+
+    // QRM6-BUG-011 Fix #2: start SSE comment-frame heartbeat once the
+    // response is committed as text/event-stream. CC CLI and any other MCP
+    // client whose undici stack defaults bodyTimeout to ~300s relies on the
+    // stream producing bytes during long-running tool calls.
+    const maybeStartKeepalive = () => {
+      if (res.writableEnded) {
+        clearInterval(headerWatch);
+        return;
+      }
+      if (keepaliveFired || !res.headersSent) return;
+      const ct = res.getHeader('content-type');
+      if (typeof ct === 'string' && ct.includes('text/event-stream')) {
+        this.startSseKeepalive(res);
+        keepaliveFired = true;
+      }
+    };
+    const headerWatch = setInterval(maybeStartKeepalive, 250);
+    res.on('finish', () => clearInterval(headerWatch));
+    res.on('close', () => clearInterval(headerWatch));
 
     if (sessionId && this.sessions.has(sessionId)) {
       const transport = this.sessions.get(sessionId)!;
@@ -157,7 +180,13 @@ export class McpController {
         clearInterval(interval);
         return;
       }
-      res.write(': ping\n\n');
+      // QRM6-BUG-011: try/catch guards against destroyed sockets where
+      // writableEnded is false but the underlying socket is already gone.
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(interval);
+      }
     }, SSE_KEEPALIVE_INTERVAL_MS);
 
     res.on('close', () => {

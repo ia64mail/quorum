@@ -143,18 +143,18 @@ CC CLI is unreachable client-side, but this cleans up agent-side and legacy-term
 
 ## Acceptance Criteria
 
-- [ ] **Fix #2 (SSE heartbeat)** — `McpController.handlePost` starts the existing `startSseKeepalive(res)` helper once `res.headersSent` is true and `content-type` includes `text/event-stream`; clears on `close`/`finish`. Reuse the QRM5-BUG-005 helper with added try/catch around `res.write` for destroyed sockets.
-- [ ] **Fix #2 polling guard** — `maybeStartKeepalive` callback includes `if (res.writableEnded)` early-exit so short JSON responses don't waste interval ticks.
-- [ ] **Fix #2 logging** — extend the existing `POST close` debug line in `McpController.handlePost` to include `keepaliveFired=<bool>`.
+- [x] **Fix #2 (SSE heartbeat)** — `McpController.handlePost` starts the existing `startSseKeepalive(res)` helper once `res.headersSent` is true and `content-type` includes `text/event-stream`; clears on `close`/`finish`. Reuse the QRM5-BUG-005 helper with added try/catch around `res.write` for destroyed sockets.
+- [x] **Fix #2 polling guard** — `maybeStartKeepalive` callback includes `if (res.writableEnded)` early-exit so short JSON responses don't waste interval ticks.
+- [x] **Fix #2 logging** — extend the existing `POST close` debug line in `McpController.handlePost` to include `keepaliveFired=<bool>`.
 - [ ] **Fix #2 safety** — short-duration JSON POSTs (`context_query`, `register_agent`) do not receive spurious `: ping` comment frames (validated from logs).
-- [ ] **Fix #3 (server-side TCP keepalive)** — `apps/mcp-server/src/main.ts` attaches `connection` listener that calls `socket.setKeepAlive(true, 30_000)` on every incoming socket.
-- [ ] **Fix #3 (client-side TCP keepalive)** — extend the existing `UndiciAgent` instances in `apps/terminal/src/connection/mcp-client.service.ts` and `apps/agent/src/connection/mcp-client.service.ts` with `connect: { keepAlive: true, keepAliveInitialDelay: 30_000 }`.
+- [x] **Fix #3 (server-side TCP keepalive)** — `apps/mcp-server/src/main.ts` attaches `connection` listener that calls `socket.setKeepAlive(true, 30_000)` on every incoming socket.
+- [x] **Fix #3 (client-side TCP keepalive)** — extend the existing `UndiciAgent` instances in `apps/terminal/src/connection/mcp-client.service.ts` and `apps/agent/src/connection/mcp-client.service.ts` with `connect: { keepAlive: true, keepAliveInitialDelay: 30_000 }`.
 - [ ] **Reproducible CC CLI long-call repro** — moderator container, one `invoke_agent` to a slow target (≥6 min) on the same MCP session. Pre-fix logs show the 300 s `writableFinished=false` close pattern; post-fix logs show normal completion with periodic `: ping\n\n` writes interleaved.
 - [ ] **No "Session identity was lost" recovery narration** in the moderator's CC CLI session log for the validation run.
 - [ ] **Same-session two-in-a-row** — two consecutive long calls on a single MCP session, both deliver cleanly (regression guard for original session-degradation hypothesis).
 - [ ] **Dead-flow detection** — kill the moderator container mid-call; mcp-server observes `POST close` within ~30–60 s rather than indefinitely. (Validates fix #3.)
 - [ ] **No latency regression** — short-duration ops (`register_agent`, `context_query`, `context_store`, `new_conversation`) still complete in <100 ms.
-- [ ] **Build + lint + tests pass** (`npm run build && npm run lint && npm run test`).
+- [x] **Build + lint + tests pass** (`npm run build && npm run lint && npm run test`).
 
 ## Dependencies and References
 
@@ -169,3 +169,30 @@ CC CLI is unreachable client-side, but this cleans up agent-side and legacy-term
 - `apps/terminal/src/connection/mcp-client.service.ts` — Fix #3 client-side keepalive addition to existing `UndiciAgent`.
 - `apps/agent/src/connection/mcp-client.service.ts` — Fix #3 client-side keepalive addition to existing `UndiciAgent`.
 - Source logs: `logs/mcp-server-20260429T015120.jsonl` (2026-04-29 reproduction).
+
+## Implementation Notes
+
+**Status:** Implemented 2026-04-30. Code changes complete; runtime validation criteria (CC CLI long-call repro, dead-flow detection, latency regression, same-session two-in-a-row) require Docker stack testing by QA.
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/mcp/mcp.controller.ts` | **Fix #2**: Added `maybeStartKeepalive` polling (250ms interval) in `handlePost` after Phase 1 instrumentation block. Checks `res.writableEnded` (early-exit for JSON responses), `res.headersSent`, and `content-type: text/event-stream` before calling `startSseKeepalive(res)`. Clears on `finish`/`close`. Extended POST close debug log with `keepaliveFired=<bool>`. Added try/catch around `res.write` in `startSseKeepalive` for destroyed-socket safety. |
+| `apps/mcp-server/src/main.ts` | **Fix #3 server**: Added `httpServer.on('connection', socket => socket.setKeepAlive(true, 30_000))` after the existing `requestTimeout`/`headersTimeout` block, before `app.listen()`. |
+| `apps/terminal/src/connection/mcp-client.service.ts` | **Fix #3 client**: Extended existing `UndiciAgent` with `connect: { keepAlive: true, keepAliveInitialDelay: 30_000 }`. |
+| `apps/agent/src/connection/mcp-client.service.ts` | **Fix #3 client**: Same `connect.keepAlive` addition as terminal. |
+
+### Design Decisions
+
+- **Polling interval placement**: The `maybeStartKeepalive` interval is registered before session routing (existing vs new session branches), so it covers both code paths. The interval fires during the `await transport.handleRequest()` call regardless of session state.
+- **`keepaliveFired` variable**: Defined at the top of `handlePost` (before instrumentation block) so it's accessible in the `close` event handler via closure. Named `keepaliveFired` (not `keepaliveStarted`) to match the ticket's log field specification.
+- **TCP keepalive listener placement**: Placed before `app.listen()` (after the timeout configuration block) to ensure no incoming connections are missed.
+- **All three architect improvements incorporated**: (1) `writableEnded` early-exit in `maybeStartKeepalive`, (2) try/catch in `startSseKeepalive` around `res.write`, (3) content-type guard ensures JSON POSTs never receive comment frames.
+
+### Verification
+
+- `npm run build` — 4/4 compilations successful
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 50 suites, 771 tests passed
+- Existing `mcp.controller.spec.ts` tests pass (no regression in POST/GET/DELETE handler behaviour)
