@@ -1,6 +1,6 @@
 # QRM6-BUG-012: Agent Image Ships Musl Claude Code Binary into Glibc Runtime
 
-**Status: Implemented — fix applied 2026-04-30, validated end-to-end**
+**Status: Implemented — initial libc-alignment fix proved necessary but insufficient (2026-04-30 follow-up); supplementary fix removes musl variants and pins SDK binary path, validated against teamlead 2026-05-01**
 
 ## Summary
 
@@ -153,3 +153,74 @@ None.
 - End-to-end: `invoke_agent` from MCP server to developer with a trivial action returns `{success: true, result: "OK", sessionId: "1dcd9e0a-…", durationMs: 1942}`. No "binary not found" warning in developer logs.
 - Combined with QRM6-BUG-005's controller schema fix: two-back-to-back invocations now correctly resume the session (R2 returns "4242" referencing R1's content; same sessionId; R2 cost 88× lower than R1 confirming prefix-cache hit).
 - `npm run build`, `npm run lint`, `npm run test` — all pass on the host. No regression in the `default` runtime: `mcp-server` and `terminal` containers start cleanly, `/health` returns 200, `/registry` lists all 4 connected agents.
+
+## Follow-up (2026-05-01) — initial fix was incomplete
+
+After the libc alignment landed in commit `ebed2a9`, a subsequent cross-session validation against the **teamlead** container reproduced the original "Claude Code native binary not found at …-musl/claude" error. The original fix had only been validated against `developer`, where a cached layer happened to mask the underlying problem.
+
+### Two additional root causes layered on top of the libc mismatch
+
+**1. `npm ci` on glibc still installs the musl variant.** Reproduced in a clean `node:24-bookworm-slim` container with the project's `package.json` and `package-lock.json`:
+
+```
+$ npm ci
+$ ls node_modules/@anthropic-ai/
+claude-agent-sdk
+claude-agent-sdk-linux-x64
+claude-agent-sdk-linux-x64-musl    ← installed despite "libc": ["musl"] constraint
+sdk
+```
+
+Both `@anthropic-ai/claude-agent-sdk-linux-x64-musl` (`"libc": ["musl"]`) and `@anthropic-ai/claude-agent-sdk-linux-x64` (`"libc": ["glibc"]`) end up in `node_modules`. npm v11's `optionalDependencies` filter does not honour `libc` reliably here — likely because the filter operates on `os`/`cpu` first and falls through when the package was already mentioned in the lockfile as a peer of a glibc-compatible variant. The masking layer in the original validation: cached Docker build layers from before commit `08ec7fc` (which raised the SDK floor to `^0.2.123`) — those layers had only the glibc variant because the older lockfile's resolution was different. Once the cache invalidated and `npm ci` re-resolved the v0.2.123 lockfile, both variants landed in subsequent images.
+
+**2. SDK binary picker `N7` in `sdk.mjs` tries `-musl` first with no libc detection.** Deobfuscated:
+
+```js
+function N7($, X = process.platform, J = process.arch) {
+  let Q = X === "win32" ? ".exe" : "",
+      z = (X === "linux"
+            ? [`@anthropic-ai/claude-agent-sdk-linux-${J}-musl`,   // tried FIRST
+               `@anthropic-ai/claude-agent-sdk-linux-${J}`]         // fallback
+            : [`@anthropic-ai/claude-agent-sdk-${X}-${J}`]
+          ).map((G) => `${G}/claude${Q}`);
+  for (let G of z) try { return $(G) } catch {}
+  return null;
+}
+```
+
+`require.resolve` (passed in as `$`) succeeds on the musl path because the package directory exists in `node_modules`; the picker hands that path back without ever checking whether the binary itself can run. At spawn time, `exec(2)` returns `ENOENT` for the missing musl interpreter `/lib/ld-musl-x86_64.so.1` — which the SDK surfaces as "binary not found". This is upstream behaviour we cannot rely on.
+
+### Supplementary fix — defense in depth
+
+**A. Strip the wrong-libc package in the agent stage** (`Dockerfile`, post-COPY):
+
+```dockerfile
+RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
+```
+
+Forces `N7` to fall through to the glibc package. Idempotent. Wildcard covers both x64 and arm64 musl variants if ever installed.
+
+**B. Pin `pathToClaudeCodeExecutable`** (`apps/agent/src/llm/claude-code.service.ts`):
+
+```ts
+const CLAUDE_BINARY_PATH =
+  `/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-${process.arch}/claude`;
+// In query() options:
+pathToClaudeCodeExecutable: CLAUDE_BINARY_PATH,
+```
+
+Bypasses `N7` entirely. Self-documenting in code. Resilient if a future image build accidentally drags in a musl variant or if the SDK changes its lookup logic again.
+
+A and B together guarantee the right binary is used: A keeps `node_modules` clean, B explicitly points the SDK at the right path even if A is bypassed.
+
+### Validation against teamlead (2026-05-01)
+
+After applying A + B, rebuilding agent images, and restarting:
+
+- Developer container: glibc-only `node_modules`, two-back-to-back resume test passes (R2 returns `4242`, same sessionId, prefix-cache hit).
+- **Teamlead container** (the cross-session repro target): `invoke_agent` succeeds, `Session started: <uuid>` log fires, no "binary not found" warning. Validates that the fix isn't developer-specific.
+- `npm run build && npm run lint && npm run test` all pass.
+
+### Lesson
+
+Validating a packaging fix against a single container is insufficient — image layers can be cached differently across services even within the same compose project. Future similar fixes should explicitly verify against every agent role (or at minimum two distinct ones) before declaring closure.

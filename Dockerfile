@@ -57,6 +57,15 @@ COPY --from=builder --chown=quorum:quorum /app/dist/apps/${APP_NAME} ./dist
 COPY --from=builder --chown=quorum:quorum /app/node_modules ./node_modules
 COPY --from=builder --chown=quorum:quorum /app/package*.json ./
 
+# QRM6-BUG-012 follow-up: npm's libc filter doesn't reliably skip the musl
+# variants of @anthropic-ai/claude-agent-sdk-linux-*-musl on glibc systems —
+# both variants land in node_modules. The SDK's binary picker (function `N7`
+# in sdk.mjs) tries `-musl` FIRST with no libc detection, so on this Debian
+# runtime it picks the musl binary and exec fails (missing musl loader).
+# Removing the wrong-libc variants forces the picker through to the glibc
+# package that this image can actually execute.
+RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
+
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
     /mnt/quorum/workspace/.claude/plugins \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \

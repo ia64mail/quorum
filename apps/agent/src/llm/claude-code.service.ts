@@ -10,6 +10,13 @@ import { AgentConfigService } from '../config';
 import type { ExecuteParams, ExecuteResult } from './claude-code.types';
 import { createObservabilityHooks } from './sdk-hooks.factory';
 
+// QRM6-BUG-012 follow-up: bypass the SDK's broken binary picker (sdk.mjs `N7`
+// tries `-musl` before glibc with no libc detection — fails on Debian when
+// both variants are installed). Pin the binary path to the glibc variant
+// for the current arch. Defense-in-depth alongside the `rm -rf …-musl` step
+// in the Dockerfile.
+const CLAUDE_BINARY_PATH = `/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-${process.arch}/claude`;
+
 @Injectable()
 export class ClaudeCodeService implements OnApplicationShutdown {
   private readonly logger = new Logger(ClaudeCodeService.name);
@@ -80,6 +87,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
       options: {
         cwd: this.config.agent.workspaceDir,
         model: this.config.anthropic.model,
+        pathToClaudeCodeExecutable: CLAUDE_BINARY_PATH,
         systemPrompt: params.systemPrompt,
         permissionMode: 'default',
         persistSession: true,
