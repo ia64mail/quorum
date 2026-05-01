@@ -96,7 +96,7 @@ RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude \
     /mnt/quorum/workspace/.claude /etc/claude \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
     /mnt/quorum/workspace/.claude /etc/claude \
- && ln -s /tmp/.claude.json /home/quorum/.claude.json
+ && ln -s /home/quorum/.claude/_claude.json /home/quorum/.claude.json
 
 # Bake settings template and moderator prompt into a read-only path; entrypoint copies them to tmpfs at runtime.
 # claude.json holds the mcpServers block — CC CLI reads it from ~/.claude.json (user scope), not settings.json.

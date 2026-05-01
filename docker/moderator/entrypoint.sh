@@ -23,16 +23,26 @@ fi
 cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 
 # CC CLI reads `mcpServers` from ~/.claude.json (user scope), not from
-# ~/.claude/settings.json. /home/quorum/.claude.json is a symlink to
-# /tmp/.claude.json (writable tmpfs under read-only rootfs). Write to the
-# symlink target directly — GNU cp refuses to write through a dangling
-# symlink, and /tmp tmpfs is fresh on every container start.
-cp /etc/claude/claude.json /tmp/.claude.json
-
-# Substitute MCP server URL at runtime (allows override via env var).
-# Default: http://mcp-server:3000/mcp (Docker Compose service name).
+# ~/.claude/settings.json. It also stores onboarding state, oauth tokens,
+# and per-project tool permissions there. /home/quorum/.claude.json is a
+# symlink to /home/quorum/.claude/_claude.json on the named volume so this
+# state survives restarts. Apply the same merge pattern as settings.json:
+# baked keys (mcpServers) win on every start; CC CLI state (onboarding,
+# projects, oauth) survives. Write to the symlink target directly — GNU cp
+# refuses to write through a dangling symlink (first boot: target absent).
 MCP_SERVER_URL="${MCP_SERVER_URL:-http://mcp-server:3000/mcp}"
-sed -i "s|__MCP_SERVER_URL__|${MCP_SERVER_URL}|g" /tmp/.claude.json
+sed "s|__MCP_SERVER_URL__|${MCP_SERVER_URL}|g" /etc/claude/claude.json \
+  > /tmp/baked-claude.json
+
+if [ -f /home/quorum/.claude/_claude.json ]; then
+  jq -s '.[0] * .[1]' \
+    /home/quorum/.claude/_claude.json \
+    /tmp/baked-claude.json \
+    > /tmp/merged-claude.json
+  mv /tmp/merged-claude.json /home/quorum/.claude/_claude.json
+else
+  cp /tmp/baked-claude.json /home/quorum/.claude/_claude.json
+fi
 
 # Self-verify: fail loudly if CC CLI doesn't see the Quorum MCP server.
 # Catches the QRM6-BUG-003 class of defect (config file present but CLI ignores it)
