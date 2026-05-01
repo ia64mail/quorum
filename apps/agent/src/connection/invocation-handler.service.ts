@@ -93,9 +93,14 @@ export class InvocationHandler {
 
   private async runInvocation(request: InvokeRequest): Promise<InvokeResponse> {
     try {
+      const prompt = this.buildPrompt(request);
+      const systemPrompt = this.promptService.getSystemPrompt(request.caller);
+
+      this.logInitialPrompt(request, systemPrompt, prompt);
+
       const result = await this.claudeCode.execute({
-        prompt: this.buildPrompt(request),
-        systemPrompt: this.promptService.getSystemPrompt(request.caller),
+        prompt,
+        systemPrompt,
         mcpServers: this.bridge.createBridge(request),
         plugins: this.permissions.getPlugins(),
         disallowedTools: this.permissions.getDisallowedTools(),
@@ -127,6 +132,24 @@ export class InvocationHandler {
       );
       return { success: false, error: `SDK execution failed: ${message}` };
     }
+  }
+
+  private logInitialPrompt(
+    request: InvokeRequest,
+    systemPrompt: string,
+    userPrompt: string,
+  ): void {
+    this.logger.log(
+      `Initial prompt assembled: correlationId=${request.correlationId} ` +
+        `caller=${request.caller} systemPromptChars=${systemPrompt.length} ` +
+        `userPromptChars=${userPrompt.length}`,
+    );
+    this.logger.debug(
+      `\n=== Initial prompt for correlationId=${request.correlationId} ===\n` +
+        `--- System Prompt (caller=${request.caller}) ---\n${systemPrompt}\n` +
+        `--- User Prompt ---\n${userPrompt}\n` +
+        `=== End of initial prompt (correlationId=${request.correlationId}) ===`,
+    );
   }
 
   private buildPrompt(request: InvokeRequest): string {

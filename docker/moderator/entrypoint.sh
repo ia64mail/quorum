@@ -44,6 +44,38 @@ else
   cp /tmp/baked-claude.json /home/quorum/.claude/_claude.json
 fi
 
+# Render the effective moderator prompt sources to stdout so `docker compose logs
+# moderator` shows exactly what CC CLI auto-loads. Mirrors the agent-side container-
+# start template log (RolePromptService.onModuleInit). Note: CC CLI applies its own
+# recursive @-import resolution and may inject system messages internally — this
+# dump reflects on-disk state after the entrypoint merge, not the byte-exact prompt
+# the model receives.
+echo "===== BEGIN moderator effective prompt ====="
+
+echo "--- settings.json: systemPrompt ---"
+jq -r '.systemPrompt // "(none)"' /home/quorum/.claude/settings.json
+
+echo "--- settings.json: permissions ---"
+jq '.permissions // {}' /home/quorum/.claude/settings.json
+
+echo "--- ~/.claude/CLAUDE.md (user-scope) ---"
+cat /home/quorum/.claude/CLAUDE.md
+echo
+
+if [ -f /mnt/quorum/workspace/CLAUDE.md ]; then
+  echo "--- /mnt/quorum/workspace/CLAUDE.md (project-scope) ---"
+  cat /mnt/quorum/workspace/CLAUDE.md
+  echo
+fi
+
+if [ -f /mnt/quorum/workspace/quorum.md ]; then
+  echo "--- /mnt/quorum/workspace/quorum.md (@quorum.md import target) ---"
+  cat /mnt/quorum/workspace/quorum.md
+  echo
+fi
+
+echo "===== END moderator effective prompt ====="
+
 # Self-verify: fail loudly if CC CLI doesn't see the Quorum MCP server.
 # Catches the QRM6-BUG-003 class of defect (config file present but CLI ignores it)
 # at startup instead of silently leaving the moderator with zero MCP tools.

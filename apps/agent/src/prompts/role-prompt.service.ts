@@ -1,19 +1,25 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { getRolePromptTemplate } from '@app/common';
 import { AgentConfigService } from '../config';
 
-/**
- * Resolves the role-specific prompt template for the current agent
- * and substitutes dynamic values (caller).
- */
 @Injectable()
-export class RolePromptService {
+export class RolePromptService implements OnModuleInit {
+  private readonly logger = new Logger(RolePromptService.name);
+
   constructor(private readonly config: AgentConfigService) {}
 
-  /**
-   * Returns the hydrated system prompt for the current agent's role
-   * with {{caller}} replaced by the requesting agent's role.
-   */
+  onModuleInit(): void {
+    const role = this.config.agent.role;
+    const template = getRolePromptTemplate(role);
+    this.logger.log(
+      `Role prompt template loaded: role=${role} chars=${template.length} ` +
+        `({{caller}} substituted per invocation)`,
+    );
+    this.logger.log(
+      `\n--- BEGIN ROLE PROMPT TEMPLATE (${role}) ---\n${template}\n--- END ROLE PROMPT TEMPLATE (${role}) ---`,
+    );
+  }
+
   getSystemPrompt(caller: string): string {
     const template = getRolePromptTemplate(this.config.agent.role);
     return template.replaceAll('{{caller}}', caller);
