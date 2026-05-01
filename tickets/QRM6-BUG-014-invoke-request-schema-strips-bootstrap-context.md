@@ -1,13 +1,13 @@
 ---
 ticketId: QRM6-BUG-014
 title: Agent /invoke Schema Silently Strips bootstrapContext (and the One-Way Guard That Hides Drift)
-status: Open
+status: Complete
 created: 2026-05-01
 ---
 
 # QRM6-BUG-014: Agent /invoke Schema Silently Strips bootstrapContext (and the One-Way Guard That Hides Drift)
 
-**Status:** Open — bug surfaced 2026-05-01 from log-vs-code review of the QRM6-BUG-013 observability work.
+**Status:** Complete — accepted 2026-05-01.
 
 ## Summary
 
@@ -176,14 +176,14 @@ File `QRM6-BUG-014-followup` (or fold into the QRM7 batch) to migrate to the sch
 
 ## Acceptance Criteria
 
-- [ ] `apps/agent/src/connection/invocation.controller.ts` declares `bootstrapContext` (optional) in `invokeRequestSchema`, with a nested `bootstrapContextSchema` matching the `BootstrapContext` interface.
-- [ ] `_SchemaMatchesInvokeRequest` is bidirectional: removing any field from either side fails the build.
-- [ ] Round-trip test: `safeParse` of a payload containing `bootstrapContext` returns `parsed.data.bootstrapContext` deep-equal to the input.
-- [ ] Render test: an `InvokeRequest` with `bootstrapContext` populated produces a user prompt containing `## Prior Decisions`, `### Project Context`, `### Conversation Context`.
+- [x] `apps/agent/src/connection/invocation.controller.ts` declares `bootstrapContext` (optional) in `invokeRequestSchema`, with a nested `bootstrapContextSchema` matching the `BootstrapContext` interface.
+- [x] `_SchemaMatchesInvokeRequest` is bidirectional: removing any field from either side fails the build.
+- [x] Round-trip test: `safeParse` of a payload containing `bootstrapContext` returns `parsed.data.bootstrapContext` deep-equal to the input.
+- [x] Render test: an `InvokeRequest` with `bootstrapContext` populated produces a user prompt containing `## Prior Decisions`, `### Project Context`, `### Conversation Context`.
 - [ ] Live verification: a `docker compose` run with a populated Context Store shows `Prior Decisions` in the agent's debug-level prompt log (mirrors the `BootstrapContextService: "Assembled bootstrap context: N items"` line on the MCP server side).
-- [ ] `npm run lint` clean.
-- [ ] `npm run test` passes.
-- [ ] Follow-up ticket filed for the schema-first migration (Option B).
+- [x] `npm run lint` clean.
+- [x] `npm run test` passes.
+- [x] Follow-up ticket filed for the schema-first migration (Option B).
 
 ## Documentation Sync
 
@@ -204,3 +204,29 @@ These do not block the code fix but are part of bringing the system docs in sync
 - `apps/mcp-server/src/messaging/message-broker.service.ts:85-99` — Broker-side assembly + attachment.
 - `apps/agent/src/connection/invocation-handler.service.ts:163-218` — `buildPrompt` / `renderBootstrapContext` (correct, not at fault — the upstream `parsed.data` already has the field stripped before it gets here).
 - `logs/mcp-server-20260501T141827.jsonl` and `logs/architect-20260501T141833.jsonl` — log evidence cited in the Problem Statement.
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-05-01
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/agent/src/connection/invocation.controller.ts` | Modified | Added `bootstrapContextMetaSchema`, `bootstrapContextSchema` (matching interfaces in `invoke.types.ts`). Added `bootstrapContext: bootstrapContextSchema.optional()` to `invokeRequestSchema`. Replaced one-way `extends` guard with bidirectional key-level `Exclude` guard per architect correction. Updated comment to reference QRM7 follow-up. |
+| `apps/agent/src/connection/invocation.controller.spec.ts` | Modified | Added round-trip regression test (BUG-014): bootstrapContext with nested project/conversation/meta survives `safeParse` with deep equality. Added absent-bootstrapContext test confirming undefined passthrough. |
+| `apps/agent/src/connection/invocation-handler.service.spec.ts` | Modified | Added BUG-014 regression test: multi-entry bootstrapContext (2 project + 2 conversation items) renders all headings (`## Prior Decisions`, `### Project Context`, `### Conversation Context`), all key-value pairs, and correct ordering (Prior Decisions before Task). |
+| `tickets/QRM7-001-schema-first-invoke-request-migration.md` | Created | Follow-up ticket for Option B schema-first migration to eliminate the dual declaration. |
+
+### Deviations from Ticket Spec
+
+- **Bidirectional guard uses key-level `Exclude` instead of the ticket's `extends`-based proposal.** The architect's design review (stored as `QRM6-BUG-014-design-notes`) identified that the bidirectional `extends` guard proposed in the ticket is broken for optional fields — `{x: string} extends {x: string; y?: number}` is `true` in both directions. The `Exclude<keyof A, keyof B>` approach operates at key names, correctly catching any key present on one type but absent from the other regardless of optionality.
+- **Documentation sync skipped.** Per architect confirmation, `docs/message-broker.md` and `docs/context-management.md` already contain the resume-skip notes from QRM6-BUG-013. No edits needed.
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 681 tests passing (3 new + 678 existing)
