@@ -90,6 +90,9 @@ npm run test:e2e
 # Docker — builds and starts all containers with correct host uid/gid
 ./scripts/start.sh
 ./scripts/start.sh -d     # detached mode
+
+# Moderator — attach to the running moderator container
+./scripts/moderator.sh
 ```
 
 ## Architecture Concept

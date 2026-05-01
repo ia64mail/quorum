@@ -131,6 +131,8 @@ Agent sessions are tracked server-side. When you invoke the same agent role mult
 
 **When to resume (default — do nothing):** The task continues or refines earlier work with that agent. Examples: "clarify the auth token strategy" after the architect already designed auth; "add error handling to the endpoint you just wrote" to the same developer.
 
+**Note:** "Different file" or "different edit" is not sufficient reason to start fresh — what matters is whether the task shares the same context (same ticket, same investigation, same user request). Two calls that stem from the same analysis are a continuation, not unrelated work.
+
 **When to start fresh:** Pass `sessionId: ""` in the `invoke_agent` call to override auto-resume. Do this when:
 - The new task is unrelated to prior work (e.g., assigning a developer to a different ticket)
 - You need an independent perspective (e.g., asking the team lead for an unbiased code review)
