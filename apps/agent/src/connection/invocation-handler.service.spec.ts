@@ -642,6 +642,56 @@ describe('InvocationHandler', () => {
       );
     });
   });
+  // Regression test for QRM6-BUG-014: bootstrapContext was silently stripped
+  // by the controller's Zod schema. This test verifies that when the handler
+  // receives a request with non-trivial bootstrapContext (both project and
+  // conversation populated), the rendered prompt contains all expected sections.
+  describe('bootstrap context end-to-end rendering (BUG-014)', () => {
+    it('should render Prior Decisions with both Project and Conversation sections', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: {
+            'tech-stack': 'NestJS with TypeScript',
+            'auth-pattern': 'JWT with refresh tokens',
+          },
+          conversation: {
+            'task-breakdown': 'implement auth module with guards',
+            'architect-decision': 'use passport.js strategy pattern',
+          },
+          meta: {
+            itemCount: 4,
+            estimatedTokens: 581,
+            scopesQueried: ['project', 'conversation'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      // All three heading levels must be present
+      expect(call.prompt).toContain('## Prior Decisions');
+      expect(call.prompt).toContain('### Project Context');
+      expect(call.prompt).toContain('### Conversation Context');
+      // All key-value pairs must be rendered
+      expect(call.prompt).toContain('- tech-stack: "NestJS with TypeScript"');
+      expect(call.prompt).toContain(
+        '- auth-pattern: "JWT with refresh tokens"',
+      );
+      expect(call.prompt).toContain(
+        '- task-breakdown: "implement auth module with guards"',
+      );
+      expect(call.prompt).toContain(
+        '- architect-decision: "use passport.js strategy pattern"',
+      );
+      // Prior Decisions must come before the task
+      const priorIdx = call.prompt.indexOf('## Prior Decisions');
+      const taskIdx = call.prompt.indexOf('Task:');
+      expect(priorIdx).toBeLessThan(taskIdx);
+    });
+  });
+
   describe('in-flight idempotency (BUG-010)', () => {
     it('should deduplicate concurrent calls with the same correlationId', async () => {
       // Use a deferred promise to control when execute() resolves
