@@ -202,7 +202,7 @@ Quorum's bidirectional MCP architecture enables:
 |------------|-----------|
 | Agent-to-agent communication | `invoke_agent` tool via Message Broker |
 | Mid-task consultation | Synchronous request-response (wait: true) |
-| User escalation | Invoke moderator → ClarificationHandler → user |
+| User escalation | Invoke moderator → MCP elicitation → user |
 | Task decomposition | Chained synchronous calls with depth tracking |
 | Call safety | Circular call prevention, depth limit, role-based timeouts |
 | Fire-and-forget (wait: false) | Schema accepts the parameter but broker always awaits — not yet implemented |
