@@ -116,20 +116,20 @@ Six documentation files reference the terminal app. Each needs targeted removal 
 
 ## Acceptance Criteria
 
-- [ ] `apps/terminal/` directory is deleted (all 29 files)
-- [ ] `nest-cli.json` has no `terminal` project entry; top-level `root`, `sourceRoot`, and `compilerOptions.tsConfigPath` point to `apps/mcp-server`
-- [ ] `docker-compose.yml` has no `terminal` service block
-- [ ] `Dockerfile` comment on line 14 reads `default (mcp-server)`, not `default (mcp-server, terminal)`
-- [ ] `package.json` has no `build:terminal` script
-- [ ] `docs/system-design.md` has no references to the terminal app, terminal service, or `terminal:3001`
-- [ ] `docs/claude-code-sdk.md` has no references to terminal using raw Anthropic SDK or terminal in Dockerfile description
-- [ ] `docs/message-broker.md` invocation delivery table does not mention terminal
-- [ ] `CLAUDE.md` project structure and tech stack do not reference terminal
-- [ ] `quorum.md` framework line and directory tree do not reference terminal
-- [ ] `npm run build` succeeds (terminal no longer in `nest-cli.json` projects)
-- [ ] `npm run lint` passes with 0 errors, 0 warnings
-- [ ] `npm run test` passes — existing test count is preserved minus terminal's own specs (subtract ~8 terminal spec files)
-- [ ] No remaining references to `apps/terminal` in the codebase (verify with `grep -r "apps/terminal" --include="*.ts" --include="*.json" --include="*.md" --include="*.yml"`)
+- [x] `apps/terminal/` directory is deleted (all 29 files)
+- [x] `nest-cli.json` has no `terminal` project entry; top-level `root`, `sourceRoot`, and `compilerOptions.tsConfigPath` point to `apps/mcp-server`
+- [x] `docker-compose.yml` has no `terminal` service block
+- [x] `Dockerfile` comment on line 14 reads `default (mcp-server)`, not `default (mcp-server, terminal)`
+- [x] `package.json` has no `build:terminal` script
+- [x] `docs/system-design.md` has no references to the terminal app, terminal service, or `terminal:3001`
+- [x] `docs/claude-code-sdk.md` has no references to terminal using raw Anthropic SDK or terminal in Dockerfile description
+- [x] `docs/message-broker.md` invocation delivery table does not mention terminal
+- [x] `CLAUDE.md` project structure and tech stack do not reference terminal
+- [x] `quorum.md` framework line and directory tree do not reference terminal
+- [x] `npm run build` succeeds (terminal no longer in `nest-cli.json` projects)
+- [x] `npm run lint` passes with 0 errors, 0 warnings
+- [x] `npm run test` passes — existing test count is preserved minus terminal's own specs (subtract ~8 terminal spec files)
+- [x] No remaining references to `apps/terminal` in the codebase (verify with `grep -r "apps/terminal" --include="*.ts" --include="*.json" --include="*.md" --include="*.yml"`)
 
 ## Dependencies and References
 
@@ -145,3 +145,42 @@ Six documentation files reference the terminal app. Each needs targeted removal 
   - QRM6-011 (unified moderator log adapter) — adapter targets the post-terminal world; `terminal-*.jsonl` filename retired here
 - **Part of:** [QRM6-000-roadmap.md](QRM6-000-roadmap.md) — Containerized Moderator via Claude Code CLI milestone
 - **Design decision:** D8 in QRM6-000-roadmap.md — "Delete `apps/terminal/` Entirely — No Legacy Mode"
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-05-01
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/terminal/` (29 files) | Deleted | Entire terminal app directory — chat, clarification, config, connection, llm modules, root module, tsconfig, jest config |
+| `nest-cli.json` | Modified | Removed `terminal` project entry; switched top-level `root`, `sourceRoot`, `compilerOptions.tsConfigPath` from `apps/terminal` to `apps/mcp-server` |
+| `docker-compose.yml` | Modified | Removed 27-line `terminal` service block (lines 128–154) |
+| `Dockerfile` | Modified | Updated line 14 comment: `default (mcp-server, terminal)` → `default (mcp-server)` |
+| `package.json` | Modified | Removed `build:terminal` script |
+| `docs/system-design.md` | Modified | Removed terminal from directory tree, Mermaid diagrams, service table, base image row, deployment description; updated moderator section to describe CC CLI container |
+| `docs/claude-code-sdk.md` | Modified | Removed "Terminal Moderator Exception" section; updated Dockerfile description |
+| `docs/agent-messaging.md` | Modified | Rewrote "User Clarification" section — replaced ClarificationHandler/terminal with MCP elicitation/moderator in prose and Mermaid diagram |
+| `docs/message-broker.md` | Modified | Updated invocation delivery table: `agent/terminal` → `agent` |
+| `CLAUDE.md` | Modified | Removed terminal from project structure tree, updated tech stack (moderator line, app count), updated architecture example flow |
+| `quorum.md` | Modified | Updated framework line and project structure directory tree; updated build comment |
+| `docker/moderator/CLAUDE.md` | Modified | Removed terminal from project structure tree, updated app count |
+| `apps/mcp-server/src/main.ts` | Modified | Updated comment reference from deleted `apps/terminal/src/connection/mcp-client.service.ts` to surviving `apps/agent/src/connection/mcp-client.service.ts` |
+| `libs/common/src/messaging/invoke.types.ts` | Modified | Updated JSDoc: "Terminal App's moderator" → "the moderator" |
+
+### Deviations from Ticket Spec
+
+- **Three extra files updated beyond ticket scope.** The developer proactively cleaned up `apps/mcp-server/src/main.ts` (comment referencing deleted terminal MCP client), `libs/common/src/messaging/invoke.types.ts` (JSDoc referencing "Terminal App's moderator"), and `docker/moderator/CLAUDE.md` (terminal in project structure). These were not listed in the ticket's Implementation Details but are correct and necessary removals.
+- **`docs/agent-messaging.md` updated but not listed in ticket.** The ticket's documentation section listed 5 doc files but omitted `agent-messaging.md`, which had a ClarificationHandler-based Mermaid diagram and prose. The developer correctly updated it to describe the MCP elicitation flow.
+- **`tools/entropy-report/` references not cleaned.** `README.md` (line 93) and `entropy-report.mjs` (line 222) still reference `apps/terminal/`. Functionally harmless (dead `classifyApp` branch, stale README line). Not covered by any downstream ticket — opportunistic cleanup candidate.
+- **`tools/session-report/SESSION-REPORT.md` references deferred.** Two references to `apps/terminal/` remain; QRM6-011 is scoped to rewrite this file.
+
+### Verification
+
+- `npm run build` — 3 targets compiled successfully (agent, mcp-server, common)
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 44 suites, 674 tests passing (down from 49 suites / 760 tests — terminal's 5 spec files and their tests removed)
+- `grep -r "apps/terminal" --include="*.ts" --include="*.json" --include="*.md" --include="*.yml"` in active code/config/docs — 0 matches (residual matches only in `tickets/*.md` historical records and `tools/` developer scripts)
