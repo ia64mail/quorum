@@ -256,6 +256,8 @@ The broker automatically injects relevant context from the Context Store into ev
 
 Before delivering an invocation, the broker calls `BootstrapContextService.assemble(correlationId)` to gather project-scope and conversation-scope decisions from the Context Store. The assembled `BootstrapContext` is attached to `request.bootstrapContext`.
 
+**Skipped on session resume.** Assembly is bypassed when `request.sessionId` is set to a non-empty string (per [QRM6-BUG-013](../tickets/QRM6-BUG-013-redundant-prompt-injection-on-session-resume.md)). The resumed session's transcript already carries the original Prior Decisions block in conversation history; re-injecting it would duplicate context and re-pay full input cost on the cache-busted system-prompt prefix (SDK [#247](https://github.com/anthropics/claude-agent-sdk-typescript/issues/247)). The empty-string sentinel `sessionId: ""` (the moderator's documented force-fresh override) falsifies the check and assembly still runs — preserving the escape hatch.
+
 **Assembly flow:**
 
 1. **Check enabled** — if `BOOTSTRAP_ENABLED=false`, assembly returns `null` immediately (zero overhead)
@@ -299,15 +301,19 @@ sequenceDiagram
     C->>B: invoke(request)
     Note over B: Safeguards pass (depth, circular, availability)
 
-    B->>BCS: assemble(correlationId)
-    BCS->>CS: getAll(project)
-    CS-->>BCS: project items
-    BCS->>CS: getAll(conversation, correlationId)
-    CS-->>BCS: conversation items
-    BCS-->>B: BootstrapContext (or null)
+    alt request.sessionId is empty (fresh)
+        B->>BCS: assemble(correlationId)
+        BCS->>CS: getAll(project)
+        CS-->>BCS: project items
+        BCS->>CS: getAll(conversation, correlationId)
+        CS-->>BCS: conversation items
+        BCS-->>B: BootstrapContext (or null)
 
-    alt Bootstrap context assembled
-        B->>B: request.bootstrapContext = result
+        alt Bootstrap context assembled
+            B->>B: request.bootstrapContext = result
+        end
+    else request.sessionId is set (resume)
+        Note over B,BCS: Skipped — resumed session carries Prior Decisions
     end
 
     B->>A: handle(request, timeout)
