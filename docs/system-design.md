@@ -13,12 +13,8 @@ graph TB
     end
 
     subgraph "Docker Compose Network"
-        subgraph "Terminal App Container"
-            UI[Console UI]
-            MOD[Moderator LLM]
-            CLAR[Clarification Handler]
-            UI <--> MOD
-            CLAR -.->|"stdin/stdout"| UI
+        subgraph "Moderator Container"
+            MOD[Claude Code CLI]
         end
 
         subgraph "MCP Server Container"
@@ -58,7 +54,7 @@ graph TB
         A6 <-->|Streamable HTTP| MCP
     end
 
-    HV -.->|"Volume Mount (ro)"| MOD
+    HV -.->|"Volume Mount (rw)"| MOD
     HV -.->|"Volume Mount (rw)"| CTX
     HV -.->|"Volume Mount (rw)<br/>/mnt/quorum/workspace"| A1
     HV -.->|"Volume Mount (rw)"| A2
@@ -70,41 +66,24 @@ graph TB
 
 ## Container Components
 
-### 1. Terminal App Container
+### 1. Moderator Container
 
-The user-facing component providing a conversational interface.
+The user-facing component providing a conversational interface via Claude Code CLI.
 
 | Aspect | Description |
 |--------|-------------|
-| **Purpose** | Console UI for chat-based interaction with the Moderator |
-| **Technology** | NestJS application with Anthropic SDK (raw, not Claude Code SDK) |
-| **LLM Integration** | Built-in Moderator LLM with 10-round agentic tool loop |
+| **Purpose** | Orchestrate agent workflows on behalf of the user |
+| **Technology** | Claude Code CLI in a dedicated Docker container |
 | **Connection** | MCP client (Streamable HTTP) connected to MCP Server |
-| **Workspace** | Read-only mount at `/mnt/quorum/workspace` (reads `quorum.md` at startup) |
+| **Workspace** | Read-write mount at `/mnt/quorum/workspace` |
 
 **Responsibilities:**
 - Accept user input as natural language commands
+- Orchestrate agent workflows via `invoke_agent` MCP tool
 - Display agent responses and progress
-- Manage conversation context with Moderator
-- Relay orchestration commands to MCP Server
-- Surface agent clarification requests to the user via `ClarificationHandler`
+- Surface agent clarification requests to the user via MCP elicitation
 
-#### Moderator LLM vs Clarification Handler
-
-The Terminal App contains two distinct communication paths:
-
-| | Moderator LLM | Clarification Handler |
-|---|---|---|
-| **Who initiates** | User sends a message | Agent escalates mid-task via `invoke_agent(moderator, ...)` |
-| **Intelligence** | Full LLM reasoning — interprets intent, selects agents, sequences workflow | None — passthrough relay between agent and user |
-| **Scope** | Entire workflow orchestration | Single decision point |
-| **Context** | Full conversation history with the user | Just the question and the user's answer |
-
-The **Moderator LLM** is the orchestration brain: it decomposes user requests into agent workflows ("build auth" → architect designs → team lead creates tickets → developer implements), synthesizes multi-agent results into coherent responses, and makes judgment calls about agent output.
-
-The **Clarification Handler** is a direct agent-to-user channel that bypasses the Moderator LLM. When an agent needs a user decision mid-task (e.g., "push or pull architecture?"), the handler surfaces the question in the console, collects the answer, auto-persists it to the Context Store (project scope), and returns it to the calling agent. This avoids a synchronous call-chain deadlock that would occur if the agent tried to invoke the Moderator LLM while it's already blocked waiting for that agent. A `StdinLockService` (async mutex) prevents interleaved I/O between the chat loop and clarification prompts.
-
-The terminal exposes `POST /invoke` (mirroring the agent pattern) so the MCP server can deliver clarification requests to it like any other agent.
+The moderator registers with the MCP server on startup and uses MCP tools for all inter-agent communication. Agents can escalate questions to the user by invoking the moderator, which surfaces them through Claude Code's elicitation mechanism.
 
 ### 2. MCP Server Container
 
@@ -174,7 +153,7 @@ Identical Docker images configured via environment variables. Containers are har
 |--------|-------------|
 | **Purpose** | Execute role-specific AI tasks via Claude Code SDK |
 | **Technology** | NestJS application with Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) |
-| **Base Image** | `node:24-bookworm-slim` (Debian, glibc required for SDK toolchain); mcp-server/terminal use `node:24-alpine` |
+| **Base Image** | `node:24-bookworm-slim` (Debian, glibc required for SDK toolchain); mcp-server uses `node:24-bookworm-slim` |
 | **Configuration** | `AGENT_ROLE` environment variable |
 | **Workspace** | Shared volume at `/mnt/quorum/workspace` (read-write) |
 | **MCP Role** | Dual: client (invoke others via tool bridge) + handler (be invoked via `POST /invoke`) |
@@ -194,7 +173,7 @@ graph LR
     end
 ```
 
-The `moderator` role is handled by the Terminal App (not deployed as an agent container) but is part of the enum and is invocable via `invoke_agent` — enabling agents to route clarification requests to the user.
+The `moderator` role runs as a Claude Code CLI container (not an agent container) but is part of the enum and is invocable via `invoke_agent` — enabling agents to route clarification requests to the user.
 
 > **Details:** See [Claude Code SDK](claude-code-sdk.md) for SDK integration, tool bridge, permission profiles, container hardening, and observability hooks.
 
@@ -346,17 +325,6 @@ quorum/
 ├── scripts/start.sh             # Docker launch script (exports HOST_UID/GID)
 │
 ├── apps/
-│   ├── terminal/                # Terminal App (Moderator)
-│   │   ├── src/
-│   │   │   ├── main.ts
-│   │   │   ├── terminal.module.ts
-│   │   │   ├── chat/            # ChatService — interactive loop, 10-round tool loop
-│   │   │   ├── clarification/   # ClarificationService, StdinLockService
-│   │   │   ├── config/          # Terminal-specific config (callbackUrl, workspaceDir)
-│   │   │   ├── connection/      # MCP client (Streamable HTTP), registration
-│   │   │   └── llm/             # AnthropicService (raw SDK, not Claude Code)
-│   │   └── tsconfig.app.json
-│   │
 │   ├── mcp-server/              # MCP Server
 │   │   ├── src/
 │   │   │   ├── main.ts
@@ -395,7 +363,7 @@ quorum/
 
 ## Docker Compose Configuration
 
-The Dockerfile uses a multi-target build: `default` target for mcp-server/terminal (Alpine), `agent` target for agents (Debian bookworm-slim with toolchain). Both accept `HOST_UID`/`HOST_GID` build args to align container user ownership with the host. Use `./scripts/start.sh` to launch — it exports these automatically.
+The Dockerfile uses a multi-target build: `default` target for mcp-server, `agent` target for agents, and `moderator` target for the Claude Code CLI moderator. All accept `HOST_UID`/`HOST_GID` build args to align container user ownership with the host. Use `./scripts/start.sh` to launch — it exports these automatically.
 
 Two YAML anchors provide shared configuration:
 
@@ -404,7 +372,7 @@ Two YAML anchors provide shared configuration:
 | `x-shared-env` | Common env vars (Anthropic API, MCP server URL, logging) |
 | `x-agent-security` | Security constraints (read-only fs, dropped caps, tmpfs mounts) |
 
-**Services** (8 deployed): `mcp-server` (port 3000, default target), `terminal` (port 3001, default target), `architect`, `teamlead`, `developer` (each port 3002, agent target), `opensearch` (port 9200), `ollama` (port 11434), `ollama-init` (init container, runs to completion). All agent containers share `x-agent-security` constraints and mount the workspace read-write. The terminal mounts the workspace read-only. All services write logs to a shared `quorum-logs` volume. Named volumes `opensearch-data` and `ollama-data` persist index data and model weights.
+**Services** (8 deployed): `mcp-server` (port 3000, default target), `moderator` (moderator target), `architect`, `teamlead`, `developer` (each port 3002, agent target), `opensearch` (port 9200), `ollama` (port 11434), `ollama-init` (init container, runs to completion). All agent containers share `x-agent-security` constraints and mount the workspace read-write. All services write logs to a shared bind-mounted `./logs` directory. Named volumes `opensearch-data`, `ollama-data`, and `moderator-claude-data` persist index data, model weights, and moderator state.
 
 The qa and productowner roles are fully defined (permissions, prompts, timeouts) but not yet added as compose services.
 
@@ -413,7 +381,7 @@ The qa and productowner roles are fully defined (permissions, prompts, timeouts)
 | Decision | Rationale |
 |----------|-----------|
 | **Claude Agent SDK for agents** | Full filesystem, bash, git access — agents do real work, not just chat ([details](claude-code-sdk.md)) |
-| **Raw Anthropic SDK for moderator** | Moderator is pure orchestration; Claude Code capability surface adds no value |
+| **Claude Code CLI for moderator** | Moderator runs as a CC CLI container with MCP tools for orchestration |
 | **Single agent image** | Simplifies maintenance; role behavior defined by env vars, prompts, and permission profiles |
 | **MCP as communication layer** | Standard protocol, well-supported, bidirectional ([details](agent-messaging.md)) |
 | **Streamable HTTP transport** | Session-based, works through proxies; per-client `mcp-session-id` headers |
@@ -432,12 +400,12 @@ The qa and productowner roles are fully defined (permissions, prompts, timeouts)
 All containers communicate on a private `quorum-net` bridge network. Each agent runs on port 3002 in its own network namespace; Docker hostnames disambiguate them. Two distinct communication channels exist:
 
 1. **MCP Protocol** (Streamable HTTP): Agents → MCP server for tool calls (`POST /mcp`, `GET /mcp`, `DELETE /mcp`), with per-client sessions via `mcp-session-id` header
-2. **Invocation Delivery** (plain HTTP): MCP server → agent/terminal via `POST /invoke` at each agent's registered callback URL
+2. **Invocation Delivery** (plain HTTP): MCP server → agent via `POST /invoke` at each agent's registered callback URL
 
 ```mermaid
 graph LR
     subgraph "Docker Network: quorum-net"
-        T[terminal:3001]
+        MOD[moderator]
         M[mcp-server:3000]
         A1[architect:3002]
         A2[teamlead:3002]
@@ -446,11 +414,10 @@ graph LR
         OLL[ollama:11434]
     end
 
-    T -->|"Streamable HTTP (MCP)"| M
+    MOD -->|"Streamable HTTP (MCP)"| M
     A1 -->|"Streamable HTTP (MCP)"| M
     A2 -->|"Streamable HTTP (MCP)"| M
     A3 -->|"Streamable HTTP (MCP)"| M
-    M -->|"POST /invoke"| T
     M -->|"POST /invoke"| A1
     M -->|"POST /invoke"| A2
     M -->|"POST /invoke"| A3

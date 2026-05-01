@@ -125,33 +125,6 @@ services:
     networks:
       - quorum-net
 
-  terminal:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: default
-      args:
-        APP_NAME: terminal
-        HOST_UID: ${HOST_UID:-1000}
-        HOST_GID: ${HOST_GID:-1000}
-    stdin_open: true
-    tty: true
-    depends_on:
-      mcp-server:
-        condition: service_healthy
-    environment:
-      <<: *shared-env
-      APP_NAME: terminal
-      PORT: 3001
-      LOG_LEVEL: warn
-      MCP_CALLBACK_URL: http://terminal:3001
-      TERMINAL_WORKSPACE_DIR: /mnt/quorum/workspace
-    volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:ro
-      - ./logs:/app/logs
-    networks:
-      - quorum-net
-
   moderator:
     build:
       context: .

@@ -11,7 +11,7 @@ COPY . .
 ARG APP_NAME
 RUN npx nest build ${APP_NAME}
 
-# --- Runtime: default (mcp-server, terminal) ---
+# --- Runtime: default (mcp-server) ---
 FROM node:24-bookworm-slim AS default
 
 WORKDIR /app

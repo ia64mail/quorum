@@ -167,15 +167,13 @@ Agents communicate via MCP server and collaborate according to their roles. Each
 - **Moderator LLM**: Claude Code CLI — orchestration via CC CLI session with MCP tools
 - **Protocol**: MCP SDK (`@modelcontextprotocol/sdk`) over Streamable HTTP
 - **Containerization**: Docker
-- **UI**: ink + React terminal interface
 
 ## Project Structure
 
-NestJS monorepo with 3 apps and 1 shared library:
+NestJS monorepo with 2 apps and 1 shared library:
 
 ```
 apps/
-  terminal/       # Terminal App — being replaced by CC CLI moderator (QRM6); legacy code
   mcp-server/     # MCP Server — 7 tools, 2 resources, Agent Registry, Message Broker, Context Store
   agent/          # Agent App — single image, multi-role via AGENT_ROLE env var (Claude Agent SDK)
 libs/

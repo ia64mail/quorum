@@ -223,7 +223,7 @@ All MCP communication uses **Streamable HTTP** (not WebSocket):
 | Channel | Protocol | Endpoints | Purpose |
 |---------|----------|-----------|---------|
 | MCP Protocol | Streamable HTTP | `POST/GET/DELETE /mcp` | Agent → MCP server tool calls, with per-client `mcp-session-id` sessions |
-| Invocation Delivery | Plain HTTP | `POST /invoke` | MCP server → agent/terminal task delivery |
+| Invocation Delivery | Plain HTTP | `POST /invoke` | MCP server → agent task delivery |
 
 The MCP server creates a **per-session `McpServer` instance** (each client connection gets its own SDK server with independently registered tools). Session-to-transport mapping is maintained in `McpController`.
 

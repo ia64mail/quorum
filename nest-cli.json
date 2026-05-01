@@ -1,14 +1,14 @@
 {
   "$schema": "https://json.schemastore.org/nest-cli",
   "collection": "@nestjs/schematics",
-  "sourceRoot": "apps/terminal/src",
+  "sourceRoot": "apps/mcp-server/src",
   "compilerOptions": {
     "deleteOutDir": true,
     "webpack": true,
-    "tsConfigPath": "apps/terminal/tsconfig.app.json"
+    "tsConfigPath": "apps/mcp-server/tsconfig.app.json"
   },
   "monorepo": true,
-  "root": "apps/terminal",
+  "root": "apps/mcp-server",
   "projects": {
     "agent": {
       "type": "application",
@@ -35,15 +35,6 @@
       "sourceRoot": "apps/mcp-server/src",
       "compilerOptions": {
         "tsConfigPath": "apps/mcp-server/tsconfig.app.json"
-      }
-    },
-    "terminal": {
-      "type": "application",
-      "root": "apps/terminal",
-      "entryFile": "main",
-      "sourceRoot": "apps/terminal/src",
-      "compilerOptions": {
-        "tsConfigPath": "apps/terminal/tsconfig.app.json"
       }
     }
   }
