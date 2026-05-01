@@ -99,7 +99,7 @@ RUN groupmod -n quorum -g ${HOST_GID} node && \
     usermod -l quorum -u ${HOST_UID} -g ${HOST_GID} -d /home/quorum -m -s /bin/bash node
 
 # Install Claude Code CLI globally (pinned version from QRM6-001 spike)
-RUN npm install -g @anthropic-ai/claude-code@2.1.117
+RUN npm install -g @anthropic-ai/claude-code@2.1.126
 
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude \
     /mnt/quorum/workspace/.claude /etc/claude \
