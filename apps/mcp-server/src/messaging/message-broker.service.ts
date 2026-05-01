@@ -78,19 +78,24 @@ export class MessageBroker {
       const timeout =
         ROLE_TIMEOUTS[target] ?? this.config.broker.defaultTimeoutMs;
 
-      // Assemble bootstrap context (non-fatal — deliver without on failure)
-      let bootstrapResult: BootstrapContext | null = null;
-      try {
-        bootstrapResult = await this.bootstrapContext.assemble(correlationId);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.logger.warn(
-          `Bootstrap context assembly failed — proceeding without: ${message} [correlationId=${correlationId}]`,
-        );
-      }
+      // Assemble bootstrap context only on fresh sessions. Resumed sessions
+      // already carry Prior Decisions in conversation history; re-injecting
+      // them would duplicate context and (with SDK MCP cache busting,
+      // anthropics/claude-agent-sdk-typescript#247) re-pay full input cost.
+      if (!request.sessionId) {
+        let bootstrapResult: BootstrapContext | null = null;
+        try {
+          bootstrapResult = await this.bootstrapContext.assemble(correlationId);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.warn(
+            `Bootstrap context assembly failed — proceeding without: ${message} [correlationId=${correlationId}]`,
+          );
+        }
 
-      if (bootstrapResult) {
-        request.bootstrapContext = bootstrapResult;
+        if (bootstrapResult) {
+          request.bootstrapContext = bootstrapResult;
+        }
       }
 
       const response = await this.deliverWithTimeout(

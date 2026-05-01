@@ -125,9 +125,16 @@ Use `get-all` because search requires matching specific terms — the checkpoint
 
 Agent sessions are tracked server-side. When you invoke the same agent role multiple times within a turn, the agent automatically resumes its prior session with full conversation history. This is handled transparently — you do not pass `sessionId`.
 
+**What resume actually sends to the agent (important):** On resume, the agent receives **only the new task message you provide** — its role system prompt and any Prior Decisions bootstrap context are **NOT re-injected**, because the resumed session already carries them in its conversation history. This is by design: it keeps the agent's context coherent and avoids re-paying input cost on every resume.
+
+**Consequence — your follow-up action must fit the original session's intent.** The agent will interpret the new message as a continuation of the prior conversation. If you ask for something the prior system prompt or bootstrap context wouldn't have prepared the agent for (different ticket, different role expectation, fresh context), pass `sessionId: ""` to force a clean session — otherwise the agent operates with stale framing.
+
 **When to resume (default — do nothing):** The task continues or refines earlier work with that agent. Examples: "clarify the auth token strategy" after the architect already designed auth; "add error handling to the endpoint you just wrote" to the same developer.
 
-**When to start fresh:** Pass `sessionId: ""` in the `invoke_agent` call to override auto-resume. Do this when prior session context would be noise or when an independent perspective matters. Examples: assigning a developer to a different ticket; asking the team lead for an independent code review.
+**When to start fresh:** Pass `sessionId: ""` in the `invoke_agent` call to override auto-resume. Do this when:
+- The new task is unrelated to prior work (e.g., assigning a developer to a different ticket)
+- You need an independent perspective (e.g., asking the team lead for an unbiased code review)
+- The prior session's framing would actively mislead the agent (e.g., prior bootstrap context referenced a different feature area)
 
 The `new_conversation` tool at the start of each turn already clears session caches, so invocations in a new turn start fresh automatically.
 

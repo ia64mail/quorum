@@ -469,6 +469,37 @@ describe('ClaudeCodeService', () => {
     ).toBe('function');
   });
 
+  // 8c. systemPrompt suppression on resume — avoid SDK MCP cache busting
+  //     (anthropics/claude-agent-sdk-typescript#247) and duplicate context.
+  it('should pass systemPrompt to SDK on fresh sessions', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.systemPrompt).toBe('You are a developer.');
+  });
+
+  it('should omit systemPrompt from SDK options when resume is provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({ ...baseParams, resume: 'sess-resume-1' });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options).not.toHaveProperty('systemPrompt');
+    expect(callArgs.options.resume).toBe('sess-resume-1');
+  });
+
   // 8b. Singleton sessionStore — same instance across multiple invocations
   it('should use the same sessionStore instance across invocations', async () => {
     mockQuery
@@ -546,6 +577,9 @@ describe('ClaudeCodeService', () => {
       typeof (secondCallArgs.options.sessionStore as Record<string, unknown>)
         .load,
     ).toBe('function');
+    // First call (resume) suppressed systemPrompt; retry-fresh path reinstates it
+    expect(firstCallArgs.options).not.toHaveProperty('systemPrompt');
+    expect(secondCallArgs.options.systemPrompt).toBe('You are a developer.');
   });
 
   it('should return error when execution fails without resume', async () => {

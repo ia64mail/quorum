@@ -421,5 +421,33 @@ describe('MessageBroker', () => {
 
       expect(mockBootstrapService.assemble).not.toHaveBeenCalled();
     });
+
+    it('should skip bootstrap assembly when sessionId is set (resume)', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      let capturedRequest: InvokeRequest | undefined;
+      connection.handleFn = async (req) => {
+        capturedRequest = req;
+        return { success: true, result: 'done' };
+      };
+      registry.register(connection);
+      mockBootstrapService.assemble.mockClear();
+
+      await broker.invoke(makeRequest({ sessionId: 'sess-resume-1' }));
+
+      expect(mockBootstrapService.assemble).not.toHaveBeenCalled();
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest!.bootstrapContext).toBeUndefined();
+    });
+
+    it('should still call assemble when sessionId is empty string (force-fresh)', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      registry.register(connection);
+      mockBootstrapService.assemble.mockClear();
+      mockBootstrapService.assemble.mockResolvedValue(null);
+
+      await broker.invoke(makeRequest({ sessionId: '' }));
+
+      expect(mockBootstrapService.assemble).toHaveBeenCalledWith('corr-1');
+    });
   });
 });

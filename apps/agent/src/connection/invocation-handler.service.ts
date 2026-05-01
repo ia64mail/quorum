@@ -139,14 +139,22 @@ export class InvocationHandler {
     systemPrompt: string,
     userPrompt: string,
   ): void {
+    const isResume = !!request.sessionId;
+    const systemPromptNote = isResume
+      ? `${systemPrompt.length} chars (suppressed on resume — session carries it)`
+      : `${systemPrompt.length} chars`;
     this.logger.log(
       `Initial prompt assembled: correlationId=${request.correlationId} ` +
-        `caller=${request.caller} systemPromptChars=${systemPrompt.length} ` +
-        `userPromptChars=${userPrompt.length}`,
+        `caller=${request.caller} resume=${isResume} ` +
+        `systemPrompt=${systemPromptNote} userPromptChars=${userPrompt.length}`,
     );
+    const systemPromptBlock = isResume
+      ? `--- System Prompt (caller=${request.caller}) [SUPPRESSED — resume] ---\n` +
+        `(${systemPrompt.length} chars; not sent to SDK because resume=${request.sessionId})\n`
+      : `--- System Prompt (caller=${request.caller}) ---\n${systemPrompt}\n`;
     this.logger.debug(
       `\n=== Initial prompt for correlationId=${request.correlationId} ===\n` +
-        `--- System Prompt (caller=${request.caller}) ---\n${systemPrompt}\n` +
+        systemPromptBlock +
         `--- User Prompt ---\n${userPrompt}\n` +
         `=== End of initial prompt (correlationId=${request.correlationId}) ===`,
     );

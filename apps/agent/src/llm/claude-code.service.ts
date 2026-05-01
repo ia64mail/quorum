@@ -78,6 +78,8 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     let sessionId: string | undefined;
     let messageCount = 0;
 
+    const isResume = !!params.resume;
+
     const prompt = params.mcpServers
       ? toAsyncIterable(params.prompt)
       : params.prompt;
@@ -88,7 +90,12 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         cwd: this.config.agent.workspaceDir,
         model: this.config.anthropic.model,
         pathToClaudeCodeExecutable: CLAUDE_BINARY_PATH,
-        systemPrompt: params.systemPrompt,
+        // On resume, the resumed session already carries the original system
+        // prompt; re-sending it busts the SDK prompt cache when MCP servers
+        // are configured (anthropics/claude-agent-sdk-typescript#247) and
+        // duplicates context. The retry-fresh fallback (executeQuery rerun
+        // with resume:undefined) reinstates it via the same conditional.
+        ...(isResume ? {} : { systemPrompt: params.systemPrompt }),
         permissionMode: 'default',
         persistSession: true,
         settingSources: ['project'],
