@@ -23,6 +23,7 @@ const invokeRequestSchema = z.object({
   context: z.record(z.string(), z.unknown()).optional(),
   wait: z.boolean(),
   depth: z.number().int().min(0),
+  sessionId: z.string().optional(),
 });
 
 /** Compile-time check: schema output must stay in sync with InvokeRequest. */
