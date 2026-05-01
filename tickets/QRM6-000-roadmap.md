@@ -629,6 +629,8 @@ Delete the terminal app and all references.
 
 ### QRM6-010 — Documentation
 
+> **Status (2026-05-01):** Skip — QRM6-009 already updated all doc files (system-design, agent-messaging, claude-code-sdk, message-broker, CLAUDE.md, quorum.md). `context-management.md` and `knowledge-management.md` had no stale content. One minor gap: `CLAUDE.md` Build Commands section lacks a pointer to `scripts/moderator.sh` — fold into a future commit.
+
 Update system documentation to reflect the new architecture.
 
 **Touches:**
