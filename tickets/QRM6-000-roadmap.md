@@ -646,6 +646,8 @@ Update system documentation to reflect the new architecture.
 
 ### QRM6-011 — Unified Moderator Log Adapter
 
+> **Status (2026-05-02):** Moved to QRM7-005. Log adapter is a tooling convenience, not a functional requirement for the QRM6 milestone goal. Carried forward to stabilization milestone.
+
 Bridge the moderator's CC CLI session log into the project's structured-logger format so `tools/session-report/parse-logs.mjs` can ingest it on equal terms with agent logs.
 
 **Background — why the moderator breaks log uniformity.**
@@ -703,7 +705,7 @@ QRM6-003 (Elicitation Conn) ◀─┴──▶ QRM6-004 (Caller ID) ────
                                                             │
 QRM6-006 (Agent Prompts) ──────────▶ QRM6-007 (CLAUDE.md) ──┤
                                                             │
-                                                            └──▶ QRM6-009 (Delete terminal) ──▶ QRM6-010 (Docs) ──▶ QRM6-011 (Unified logs)
+                                                            └──▶ QRM6-009 (Delete terminal) ──▶ QRM6-010 (Docs)
 ```
 
 **Parallel tracks:**
@@ -716,7 +718,7 @@ QRM6-006 (Agent Prompts) ──────────▶ QRM6-007 (CLAUDE.md) 
 - QRM6-008 (tests) consolidates test coverage for QRM6-003, QRM6-004, QRM6-005.
 - QRM6-009 (terminal deletion) is the final behavioral change — all alternatives must be working first.
 - QRM6-010 (docs) lands after deletion to avoid documenting a transient state.
-- QRM6-011 (unified logs) lands after deletion + docs — once `apps/terminal/` is gone, the moderator becomes the only "moderator-shaped" log producer and the adapter can replace the missing `terminal-*.jsonl` stream with parser-compatible output.
+- QRM6-011 (unified logs) — moved to QRM7-005.
 
 ## Implementation Notes for Agents
 
