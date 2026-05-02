@@ -218,7 +218,7 @@ These do not block the code fix but are part of bringing the system docs in sync
 | `apps/agent/src/connection/invocation.controller.ts` | Modified | Added `bootstrapContextMetaSchema`, `bootstrapContextSchema` (matching interfaces in `invoke.types.ts`). Added `bootstrapContext: bootstrapContextSchema.optional()` to `invokeRequestSchema`. Replaced one-way `extends` guard with bidirectional key-level `Exclude` guard per architect correction. Updated comment to reference QRM7 follow-up. |
 | `apps/agent/src/connection/invocation.controller.spec.ts` | Modified | Added round-trip regression test (BUG-014): bootstrapContext with nested project/conversation/meta survives `safeParse` with deep equality. Added absent-bootstrapContext test confirming undefined passthrough. |
 | `apps/agent/src/connection/invocation-handler.service.spec.ts` | Modified | Added BUG-014 regression test: multi-entry bootstrapContext (2 project + 2 conversation items) renders all headings (`## Prior Decisions`, `### Project Context`, `### Conversation Context`), all key-value pairs, and correct ordering (Prior Decisions before Task). |
-| `tickets/QRM7-001-schema-first-invoke-request-migration.md` | Created | Follow-up ticket for Option B schema-first migration to eliminate the dual declaration. |
+| `tickets/QRM7-002-schema-first-invoke-request-migration.md` | Created | Follow-up ticket for Option B schema-first migration to eliminate the dual declaration. (Originally filed as QRM7-001; renumbered to QRM7-002 on 2026-05-01 when QRM6-BUG-007 was promoted into QRM7.) |
 
 ### Deviations from Ticket Spec
 

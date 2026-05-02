@@ -26,7 +26,7 @@ The user-visible symptom in CC CLI is harmless-looking — the elicitation promp
 ### Why this is severe
 
 - The QRM6-002…QRM6-007 milestone exists to support exactly this flow. A 60s ceiling makes it unreliable in production-like usage.
-- Combined with [QRM6-BUG-007](QRM6-BUG-007-mcp-session-cleanup-not-firing.md), the user experience for restart scenarios degrades further: a stale moderator entry causes a 60s wait followed by a generic timeout, with no signal that the moderator is dead.
+- Combined with [QRM7-001](QRM7-001-mcp-session-cleanup-not-firing.md), the user experience for restart scenarios degrades further: a stale moderator entry causes a 60s wait followed by a generic timeout, with no signal that the moderator is dead.
 - This regresses behavior that the QRM6-001 spike specifically validated as adequate ("round-trip latency < 1s, user prompt is legible") — the spike measured machine round-trip, not the human's typing window. The role-timeout system was added to bridge that gap; this bug is the missing wire.
 
 ## Design Context
@@ -137,7 +137,7 @@ Pair with an assertion that on `MCP error -32001`, the response envelope is `{ s
 
 ### Out of scope
 
-- Server-side liveness for stale sessions — separate fix in [QRM6-BUG-007](QRM6-BUG-007-mcp-session-cleanup-not-firing.md). After both land, a stale moderator times out fast (BUG-007) while a live-but-thinking user has 5 minutes (this ticket).
+- Server-side liveness for stale sessions — separate fix in [QRM7-001](QRM7-001-mcp-session-cleanup-not-firing.md). After both land, a stale moderator times out fast (QRM7-001) while a live-but-thinking user has 5 minutes (this ticket).
 - Changing `ROLE_TIMEOUTS[moderator]` itself. The 5-minute value was chosen for elicitation; the regression is purely in the wiring.
 - Progress/streaming UX in CC CLI for elicitation — not our code to change.
 
@@ -161,7 +161,7 @@ Pair with an assertion that on `MCP error -32001`, the response envelope is `{ s
 - QRM6-008 Scenario 6 stability — currently passes only because the developer agent retries; should pass first try
 
 ### Relationship to Other Bugs
-- [QRM6-BUG-007](QRM6-BUG-007-mcp-session-cleanup-not-firing.md) — independent fix; together they make moderator-restart and slow-typist scenarios both well-behaved
+- [QRM7-001](QRM7-001-mcp-session-cleanup-not-firing.md) — independent fix; together they make moderator-restart and slow-typist scenarios both well-behaved
 - [QRM6-BUG-005](QRM6-BUG-005-sdk-resume-not-resuming-session.md) — unrelated; mentioned only because all three surfaced in the same playbook run
 
 ### References

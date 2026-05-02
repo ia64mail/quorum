@@ -1,4 +1,4 @@
-# QRM7-002: Moderator Permission Grants Stop Persisting Across Restarts on CC CLI 2.1.126
+# QRM7-003: Moderator Permission Grants Stop Persisting Across Restarts on CC CLI 2.1.126
 
 **Status: Draft**
 

@@ -1,12 +1,12 @@
 ---
-ticketId: QRM7-001
+ticketId: QRM7-002
 title: Schema-First InvokeRequest Migration — Eliminate Dual Declaration
 status: Open
 created: 2026-05-01
 parent: QRM6-BUG-014
 ---
 
-# QRM7-001: Schema-First InvokeRequest Migration — Eliminate Dual Declaration
+# QRM7-002: Schema-First InvokeRequest Migration — Eliminate Dual Declaration
 
 **Status:** Open — follow-up filed from QRM6-BUG-014 (Option B).
 

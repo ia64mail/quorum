@@ -210,7 +210,7 @@ interface InvokeResponse {
 
 - Restructuring the broker's two-layer timeout into a single layer — the redundancy is defensive and harmless.
 - Solving the underlying SDK resume bug ([QRM6-BUG-005](QRM6-BUG-005-sdk-resume-not-resuming-session.md)) — independent fix; once resume works, retries become cheaper but the retry-storm pattern is still wrong.
-- The MCP transport instability that contributes to the moderator's "agent down" inference — see QRM5-BUG-003 / QRM6-BUG-007.
+- The MCP transport instability that contributes to the moderator's "agent down" inference — see QRM5-BUG-003 / QRM7-001.
 - Distributed deduplication across agent containers (e.g., a shared Redis key) — single-container is sufficient because the broker only routes a given role to one connection.
 
 ## Acceptance Criteria
@@ -240,7 +240,7 @@ Cancel the SDK session only when ALL requests for a given correlationId have dis
 
 ### Relationship to Other Bugs
 - [QRM6-BUG-005](QRM6-BUG-005-sdk-resume-not-resuming-session.md) — amplified by this bug; with resume broken, retries are pure waste. Together they cause the worst-case cost.
-- [QRM6-BUG-007](QRM6-BUG-007-mcp-session-cleanup-not-firing.md) — independent. Related in that both bugs cause the moderator to misjudge agent liveness.
+- [QRM7-001](QRM7-001-mcp-session-cleanup-not-firing.md) — independent. Related in that both bugs cause the moderator to misjudge agent liveness. (Was QRM6-BUG-007; promoted to QRM7 stabilization milestone.)
 - [QRM6-BUG-008](QRM6-BUG-008-elicitation-timeout-too-short.md) — same shape (timeout on a slow human-in-the-loop, retry loop). BUG-008 already fixed the moderator-elicitation side; this ticket fixes the architect/teamlead/developer side.
 
 ### References

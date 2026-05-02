@@ -20,7 +20,7 @@ The QRM6 roadmap (D8) explicitly scoped this as a final cleanup ticket after all
 
 > **D8: Delete `apps/terminal/` Entirely — No Legacy Mode.** Remove `apps/terminal/` in the final cleanup ticket. No legacy-mode flag, no toggle, no parallel code path.
 
-The QRM6-008 playbook validated the replacement stack end-to-end (8/10 scenarios passed; the 2 failures are tracked as QRM6-BUG-005 and QRM6-BUG-007, neither related to terminal functionality). The terminal's function is fully subsumed.
+The QRM6-008 playbook validated the replacement stack end-to-end (8/10 scenarios passed; the 2 failures are tracked as QRM6-BUG-005 and QRM7-001 (was QRM6-BUG-007), neither related to terminal functionality). The terminal's function is fully subsumed.
 
 ## Implementation Details
 
