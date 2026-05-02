@@ -2,6 +2,8 @@
 
 **Status: Draft**
 
+> **Cross-ref [QRM7-004](QRM7-004-moderator-cwd-not-aligned-with-workspace.md) — consider both together before implementing.** QRM7-004 proposes moving the moderator's cwd from `/app` to `/mnt/quorum/workspace`, which would relocate the missing `<cwd>/.claude/settings.local.json` write target onto the existing workspace bind-mount and make this ticket's `/app/.claude/` engineering unnecessary. The two tickets describe different symptoms of the same underlying mistake (cwd anchored on an empty `/app`); pick a single resolution path rather than landing both. If QRM7-004 is accepted, close this ticket as superseded.
+
 ## Summary
 
 After QRM6-BUG-013 bumped the moderator's `@anthropic-ai/claude-code` pin from 2.1.117 → 2.1.126, the moderator re-prompts for every MCP tool permission on each container restart — regressing the persistence achieved by QRM6-BUG-009 Phase 2. Root cause: the v2.1.119 settings-precedence overhaul moved interactive "always allow" grants from user-scope `~/.claude.json` (which lives on the named volume) to project-local `<cwd>/.claude/settings.local.json`. The moderator's cwd is `/app`, which is read-only at the Docker image layer, so the writes silently fail and grants survive only in process memory.
