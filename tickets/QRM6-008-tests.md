@@ -353,3 +353,69 @@ Stale post-restart MCP session reported as alive: `332e0a45-2527-49d8-a710-9b3d3
 1. **Session cache operations** in `mcp.service.ts` — no debug log on cache set/get; cache hits/misses are invisible. Diagnosis of QRM6-BUG-005 from logs alone was impossible.
 2. **Elicitation decline/cancel** — `McpElicitationConnection` only logs on exception. Decline and cancel paths are silent.
 3. **Session lifecycle** — `Session created` is logged; nothing on close or cleanup. Combined with QRM7-001 (was QRM6-BUG-007), this means session leaks are doubly invisible.
+
+---
+
+## Run 2026-05-01
+
+- **Correlation ID:** `fed351d3-8f2e-4ad9-a798-cfd3c0444b14`
+- **Executor:** Moderator CC CLI session inside `quorum-moderator-1`, driven interactively by the human orchestrator. Host-side commands (`docker compose ...`, `docker compose logs`) and the Scenario 9 restart probe were executed from the host.
+- **CC CLI version:** 2.1.126 (bumped from 2.1.117 in prior run)
+- **Stack:** moderator + mcp-server + opensearch + ollama + architect + teamlead + developer (built with `HOST_UID=1002 HOST_GID=1002`).
+- **Purpose:** Final-state capture after QRM6 closure with stabilization items rescheduled to QRM7. Validates that bugs surfaced in 2026-04-25 (BUG-005 session resume, BUG-006 entrypoint symlink, BUG-008 elicitation timeout) are resolved, and that QRM7-001 (session cleanup) remains the only functional gap.
+
+### Scenario results
+
+| # | Scenario | Type | Result | Notes (delta vs 2026-04-25 in **bold**) |
+|---|----------|------|--------|------------------------------------------|
+| 1 | Container Health | Deterministic | **PASS** | CC CLI `2.1.126` (matches Dockerfile pin); `~/.claude/settings.json` carries `permissions.deny: ["Write","Edit","NotebookEdit"]` and a new `systemPrompt` directive instructing the moderator to call `register_agent`/`new_conversation` on each turn and use `/code-review` for review dispatch; `claude mcp list` reports `quorum: ✓ Connected`. **`policy-limits.json` is new** in `/home/quorum/.claude/`. |
+| 2 | Elicitation Registration | Deterministic | **PASS** | Registry shows all four agents `connected: true`. mcp-server log: `Agent moderator registered via MCP elicitation (session-bound)`. **The legacy `terminal` HTTP-callback registration race observed in 2026-04-25 is gone — QRM6-009 (terminal deletion) closed it.** |
+| 3 | new_conversation | Live LLM | **PASS** | `new_conversation` returned `fed351d3-...`. `context_store(scope=conversation, key=qrm6-rerun-003)` and matching `context_query` both succeeded with no explicit `correlationId`. Server log confirms auto-injection: `Embedded document [conversation:fed351d3-...:qrm6-rerun-003]` and `context_query: ... → 1 item(s)`. |
+| 4 | Caller Identity | Live LLM | **PASS** | `invoke_agent(target=architect)` succeeded without explicit `callerRole`. Server log: `invoke_agent: moderator → architect [depth=0, correlationId=fed351d3-...]`. Architect responded `QRM6_IDENTITY_OK_RERUN`. |
+| 5 | Session Tracking | Live LLM | **PASS** | **Was FAIL in 2026-04-25 — QRM6-BUG-005 fix confirmed end-to-end.** Both consecutive `invoke_agent(target=developer)` calls returned the same SDK sessionId `a5a6c934-d370-43ad-8b71-e7126fb86361`. Second call also notably faster (3.5s vs 7.8s), consistent with session resume skipping initialization. (Obs-gap from prior run — still no explicit "session cache hit" log on the server — remains; passing inferred from behavioral evidence.) |
+| 6 | Elicitation Round-Trip (capstone) | Live LLM | **PASS** | Developer called `invoke_agent(target=moderator)` at depth=1; elicitation prompt appeared inline; user answered `qrm6-rerun-elicit-A`; developer wrote `project:_:qrm6-rerun-elicit-A = "QRM6 elicitation round-trip RERUN verified"`; clarification record `clarification:developer:fed351d3-...` auto-persisted at project scope with matching `question`/`answer` fields. **Completed in a single elicitation attempt vs. 3 attempts in 2026-04-25 — QRM6-BUG-008 (60s elicitation timeout) fix confirmed.** Same developer SDK sessionId `a5a6c934-...` reused across the 3rd consecutive call. |
+| 7 | Elicitation Decline | Live LLM | **PASS** | User declined the prompt. Developer received `success=false` after ~3.6s and proceeded with its own naming convention choice — no crash, no retry loop. No `clarification:developer:...` record created for this scenario (the only record under `fed351d3-...` remained the one from Scenario 6). Same developer SDK sessionId `a5a6c934-...` (4th consecutive call). Decline log path still silent (obs-gap 2 from prior run). |
+| 8 | Tool Restrictions | Deterministic | **PASS** | `permissions.deny: ["Write","Edit","NotebookEdit"]` confirmed via `cat /home/quorum/.claude/settings.json`. (No new probe of CC CLI tool exposure performed — assumed unchanged from 2026-04-25 finding that the denied tools are absent from the tool list, not just blocked at call time.) |
+| 9 | Session Cleanup | Deterministic | **FAIL** | **Unchanged — QRM7-001 still open.** Pre-restart moderator MCP session `b149f26e-9da5-4695-9160-b82811a13343` (created 2:50:18) has zero `Session closed` / `Session state cleaned up` log entries after `docker compose restart moderator`. System-wide: dozens of `Session created` lines across the log, **zero** `Session closed` lines. Registry continues reporting `moderator: connected:true` against the dead session. Post-restart session `7aacd4eb-e746-4de0-9fe4-f26d73ceada5` was created (entrypoint `claude mcp list` health check), no `register_agent` from the new container until the user re-attaches. |
+| 10 | Log Correlation | Deterministic | **PASS** | 62 entries share `fed351d3-...` across `mcp-server`, `architect`, `developer`. Full chain visible: S4 `moderator → architect`; S5 two `moderator → developer` invocations sharing the same SDK session; S6 `moderator → developer (depth=0) → moderator (depth=1, success=true) → context_store → clarification persist → developer return`; S7 `moderator → developer (depth=0) → moderator (depth=1, success=false=decline) → developer return`. |
+
+**Tally:** 9 PASS · 1 FAIL · 0 BLOCKED. (Prior run: 8 PASS · 2 FAIL.)
+
+### Session IDs collected
+
+| Scenario | Agent | Session ID |
+|----------|-------|------------|
+| 4 | architect | `6b75bd08-fe36-419b-9bcd-506bb2e29285` |
+| 5 (1st) | developer | `a5a6c934-d370-43ad-8b71-e7126fb86361` |
+| 5 (2nd) | developer | `a5a6c934-d370-43ad-8b71-e7126fb86361` (resumed — same id) |
+| 6 | developer | `a5a6c934-d370-43ad-8b71-e7126fb86361` (3rd consecutive — resumed) |
+| 7 | developer | `a5a6c934-d370-43ad-8b71-e7126fb86361` (4th consecutive — resumed) |
+
+Pre-restart moderator MCP session that did NOT close on shutdown: `b149f26e-9da5-4695-9160-b82811a13343`. Post-restart MCP session created (no `register_agent` issued): `7aacd4eb-e746-4de0-9fe4-f26d73ceada5`.
+
+### Bugs surfaced, confirmed fixed, or carried over
+
+| Bug | Status this run | Notes |
+|-----|-----------------|-------|
+| [QRM6-BUG-005](QRM6-BUG-005-sdk-resume-not-resuming-session.md) | **Confirmed fixed** | Scenario 5 was the original surfacing point — now passes end-to-end. Same SDK sessionId reused across 4 consecutive developer invocations within the same conversation. |
+| [QRM6-BUG-006](QRM6-BUG-006-moderator-entrypoint-dangling-symlink.md) | **Confirmed fixed** | No precondition fix needed mid-session; container started cleanly. |
+| [QRM6-BUG-008](QRM6-BUG-008-elicitation-timeout-too-short.md) | **Confirmed fixed** | Scenario 6 completed in a single elicitation attempt (vs 3 attempts / 2 timeouts in 2026-04-25). |
+| [QRM7-001](QRM7-001-mcp-session-cleanup-not-firing.md) | **Open, reproduces** | Scenario 9 failure mode unchanged. Functional break: `invoke_agent(target=moderator)` after a moderator restart would still route to a dead `McpElicitationConnection`. |
+
+No new bugs surfaced this run.
+
+### Observability gaps (carried over from 2026-04-25, no tickets filed)
+
+1. **Session cache operations** — `mcp.service.ts` still doesn't emit a "session cache hit/miss" debug line; Scenario 5 PASS was inferred from behavioral evidence (sessionId equality + faster 2nd-call), not from server logs.
+2. **Elicitation decline/cancel** — `McpElicitationConnection` decline and cancel paths remain silent; Scenario 7 decline was visible only as `invoke_agent returning ... success=false handlerMs=3627`, which is not specific to the decline cause.
+3. **Session lifecycle** — `Session created` logged but no close/cleanup line. Combined with QRM7-001, session leaks remain doubly invisible.
+
+These were noted as "sub-bug-worthy, suggest bundling" in the prior run. Recommend filing as a single observability ticket in QRM7 if the team agrees to invest in diagnosability before further milestone work.
+
+### Final state assessment
+
+QRM6-008 acceptance criteria are met for the closing run:
+
+- 9 of 10 scenarios PASS; the single FAIL (Scenario 9) is tracked as **QRM7-001** with stabilization-milestone ownership and is non-blocking for QRM6 closure.
+- All three QRM6-era bugs that were live at 2026-04-25 (BUG-005, BUG-006, BUG-008) are confirmed fixed via this re-run.
+- QRM6 milestone closes with no new bugs surfaced.
