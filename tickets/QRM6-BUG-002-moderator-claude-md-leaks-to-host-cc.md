@@ -1,6 +1,6 @@
 # QRM6-BUG-002: Moderator Identity in Project-Root CLAUDE.md Leaks to Host CC Sessions
 
-**Status: Open**
+**Status: Implemented** — moderator prompt moved to container user-level ~/.claude/CLAUDE.md; workspace CLAUDE.md cleaned to project docs only (QRM6-009 commit a4071b0)
 
 ## Summary
 

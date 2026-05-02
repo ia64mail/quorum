@@ -1,6 +1,6 @@
 # QRM6-BUG-003: Moderator MCP Server Config Not Loaded From `settings.json`
 
-**Status: Open**
+**Status: Implemented** — fixed in commit 1f1bdb5
 
 ## Summary
 

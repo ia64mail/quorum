@@ -1,6 +1,6 @@
 # QRM6-BUG-009: Moderator Entrypoint Wipes CC CLI State on Every Container Start
 
-**Status: In Progress (re-opened — initial fix was incomplete)**
+**Status: Implemented** — Phase 1 settings.json merge (commit 13fce4e), Phase 2 claude.json persistence (commit 2fa5c5d). Regression from CC CLI 2.1.126 version bump tracked separately as QRM7-003.
 
 ## Summary
 

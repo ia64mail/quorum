@@ -1,6 +1,6 @@
 # QRM6-BUG-011: Server-Side SSE Heartbeat and TCP Keepalive for Third-Party MCP Clients
 
-**Status:** Open
+**Status: Implemented** — SSE heartbeat on POST and TCP keepalive added (commit b826ca7)
 
 ## Summary
 

@@ -1,6 +1,6 @@
 # QRM6-BUG-004: Elicitation Round-Trip Blocked by Circular-Call Safeguard
 
-**Status: Open**
+**Status: Implemented** — fixed in commit 1f1bdb5 (bundled with QRM6-BUG-003)
 
 ## Summary
 

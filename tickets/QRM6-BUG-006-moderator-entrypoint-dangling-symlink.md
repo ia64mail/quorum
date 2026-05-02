@@ -1,6 +1,6 @@
 # QRM6-BUG-006: Moderator Entrypoint `cp` Fails Through Dangling Symlink Under Tmpfs `/tmp`
 
-**Status: Open** — patch landed in the working tree during the QRM6-008 2026-04-25 run; pending commit.
+**Status: Implemented** — entrypoint patched to write directly to symlink target (commit 6cca246)
 
 ## Summary
 

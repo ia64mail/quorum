@@ -1,6 +1,6 @@
 # QRM6-BUG-001: Moderator `.claude` Mount Conflict Blocks Stack Startup
 
-**Status: Open**
+**Status: Implemented** — mount conflict resolved by splitting security anchors (commits bc9d05d, 1d2fc89)
 
 ## Summary
 

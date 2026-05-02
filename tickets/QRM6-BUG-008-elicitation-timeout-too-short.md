@@ -1,6 +1,6 @@
 # QRM6-BUG-008: MCP Elicitation Ignores Role Timeout — Hardcoded SDK Default (60s) Too Short for Human-in-the-Loop
 
-**Status: Open**
+**Status: Implemented** — role timeout forwarded to MCP elicitation (commit 9562493)
 
 ## Summary
 
