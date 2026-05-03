@@ -21,6 +21,9 @@ import {
 } from '../registry';
 import { McpServerConfigService } from '../config';
 
+/** How long a session can be idle before isConnected() returns false (QRM7-001). */
+export const SESSION_LIVENESS_TIMEOUT_MS = 120_000; // 2 minutes
+
 /**
  * Per-session state tracked by the MCP server. Keyed by the per-session
  * {@link McpServer} instance created in {@link McpService.connect}.
@@ -29,6 +32,7 @@ import { McpServerConfigService } from '../config';
  * - `role` is set when the client calls `register_agent`.
  * - `correlationId` will be set by `new_conversation` (QRM6-005).
  * - `agentSessions` is updated after each `invoke_agent` response.
+ * - `lastSeenAt` is refreshed on every client request (QRM7-001).
  */
 export interface McpSessionState {
   /** The role bound to this session, populated at `register_agent` time. */
@@ -37,6 +41,8 @@ export interface McpSessionState {
   correlationId?: string;
   /** Cached sessionId per target role, updated after `invoke_agent` responses. */
   agentSessions: Map<AgentRole, string>;
+  /** Epoch ms of the last client activity — used for liveness detection (QRM7-001). */
+  lastSeenAt: number;
 }
 
 /**
@@ -85,7 +91,10 @@ export class McpService implements OnModuleInit {
   /** Attach a **new** MCP server instance to a transport (one per client session). */
   async connect(transport: Transport): Promise<McpServer> {
     const session = new McpServer({ name: 'quorum', version: '0.1.0' });
-    this.sessionStates.set(session, { agentSessions: new Map() });
+    this.sessionStates.set(session, {
+      agentSessions: new Map(),
+      lastSeenAt: Date.now(),
+    });
     this.registerTools(session);
     await session.connect(transport);
     return session;
@@ -97,6 +106,21 @@ export class McpService implements OnModuleInit {
     if (deleted) {
       this.logger.log('Session state cleaned up');
     }
+  }
+
+  /** Update the last-seen timestamp for a session (QRM7-001). */
+  touchSession(server: McpServer): void {
+    const state = this.sessionStates.get(server);
+    if (state) {
+      state.lastSeenAt = Date.now();
+    }
+  }
+
+  /** Check whether a session's lastSeenAt is within the liveness grace period (QRM7-001). */
+  isSessionAlive(server: McpServer): boolean {
+    const state = this.sessionStates.get(server);
+    if (!state) return false;
+    return Date.now() - state.lastSeenAt < SESSION_LIVENESS_TIMEOUT_MS;
   }
 
   /** Register all tools and resources on the given server instance. */
@@ -310,8 +334,15 @@ export class McpService implements OnModuleInit {
           };
         }
 
-        // Create elicitation-based connection using the per-session McpServer
-        const connection = new McpElicitationConnection(role, server);
+        // Create elicitation-based connection using the per-session McpServer.
+        // QRM7-001: pass a liveness closure so isConnected() delegates to
+        // lastSeenAt-based detection instead of hardcoding true.
+        const livenessCheck = () => this.isSessionAlive(server);
+        const connection = new McpElicitationConnection(
+          role,
+          server,
+          livenessCheck,
+        );
         this.registry.register(connection);
         this.logger.log(
           `Agent ${role} registered via MCP elicitation (session-bound)`,

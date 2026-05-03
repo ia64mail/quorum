@@ -12,6 +12,8 @@ const mockMcpServer = { _mockServer: true };
 const mockMcpService = {
   connect: jest.fn().mockResolvedValue(mockMcpServer),
   disconnect: jest.fn(),
+  touchSession: jest.fn(),
+  isSessionAlive: jest.fn().mockReturnValue(true),
 };
 
 function mockReq(
@@ -24,12 +26,18 @@ function mockReq(
   } as unknown as Request;
 }
 
+interface MockSocket {
+  setKeepAlive: jest.Mock;
+  destroyed: boolean;
+}
+
 interface MockResponse {
   status: jest.Mock;
   json: jest.Mock;
   on: jest.Mock;
   write: jest.Mock;
   writableEnded: boolean;
+  socket: MockSocket;
 }
 
 function mockRes(): { res: Response; mock: MockResponse } {
@@ -39,6 +47,7 @@ function mockRes(): { res: Response; mock: MockResponse } {
     on: jest.fn().mockReturnThis(),
     write: jest.fn().mockReturnValue(true),
     writableEnded: false,
+    socket: { setKeepAlive: jest.fn(), destroyed: false },
   };
   return { res: mock as unknown as Response, mock };
 }
@@ -332,6 +341,177 @@ describe('McpController', () => {
 
       jest.advanceTimersByTime(60_000);
       expect(mockGetRes.write).not.toHaveBeenCalled();
+    });
+
+    it('should call touchSession on successful keepalive write (QRM7-001)', async () => {
+      // Create a session
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      // Open SSE stream
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { res: resGet } = mockRes();
+      await controller.handleGet(reqGet, resGet);
+
+      // Clear touchSession calls from POST/GET handling
+      mockMcpService.touchSession.mockClear();
+
+      // First ping at 30s — should also call touchSession
+      jest.advanceTimersByTime(30_000);
+      expect(mockMcpService.touchSession).toHaveBeenCalledWith(mockMcpServer);
+    });
+
+    it('should set TCP keepalive on SSE socket (QRM7-001 Layer 2)', async () => {
+      // Create a session
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      // Open SSE stream
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { res: resGet, mock: mockGetRes } = mockRes();
+      await controller.handleGet(reqGet, resGet);
+
+      expect(mockGetRes.socket.setKeepAlive).toHaveBeenCalledWith(true, 15_000);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // QRM7-001: touchSession on POST/GET
+  // -------------------------------------------------------------------------
+
+  describe('touchSession on request handling (QRM7-001)', () => {
+    it('should call touchSession on POST for existing session', async () => {
+      // Create session first
+      const req1 = mockReq({ body: { jsonrpc: '2.0' } });
+      const { res: res1 } = mockRes();
+      await controller.handlePost(req1, res1);
+
+      mockMcpService.touchSession.mockClear();
+
+      // Second request with session header
+      const req2 = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+        body: { jsonrpc: '2.0', method: 'tools/list' },
+      });
+      const { res: res2 } = mockRes();
+      await controller.handlePost(req2, res2);
+
+      expect(mockMcpService.touchSession).toHaveBeenCalledWith(mockMcpServer);
+    });
+
+    it('should call touchSession on GET for valid session', async () => {
+      // Create session first
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      mockMcpService.touchSession.mockClear();
+
+      // GET with session header
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { res: resGet } = mockRes();
+      await controller.handleGet(reqGet, resGet);
+
+      expect(mockMcpService.touchSession).toHaveBeenCalledWith(mockMcpServer);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // QRM7-001: Liveness reaper
+  // -------------------------------------------------------------------------
+
+  describe('liveness reaper (QRM7-001)', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      // Start the reaper under fake timers so advanceTimersByTime controls it
+      controller.onModuleInit();
+    });
+
+    afterEach(() => {
+      controller.onModuleDestroy();
+      jest.useRealTimers();
+    });
+
+    it('should evict sessions whose isSessionAlive returns false', async () => {
+      // Create a session
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      // Mark session as stale
+      mockMcpService.isSessionAlive.mockReturnValue(false);
+
+      // Trigger the reaper
+      jest.advanceTimersByTime(30_000);
+
+      // Session should be reaped — GET should 404
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { mock: mockGetRes } = mockRes();
+      await controller.handleGet(reqGet, mockGetRes as unknown as Response);
+      expect(mockGetRes.status).toHaveBeenCalledWith(404);
+
+      // disconnect should have been called
+      expect(mockMcpService.disconnect).toHaveBeenCalledWith(mockMcpServer);
+    });
+
+    it('should NOT evict sessions whose isSessionAlive returns true', async () => {
+      // Create a session
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      // Session is alive
+      mockMcpService.isSessionAlive.mockReturnValue(true);
+
+      // Trigger the reaper
+      jest.advanceTimersByTime(30_000);
+
+      // Session should still exist — GET should work
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { res: resGet } = mockRes();
+      await controller.handleGet(reqGet, resGet);
+
+      expect(mockTransportInstance.handleRequest).toHaveBeenCalledWith(
+        reqGet,
+        resGet,
+      );
+    });
+
+    it('should call disconnect on evicted sessions', async () => {
+      // Create a session
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      mockMcpService.disconnect.mockClear();
+
+      // Mark session as stale and trigger reaper
+      mockMcpService.isSessionAlive.mockReturnValue(false);
+      jest.advanceTimersByTime(30_000);
+
+      expect(mockMcpService.disconnect).toHaveBeenCalledTimes(1);
+      expect(mockMcpService.disconnect).toHaveBeenCalledWith(mockMcpServer);
+    });
+
+    it('should clear the reaper interval on module destroy', () => {
+      const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
+
+      controller.onModuleDestroy();
+
+      expect(clearIntervalSpy).toHaveBeenCalled();
+      clearIntervalSpy.mockRestore();
     });
   });
 });

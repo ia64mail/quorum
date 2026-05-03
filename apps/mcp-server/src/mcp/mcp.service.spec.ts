@@ -3,9 +3,9 @@ import { AgentRole, ContextScope, ContextStore } from '@app/common';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { MessageBroker } from '../messaging';
-import { AgentRegistry } from '../registry';
+import { AgentRegistry, McpElicitationConnection } from '../registry';
 import { McpServerConfigService } from '../config';
-import { McpService } from './mcp.service';
+import { McpService, SESSION_LIVENESS_TIMEOUT_MS } from './mcp.service';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -689,6 +689,163 @@ describe('McpService', () => {
         decision: string;
       };
       expect(parsed.decision).toBe('use REST');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // QRM7-001: touchSession / isSessionAlive / connect lastSeenAt
+  // -------------------------------------------------------------------------
+
+  describe('touchSession (QRM7-001)', () => {
+    let mockTransport: {
+      onmessage: null;
+      onclose: null;
+      onerror: null;
+      close: jest.Mock;
+      send: jest.Mock;
+      start: jest.Mock;
+      sessionId: string | undefined;
+    };
+
+    beforeEach(() => {
+      mockTransport = {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    });
+
+    it('should update lastSeenAt on existing session', async () => {
+      const server = await service.connect(mockTransport as never);
+      const before = Date.now();
+      service.touchSession(server);
+      // isSessionAlive should return true immediately after touch
+      expect(service.isSessionAlive(server)).toBe(true);
+      // Verify by checking that a fresh touch doesn't throw
+      service.touchSession(server);
+      expect(Date.now()).toBeGreaterThanOrEqual(before);
+    });
+
+    it('should be a no-op for unknown server', () => {
+      const unknownServer = { _unknown: true } as never;
+      // Should not throw
+      service.touchSession(unknownServer);
+    });
+  });
+
+  describe('isSessionAlive (QRM7-001)', () => {
+    let mockTransport: {
+      onmessage: null;
+      onclose: null;
+      onerror: null;
+      close: jest.Mock;
+      send: jest.Mock;
+      start: jest.Mock;
+      sessionId: string | undefined;
+    };
+
+    beforeEach(() => {
+      mockTransport = {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    });
+
+    it('should return true when lastSeenAt is fresh', async () => {
+      const server = await service.connect(mockTransport as never);
+      service.touchSession(server);
+      expect(service.isSessionAlive(server)).toBe(true);
+    });
+
+    it('should return false when lastSeenAt is stale', async () => {
+      const server = await service.connect(mockTransport as never);
+      // Advance time past the liveness timeout
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(false);
+      jest.useRealTimers();
+    });
+
+    it('should return false after disconnect (state deleted)', async () => {
+      const server = await service.connect(mockTransport as never);
+      service.disconnect(server);
+      expect(service.isSessionAlive(server)).toBe(false);
+    });
+
+    it('should return false for unknown server', () => {
+      const unknownServer = { _unknown: true } as never;
+      expect(service.isSessionAlive(unknownServer)).toBe(false);
+    });
+  });
+
+  describe('register_agent moderator with liveness closure (QRM7-001)', () => {
+    let mockTransport: {
+      onmessage: null;
+      onclose: null;
+      onerror: null;
+      close: jest.Mock;
+      send: jest.Mock;
+      start: jest.Mock;
+      sessionId: string | undefined;
+    };
+
+    beforeEach(() => {
+      mockTransport = {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    });
+
+    it('should create McpElicitationConnection with liveness closure for moderator', async () => {
+      const server = await service.connect(mockTransport as never);
+
+      // Pull the register_agent handler from the per-session server
+      const tools = (
+        server as unknown as {
+          _registeredTools: Record<
+            string,
+            {
+              handler: (
+                args: Record<string, unknown>,
+              ) => Promise<CallToolResult>;
+            }
+          >;
+        }
+      )._registeredTools;
+      const handler = (args: Record<string, unknown>) =>
+        tools['register_agent'].handler(args);
+
+      await handler({ role: AgentRole.moderator });
+
+      expect(mockRegistry.register).toHaveBeenCalledTimes(1);
+      const registerCalls = mockRegistry.register.mock.calls as Array<
+        [McpElicitationConnection]
+      >;
+      const connection = registerCalls[0][0];
+      expect(connection).toBeInstanceOf(McpElicitationConnection);
+      expect(connection.role).toBe(AgentRole.moderator);
+
+      // The liveness closure should reflect isSessionAlive state
+      // Fresh session → isConnected() should be true
+      expect(connection.isConnected()).toBe(true);
+
+      // After disconnect → isConnected() should be false
+      service.disconnect(server);
+      expect(connection.isConnected()).toBe(false);
     });
   });
 });

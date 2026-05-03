@@ -21,23 +21,31 @@ export class McpElicitationConnection extends AgentConnection {
   private readonly server: McpServer;
 
   /**
-   * @param role   - The agent role (always moderator, enforced by caller).
-   * @param server - The **per-session** McpServer instance that owns the
-   *                 moderator's transport. `elicitInput()` lives on the
-   *                 underlying `server.server` (the SDK's `Server` class).
+   * @param role           - The agent role (always moderator, enforced by caller).
+   * @param server         - The **per-session** McpServer instance that owns the
+   *                         moderator's transport. `elicitInput()` lives on the
+   *                         underlying `server.server` (the SDK's `Server` class).
+   * @param livenessCheck  - Optional closure returning whether the session is still
+   *                         alive (QRM7-001). Defaults to `() => true` for backward
+   *                         compatibility with tests that construct without it.
    */
-  constructor(role: AgentRole, server: McpServer) {
+  constructor(
+    role: AgentRole,
+    server: McpServer,
+    private readonly livenessCheck: () => boolean = () => true,
+  ) {
     super();
     this.role = role;
     this.server = server;
   }
 
   /**
-   * Optimistic availability — always returns `true`.
-   * Session disconnects are discovered when {@link handle} fails.
+   * Delegates to the `livenessCheck` closure injected at construction time.
+   * When wired via `register_agent`, this checks `lastSeenAt` on the session
+   * state (QRM7-001). Default returns `true` for backward compatibility.
    */
   isConnected(): boolean {
-    return true;
+    return this.livenessCheck();
   }
 
   async handle(

@@ -1,6 +1,6 @@
 # QRM7-001: MCP Session Cleanup Does Not Fire on Container Shutdown — Stale Sessions Reported as Connected
 
-**Status:** Accepted — code review passed 2026-05-03. Promoted to QRM7 stabilization milestone (was QRM6-BUG-007).
+**Status:** Done — implemented and reviewed 2026-05-03. All 4 layers implemented, architect approved, team lead code review accepted, 700/700 tests passing. Promoted to QRM7 stabilization milestone (was QRM6-BUG-007).
 
 > **Renumbered 2026-05-01:** Originally filed as QRM6-BUG-007 during the QRM6-008 playbook on 2026-04-25. Promoted to QRM7-001 because it is the load-bearing fix for the moderator-reconnect failure mode and belongs in the stabilization milestone. The 2026-05-01 live-log analysis below confirms the bug is actively manifesting in production runs.
 
@@ -208,6 +208,398 @@ Layer 1 fixes `McpElicitationConnection`. The four `HttpAgentConnection`-backed 
 
 - Fixing the MCP elicitation timeout itself — that is [QRM6-BUG-008](QRM6-BUG-008-elicitation-timeout-too-short.md). The two bugs interact (a dead moderator multiplies elicitation pain), but the fixes are independent.
 - Adding general per-MCP-tool observability (separate ticket if we want it).
+
+## Architecture Design
+
+> *Incorporated from standalone design doc by Architect, 2026-05-03 (revised 2026-05-03). Approved. Problem statement omitted — see Problem Statement and Live Evidence sections above.*
+
+### Refined Diagnosis (2026-05-03 log analysis)
+
+Analysis of `mcp-server-20260501T144144.jsonl` revealed that all moderator outgoing `invoke_agent` calls returned successfully despite 50 "Session created" events cycling every ~15 minutes. The 15-minute session cycling produces new GET/SSE connections (CC CLI's server-initiated message stream) but does NOT interrupt in-flight POST requests. The stale `McpElicitationConnection` only manifests in the reverse direction: when an agent tries to elicit the moderator via a dead session.
+
+### Design — Three Required Layers
+
+#### Layer 1: `lastSeenAt`-based `isConnected()` — Fail-fast routing
+
+The single most important layer for the agent-to-moderator path. When an agent calls `invoke_agent(target=moderator)` and the moderator's session is dead, this makes the broker reject immediately ("Agent moderator not connected") instead of waiting the full 5-minute elicitation timeout.
+
+##### Data flow
+
+```
+POST /mcp ──→ McpController ──→ McpService.touchSession(server) ──→ state.lastSeenAt = Date.now()
+GET  /mcp ──→ McpController ──→ McpService.touchSession(server) ──→ state.lastSeenAt = Date.now()
+SSE keepalive write succeeds ──→ McpService.touchSession(server) ──→ state.lastSeenAt = Date.now()
+                                                                          │
+invoke_agent(target=moderator) ──→ registry.isAvailable() ──→ conn.isConnected()
+                                                                          │
+                                                              livenessCheck() closure
+                                                                          │
+                                                              Date.now() - state.lastSeenAt < GRACE
+```
+
+##### File changes
+
+**`apps/mcp-server/src/mcp/mcp.service.ts`**
+
+1. Add `lastSeenAt: number` to `McpSessionState` interface:
+   ```typescript
+   export interface McpSessionState {
+     role?: AgentRole;
+     correlationId?: string;
+     agentSessions: Map<AgentRole, string>;
+     lastSeenAt: number;  // NEW — epoch ms, updated on every client request
+   }
+   ```
+
+2. Initialize `lastSeenAt` in `connect()`:
+   ```typescript
+   this.sessionStates.set(session, { agentSessions: new Map(), lastSeenAt: Date.now() });
+   ```
+
+3. Add `touchSession()` and `isSessionAlive()` public methods:
+   ```typescript
+   /** Update the last-seen timestamp for a session. */
+   touchSession(server: McpServer): void {
+     const state = this.sessionStates.get(server);
+     if (state) {
+       state.lastSeenAt = Date.now();
+     }
+   }
+
+   /** Check whether a session's lastSeenAt is within the liveness grace period. */
+   isSessionAlive(server: McpServer): boolean {
+     const state = this.sessionStates.get(server);
+     if (!state) return false;
+     return Date.now() - state.lastSeenAt < SESSION_LIVENESS_TIMEOUT_MS;
+   }
+   ```
+
+4. In `register_agent` handler for moderator, pass a liveness closure:
+   ```typescript
+   const livenessCheck = () => this.isSessionAlive(server);
+   const connection = new McpElicitationConnection(role, server, livenessCheck);
+   ```
+
+**`apps/mcp-server/src/registry/mcp-elicitation-connection.ts`**
+
+1. Add `livenessCheck` parameter to constructor:
+   ```typescript
+   constructor(
+     role: AgentRole,
+     server: McpServer,
+     private readonly livenessCheck: () => boolean = () => true,
+   ) { ... }
+   ```
+
+2. Replace `isConnected()`:
+   ```typescript
+   isConnected(): boolean {
+     return this.livenessCheck();
+   }
+   ```
+   The default `() => true` preserves backward compatibility for tests that construct without the closure.
+
+**`apps/mcp-server/src/mcp/mcp.controller.ts`**
+
+1. On POST for existing session — touch before delegating:
+   ```typescript
+   if (sessionId && this.sessions.has(sessionId)) {
+     const transport = this.sessions.get(sessionId)!;
+     const mcpServer = this.mcpServers.get(sessionId);
+     if (mcpServer) this.mcpService.touchSession(mcpServer);  // NEW
+     await transport.handleRequest(req, res, req.body);
+     return;
+   }
+   ```
+
+2. On GET — touch for valid sessions:
+   ```typescript
+   const mcpServer = this.mcpServers.get(sessionId);
+   if (mcpServer) this.mcpService.touchSession(mcpServer);  // NEW
+   ```
+
+3. Modify `startSseKeepalive` to accept an optional `McpServer` and touch on successful writes:
+   ```typescript
+   private startSseKeepalive(res: Response, server?: McpServer): void {
+     const interval = setInterval(() => {
+       if (res.writableEnded) {
+         clearInterval(interval);
+         return;
+       }
+       try {
+         res.write(': ping\n\n');
+         if (server) this.mcpService.touchSession(server);  // NEW
+       } catch {
+         clearInterval(interval);
+       }
+     }, SSE_KEEPALIVE_INTERVAL_MS);
+     res.on('close', () => clearInterval(interval));
+   }
+   ```
+
+4. Pass the mcpServer to `startSseKeepalive` from both GET and POST keepalive call sites.
+
+##### Constant
+
+```typescript
+/** How long a session can be idle before isConnected() returns false. */
+const SESSION_LIVENESS_TIMEOUT_MS = 120_000; // 2 minutes
+```
+
+Defined in `mcp.service.ts`. 2 minutes is deliberately generous:
+- Exceeds SSE keepalive interval (30s) by 4×, preventing false negatives during normal operation
+- Ensures no false disconnection while the moderator's CC CLI session is genuinely active — during long-running outgoing calls, the POST response's SSE keepalive refreshes `lastSeenAt` every 30s
+- Short enough that a dead session is detected within 2 minutes — dramatically better than the current infinite wait (5-minute elicitation timeout on a dead session)
+
+**Why SSE keepalive touch is critical:** It prevents `isConnected()` false negatives during long operations. When a moderator is waiting for a long outgoing `invoke_agent` call (up to 30 min), no new POST requests arrive, but the POST response SSE stream is alive and pinging every 30s. Each successful write refreshes `lastSeenAt`, proving the moderator's session is alive and able to receive elicitations from other agents. Without this, an agent calling `invoke_agent(target=moderator)` during a long outgoing call would get a false "not connected" rejection. When the client actually dies mid-call, `res.write()` eventually fails (TCP keepalive from Layer 2 accelerates this), `lastSeenAt` stops refreshing, and `isConnected()` correctly returns `false`.
+
+**Note on moderator outgoing calls:** Log analysis confirmed that the moderator's own outgoing `invoke_agent` calls are NOT affected by the `isConnected()` bug — the POST carrying the tool call stays open independently of MCP session lifecycle. The SSE keepalive touch mechanism serves the *reverse* direction: it keeps `lastSeenAt` fresh so that `isConnected()` accurately reports availability for the agent-to-moderator elicitation path.
+
+##### Interaction with message broker
+
+The broker already checks `isConnected()` at routing time (line 52 of `message-broker.service.ts`):
+```typescript
+if (!agent.isConnected()) {
+  const error = `Agent ${target} not connected`;
+  ...
+  return { success: false, error };
+}
+```
+
+No broker changes needed. Once `isConnected()` returns `false`, any agent's `invoke_agent(target=moderator)` fails immediately with "Agent moderator not connected" instead of waiting the full elicitation timeout against a dead session.
+
+---
+
+#### Layer 2: TCP keepalive on SSE sockets — Faster dead-peer detection
+
+Without TCP keepalive, Linux defaults to ~2-hour idle detection. Even with application-level SSE pings, `res.write()` can succeed against a dead peer because the kernel is buffering in the send queue. TCP keepalive makes the kernel probe the peer actively, so `res.write()` fails sooner when the peer is actually dead.
+
+##### File changes
+
+**`apps/mcp-server/src/mcp/mcp.controller.ts`**
+
+In `startSseKeepalive`, set TCP keepalive on the underlying socket:
+```typescript
+private startSseKeepalive(res: Response, server?: McpServer): void {
+  // Layer 2: TCP keepalive for faster dead-peer detection
+  const socket = res.socket;
+  if (socket && !socket.destroyed) {
+    socket.setKeepAlive(true, TCP_KEEPALIVE_INITIAL_DELAY_MS);
+  }
+
+  const interval = setInterval(() => { ... }, SSE_KEEPALIVE_INTERVAL_MS);
+  ...
+}
+```
+
+New constant:
+```typescript
+const TCP_KEEPALIVE_INITIAL_DELAY_MS = 15_000; // 15s initial idle before first probe
+```
+
+**`docker-compose.yml`** — Add sysctls to `mcp-server` service for faster keepalive probing:
+```yaml
+mcp-server:
+  ...
+  sysctls:
+    net.ipv4.tcp_keepalive_time: 15
+    net.ipv4.tcp_keepalive_intvl: 5
+    net.ipv4.tcp_keepalive_probes: 6
+```
+
+Detection time with these settings: 15s + (5s × 6) = **45 seconds** from idle to dead-peer detection. Combined with the 30s SSE keepalive interval and 2-minute liveness grace, worst-case moderator death detection: ~2.5 minutes (current: infinite).
+
+**Note on `cap_drop: ALL`:** The `mcp-server` service uses `x-base-security` which drops all capabilities. `setsockopt(SO_KEEPALIVE)` does NOT require `CAP_NET_ADMIN` — it's a per-socket option available to unprivileged processes. The Docker `sysctls` for `net.ipv4.tcp_keepalive_*` are namespaced and allowed without extra caps. No security config changes needed.
+
+---
+
+#### Layer 3: Periodic liveness reaper — Defense in depth
+
+Bounds memory and catches anything Layers 1–2 miss. Without the reaper, dead sessions accumulate in `sessionStates`, `sessions`, and `mcpServers` maps indefinitely.
+
+##### Where it lives
+
+**`McpController`** — the controller owns the session maps (`sessions`, `mcpServers`) and coordinates with `McpService` for session state. The controller implements `OnModuleInit` (start reaper) and `OnModuleDestroy` (stop reaper).
+
+##### Design
+
+```typescript
+@Controller('mcp')
+export class McpController implements OnModuleInit, OnModuleDestroy {
+  private reaperInterval?: ReturnType<typeof setInterval>;
+
+  onModuleInit(): void {
+    this.reaperInterval = setInterval(() => this.reapStaleSessions(), REAPER_INTERVAL_MS);
+    this.reaperInterval.unref(); // Don't prevent process exit
+  }
+
+  onModuleDestroy(): void {
+    if (this.reaperInterval) clearInterval(this.reaperInterval);
+  }
+
+  private reapStaleSessions(): void {
+    // Snapshot keys to avoid mutation-during-iteration
+    for (const [sessionId, mcpServer] of Array.from(this.mcpServers.entries())) {
+      if (!this.mcpService.isSessionAlive(mcpServer)) {
+        this.mcpService.disconnect(mcpServer);
+        this.sessions.delete(sessionId);
+        this.mcpServers.delete(sessionId);
+        this.logger.log(`Session reaped (idle): ${sessionId}`);
+      }
+    }
+  }
+}
+```
+
+Constants:
+```typescript
+const REAPER_INTERVAL_MS = 30_000; // Scan every 30s
+```
+
+The reaper uses the same `isSessionAlive()` check as Layer 1's `isConnected()`, so the timeout semantics are consistent. A session is reaped when `lastSeenAt` exceeds `SESSION_LIVENESS_TIMEOUT_MS` — the same threshold that causes `isConnected()` to return `false`.
+
+##### In-flight elicitation safety
+
+The ticket requires: "Reaper does not evict sessions that have an in-flight elicitation."
+
+This is handled naturally by the SSE keepalive touch mechanism:
+1. When an elicitation is pending, the moderator's CC CLI session has an active SSE stream (the POST response or GET stream).
+2. The SSE keepalive pings every 30s. Successful writes call `touchSession()`, refreshing `lastSeenAt`.
+3. `isSessionAlive()` returns `true` because `lastSeenAt` is fresh.
+4. The reaper skips the session.
+
+When the client actually dies during an elicitation:
+1. TCP keepalive detects the dead peer within ~45s.
+2. `res.write()` fails on the next keepalive ping attempt.
+3. `lastSeenAt` stops refreshing.
+4. After `SESSION_LIVENESS_TIMEOUT_MS` (2 min), `isSessionAlive()` returns false.
+5. Reaper evicts. This is correct — the elicitation can never complete on a dead session.
+
+No explicit `pendingElicitations` counter needed — the SSE keepalive serves as the implicit liveness heartbeat.
+
+##### Idempotency with `transport.onclose`
+
+The existing `transport.onclose` handler (lines 116-123) and the reaper both call `mcpService.disconnect(server)` and delete from the controller maps. All operations are idempotent:
+- `Map.delete()` is a no-op on missing keys
+- `sessionStates.delete(server)` is a no-op if already deleted
+- Double-cleanup logs are harmless (the second `disconnect()` finds nothing to delete and skips the log)
+
+---
+
+#### Layer 4: SIGTERM DELETE — Recommendation
+
+**Include in this ticket.** Rationale:
+
+- **Trivial effort**: 5-10 lines in the agent app's bootstrap.
+- **No moderator impact**: CC CLI is third-party; this only helps agent containers (architect, developer, teamlead, qa).
+- **Useful for HttpAgentConnection**: Even though `HttpAgentConnection.isConnected()` currently always returns `true` (Layer 5, out of scope), the explicit `DELETE` triggers `transport.onclose` on the server, which runs `disconnect()` and cleans the session state map immediately. This prevents session state accumulation from agent container restarts.
+- **No risk**: The agent app already has a clean shutdown path. Adding `process.on('SIGTERM', ...)` is additive.
+
+##### Implementation sketch
+
+In `apps/agent/src/main.ts` (or wherever the MCP client is initialized):
+
+```typescript
+process.on('SIGTERM', async () => {
+  logger.log('SIGTERM received — closing MCP session');
+  try {
+    await mcpClient.close(); // SDK sends DELETE /mcp
+  } catch (err) {
+    logger.warn('MCP close failed during shutdown', err);
+  }
+  process.exit(0);
+});
+```
+
+The developer should locate the MCP client instance in the agent app and wire the handler appropriately.
+
+---
+
+#### Layer 5: `HttpAgentConnection.isConnected()` — Out of scope
+
+Confirmed out of scope. Agent containers are addressable by stable callback URLs that survive container restarts (Docker DNS resolves the service name to the new container). The `connected: true` on a stale HTTP agent entry has no practical impact because the callback URL remains valid.
+
+---
+
+### Constants Summary
+
+| Constant | Value | Location | Purpose |
+|----------|-------|----------|---------|
+| `SESSION_LIVENESS_TIMEOUT_MS` | `120_000` (2 min) | `mcp.service.ts` | Threshold for `isSessionAlive()` — used by both `isConnected()` and the reaper |
+| `REAPER_INTERVAL_MS` | `30_000` (30s) | `mcp.controller.ts` | How often the reaper scans for stale sessions |
+| `TCP_KEEPALIVE_INITIAL_DELAY_MS` | `15_000` (15s) | `mcp.controller.ts` | TCP keepalive idle delay before first kernel probe |
+| `SSE_KEEPALIVE_INTERVAL_MS` | `30_000` (existing) | `mcp.controller.ts` | SSE comment-frame keepalive interval (unchanged) |
+
+### Risk Assessment
+
+#### No conflicts with existing bug fixes
+
+| Bug | Interaction | Risk |
+|-----|------------|------|
+| **QRM6-BUG-008** (elicitation timeout) | Complementary. `isConnected()` returning `false` causes fail-fast BEFORE reaching the 5-min elicitation timeout. Both fixes reduce the dead-moderator misery independently. | None |
+| **QRM6-BUG-010** (idempotency map) | Independent. The idempotency dedup map is keyed by `correlationId` and operates at the broker level. Session liveness is orthogonal. | None |
+| **QRM6-BUG-011** (SSE heartbeat) | Directly builds on it. The SSE keepalive becomes dual-purpose: (a) keeping undici's bodyTimeout happy, and (b) refreshing `lastSeenAt`. The `startSseKeepalive` method is modified but its existing behavior is preserved. | Low — ensure the `server` parameter is optional and defaults to no-op for backward compatibility |
+
+#### Potential risks
+
+1. **False disconnection during moderator idle**: If the moderator's CC CLI is idle (no tool calls, no SSE stream) for >2 minutes, `isConnected()` returns false. Mitigated: CC CLI maintains an SSE stream; as long as it's connected, keepalive writes refresh `lastSeenAt`. The 2-minute timeout only fires when the SSE stream is dead or disconnected.
+
+2. **Clock skew**: `lastSeenAt` uses `Date.now()` on a single process — no cross-machine clock issues. Non-risk.
+
+3. **Race on controller map mutation during reaper**: The `Array.from()` snapshot prevents mutation-during-iteration. Individual map operations are synchronous. Non-risk.
+
+#### Corrected scope (2026-05-03 log analysis)
+
+The original ticket narrative suggested session cycling could cause the moderator's own outgoing `invoke_agent` calls to fail. Log analysis disproved this — all moderator outgoing calls succeeded despite 50 session cycles over 11 hours. The POST carrying an `invoke_agent` tool call stays open independently of MCP session lifecycle; the response returns on the same POST's SSE body.
+
+The fix addresses two confirmed issues:
+- **Agent→moderator routing**: An agent calling `invoke_agent(target=moderator)` against a dead `McpElicitationConnection` waits the full elicitation timeout before failing. Layer 1 makes this fail-fast.
+- **Unbounded session state accumulation**: 50 sessions created / 0 cleaned over 11 hours. Layer 3 bounds memory.
+
+No design or implementation changes were needed — the three layers are correctly targeted at these two issues. The corrected diagnosis narrows the blast radius but does not change what needs to be built.
+
+### Test Plan
+
+#### New unit tests needed
+
+**`mcp-elicitation-connection.spec.ts`**
+- `isConnected()` returns `true` when `livenessCheck` returns `true`
+- `isConnected()` returns `false` when `livenessCheck` returns `false`
+- Default `livenessCheck` (no arg) returns `true` (backward compat)
+
+**`mcp.service.spec.ts`**
+- `touchSession()` updates `lastSeenAt` on existing session
+- `touchSession()` is no-op for unknown server
+- `isSessionAlive()` returns `true` when `lastSeenAt` is fresh
+- `isSessionAlive()` returns `false` when `lastSeenAt` is stale
+- `isSessionAlive()` returns `false` after `disconnect()` (state deleted)
+- `register_agent` for moderator creates `McpElicitationConnection` with liveness closure (verify via `mockRegistry.register` arg inspection)
+
+**`mcp.controller.spec.ts`**
+- POST for existing session calls `touchSession()`
+- GET for valid session calls `touchSession()`
+- Reaper evicts sessions whose `isSessionAlive()` returns false
+- Reaper does NOT evict sessions whose `isSessionAlive()` returns true
+- Reaper calls `disconnect()` on evicted sessions
+- `onModuleDestroy()` clears the reaper interval
+- SSE keepalive calls `touchSession()` on successful writes
+
+**`agent-registry.service.spec.ts`**
+- `isAvailable()` returns `false` when `isConnected()` returns `false` (already tested, but verify the new liveness path)
+
+#### Existing tests to update
+
+- `McpElicitationConnection` constructor calls in tests need to match new signature (third `livenessCheck` param — optional, so existing tests compile without changes)
+- Controller test mock for `McpService` needs `touchSession` and `isSessionAlive` methods added
+
+### Implementation Order
+
+1. **Layer 1 first** — `lastSeenAt` tracking + `isConnected()` change. This is the load-bearing fix.
+2. **Layer 2 second** — TCP keepalive. Additive, 5 lines of code.
+3. **Layer 3 third** — Reaper. Depends on `isSessionAlive()` from Layer 1.
+4. **Layer 4 last** — SIGTERM DELETE in agent app. Independent, can be done in any order.
+
+All layers can be in a single commit since they form one coherent fix.
 
 ## Acceptance Criteria
 

@@ -84,6 +84,13 @@ services:
         APP_NAME: mcp-server
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1000}
+    # QRM7-001 Layer 2: faster TCP keepalive for dead-peer detection on SSE sockets.
+    # Detection time: 15s + (5s × 6) = 45s from idle to dead-peer detection.
+    # These are namespaced sysctls — no extra capabilities needed.
+    sysctls:
+      net.ipv4.tcp_keepalive_time: 15
+      net.ipv4.tcp_keepalive_intvl: 5
+      net.ipv4.tcp_keepalive_probes: 6
     ports:
       - "3000:3000"
     environment:

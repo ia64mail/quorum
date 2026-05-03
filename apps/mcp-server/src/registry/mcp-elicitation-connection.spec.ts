@@ -48,4 +48,52 @@ describe('McpElicitationConnection', () => {
       expect(response.error).toContain('-32001');
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // QRM7-001: livenessCheck-based isConnected()
+  // ---------------------------------------------------------------------------
+
+  describe('isConnected() with livenessCheck (QRM7-001)', () => {
+    it('returns true when livenessCheck returns true', () => {
+      const elicitInput = jest.fn();
+      const conn = new McpElicitationConnection(
+        role,
+        buildServer(elicitInput),
+        () => true,
+      );
+      expect(conn.isConnected()).toBe(true);
+    });
+
+    it('returns false when livenessCheck returns false', () => {
+      const elicitInput = jest.fn();
+      const conn = new McpElicitationConnection(
+        role,
+        buildServer(elicitInput),
+        () => false,
+      );
+      expect(conn.isConnected()).toBe(false);
+    });
+
+    it('defaults to true when no livenessCheck is provided (backward compat)', () => {
+      const elicitInput = jest.fn();
+      const conn = new McpElicitationConnection(role, buildServer(elicitInput));
+      expect(conn.isConnected()).toBe(true);
+    });
+
+    it('reflects dynamic livenessCheck state changes', () => {
+      let alive = true;
+      const elicitInput = jest.fn();
+      const conn = new McpElicitationConnection(
+        role,
+        buildServer(elicitInput),
+        () => alive,
+      );
+
+      expect(conn.isConnected()).toBe(true);
+      alive = false;
+      expect(conn.isConnected()).toBe(false);
+      alive = true;
+      expect(conn.isConnected()).toBe(true);
+    });
+  });
 });
