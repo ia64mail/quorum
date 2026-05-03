@@ -153,7 +153,7 @@ Live diagnostic inside developer container confirmed session `.jsonl` files exis
 -rw------- 1 quorum quorum  5853 Apr 25 18:21 894bbe80-4de4-46da-9fae-d44d5a8fad6d.jsonl
 ```
 
-> **Clarification on root cause attribution:** The investigation doc (`docs/session-resume-investigation.md`) attributes the root cause to container ephemerality — session files not surviving container recreation. This is **wrong for the primary scenario**. The original reproduction (and every subsequent confirmation) involved back-to-back calls to the *same running container* where session files were confirmed present on disk at the time of the second call. Container ephemerality is a secondary concern relevant to cross-restart resume, but it does not explain the primary bug: resume fails even when the session file exists and the container has not been recreated.
+> **Clarification on root cause attribution:** The original investigation (see Appendix: SessionStore Adapter Analysis below) attributes the root cause to container ephemerality — session files not surviving container recreation. This is **wrong for the primary scenario**. The original reproduction (and every subsequent confirmation) involved back-to-back calls to the *same running container* where session files were confirmed present on disk at the time of the second call. Container ephemerality is a secondary concern relevant to cross-restart resume, but it does not explain the primary bug: resume fails even when the session file exists and the container has not been recreated.
 
 **2. Memory test confirms no resume (fresh session each time):**
 
@@ -197,7 +197,7 @@ Research across GitHub issues, SDK changelog, and documentation for `@anthropic-
 2. **CWD path encoding mismatch** — Sessions stored at `~/.claude/projects/<encoded-cwd>/`. If any variation in path resolution between invocations (trailing slash, symlink), the encoded path differs and the session file isn't found. Worth verifying but unlikely given consistent `cwd` config.
 3. **`settingSources: ['project']` interaction** — Under-documented. v0.2.73 fixed an env override issue related to settingSources. Possible that session persistence requires user-level settings.
 
-> **Note on the ephemeral filesystem hypothesis:** The investigation doc (`docs/session-resume-investigation.md`) hypothesizes that ephemeral container filesystems are the root cause. This does not explain the primary scenario: the original reproduction and all subsequent confirmations ran back-to-back against the same container with session `.jsonl` files confirmed present on disk. The open question is whether the SDK subprocess actually reads the file that `persistSession` wrote when `resume` is passed, or whether Issue #2778 (SDK silently ignoring `resume`) is the true cause regardless of file presence. The `continue: true` diagnostic experiment (see fix directions above) should help disambiguate — if `continue` also fails with files present, the issue is deeper than parameter handling.
+> **Note on the ephemeral filesystem hypothesis:** The original investigation (see Appendix below) hypothesizes that ephemeral container filesystems are the root cause. This does not explain the primary scenario: the original reproduction and all subsequent confirmations ran back-to-back against the same container with session `.jsonl` files confirmed present on disk. The open question is whether the SDK subprocess actually reads the file that `persistSession` wrote when `resume` is passed, or whether Issue #2778 (SDK silently ignoring `resume`) is the true cause regardless of file presence. The `continue: true` diagnostic experiment (see fix directions above) should help disambiguate — if `continue` also fails with files present, the issue is deeper than parameter handling.
 
 ### Recommended Fix Directions (updated)
 
@@ -301,7 +301,7 @@ The SDK also automatically mirrors session writes to the store via `TranscriptMi
 4. Revert line 107 from `{ continue: true }` back to `{ resume: params.resume }`
 5. Add distinct log markers: `"Session resumed: <id>"` vs `"Session started: <id>"`
 
-Full specification at: **[docs/session-resume-fix.md](../docs/session-resume-fix.md)**
+Full implementation specification was in `docs/session-resume-fix.md` (now removed — content absorbed into this ticket's Implementation Notes and Appendix).
 
 ## Architect Review (2026-04-30 post-test)
 
@@ -451,3 +451,92 @@ The deferred TODO at `invocation.controller.ts:14–16` (collapse the schema and
 - [ ] Unit coverage: `ClaudeCodeService` spec adds a test that verifies `resume: 'sess-x'` is honored *(deferred — the existing handler spec covers the resume plumbing; SDK-level mock would duplicate without adding value)*
 - [x] **(NEW)** `invocation.controller.spec.ts` adds a test that verifies a `POST /invoke` body with `sessionId` reaches the handler unmodified (regression guard against future schema drift)
 - [x] `npm run build`, `npm run lint`, `npm run test` pass (no regressions)
+
+## Appendix: SessionStore Adapter Analysis
+
+> Preserved from pre-implementation investigation (2026-04-25) for QRM7 planning reference. The project currently uses `InMemorySessionStore` (Option B). Option A or C may be needed for cross-container-restart or cross-host resume.
+
+### SDK Resume Code Paths
+
+The SDK's `query()` function has **two distinct code paths** for resume, gated on whether `sessionStore` is provided:
+
+**Path 1: `resume` + `sessionStore` (works — current implementation)**
+
+```
+query({ prompt, options: { resume: id, sessionStore: store } })
+```
+
+1. SDK calls `store.load({ projectKey, sessionId })` to get transcript entries
+2. Writes entries to a **temp directory** as `<sessionId>.jsonl`
+3. Sets `CLAUDE_CONFIG_DIR` to the temp dir
+4. Spawns subprocess with `--resume <sessionId>`
+5. Subprocess finds the `.jsonl` in the temp dir → **resume succeeds**
+6. During the session, new entries are mirrored to `store.append()`
+
+**Path 2: `resume` only, no `sessionStore` (broken — see Root Cause Confirmation above)**
+
+1. SDK spawns subprocess with `--resume <sessionId>`
+2. Subprocess looks for `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`
+3. If file not found → silently starts fresh (no error, no warning)
+
+> **Note:** Path 2 also fails when the session file IS present on disk — the `--resume` CLI flag is silently ignored by the subprocess regardless of file presence (Issue #2778, closed "not planned"). Container ephemerality is a secondary concern; the primary bug is the broken CLI flag mechanism.
+
+### SessionStore Interface
+
+```typescript
+type SessionStore = {
+  append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void>;
+  load(key: SessionKey): Promise<SessionStoreEntry[] | null>;
+  // Optional: listSessions, delete, listSubkeys
+};
+
+type SessionKey = {
+  projectKey: string;  // encoded cwd
+  sessionId: string;   // UUID
+  subpath?: string;    // e.g. "subagents/agent-<id>"
+};
+```
+
+### Adapter Options
+
+**Option A: Shared-volume `FileSessionStore`**
+
+Persists to a shared Docker volume (e.g. `/mnt/quorum/workspace/.sessions/`). Simplest path to cross-container-restart persistence:
+- `append()` appends JSONL entries to a file keyed by `projectKey/sessionId`
+- `load()` reads and returns the entries
+- No external dependencies (no Redis/S3/Postgres)
+- Storage survives container restarts because the volume is persistent
+- Implement `listSubkeys()` for subagent transcript resume
+
+**Option B: `InMemorySessionStore` (current implementation)**
+
+The SDK's built-in `Map`-backed store. Data is lost when the process exits. Solves the primary bug (resume within the same container lifetime) with zero dependencies, but does not survive container restarts. Memory footprint is ~5–20KB per session (JSONL transcript accumulation), acceptable for agent containers that process a bounded number of sessions per lifetime.
+
+**Option C: Redis/Postgres `SessionStore`**
+
+For cross-host resume (e.g., scaling agent containers across nodes). Reference adapters exist at `examples/session-stores/` in the SDK repo. Adds infrastructure dependency but enables full persistence across container restarts and host boundaries.
+
+### Implementation Caveats
+
+1. **`sessionStore` + `persistSession: false` is forbidden** — the SDK throws. Keep `persistSession: true`.
+2. **Mirror writes are best-effort** — if `append()` fails, the SDK emits a `mirror_error` system message but continues. The local transcript is the source of truth.
+3. **`listSubkeys()` enables subagent resume** — without it, only the main transcript is restored on resume.
+4. **The fallback catch block is still valuable** — even with `SessionStore`, `load()` could fail. The retry-without-resume logic remains necessary.
+5. **`continue: true` has NO sessionStore path** — the SDK only checks `if(options?.resume && options?.sessionStore)`. The `continue` option always goes to the broken CLI-flag path. Resume must use `resume: <sessionId>`, not `continue: true`.
+
+### Hypothesis Ruling-Out Table (from investigation)
+
+| Hypothesis | Status | Evidence |
+|---|---|---|
+| `settingSources: ['project']` suppresses persistence | **Ruled out** | `settingSources` only controls which `.claude/settings.json` files are loaded. Session persistence is controlled by `persistSession` (default: `true`). |
+| `resume` expects a different ID format | **Ruled out** | The `session_id` from `system/init` is a standard UUID. The CLI's validator accepts UUIDs directly. |
+| `resume` needs additional config | **Confirmed** | In containerized/ephemeral environments, `resume` needs a `SessionStore` adapter. |
+| `cwd` mismatch | **Ruled out** | Same `cwd` (`workspaceDir`) passed every time. The encoded path is deterministic. |
+
+### SDK References
+
+- [SDK Sessions Documentation](https://code.claude.com/docs/en/agent-sdk/sessions)
+- [Session Storage Documentation](https://code.claude.com/docs/en/agent-sdk/session-storage)
+- [GitHub Issue #2778: TypeScript SDK ignores resume parameter](https://github.com/anthropics/claude-code/issues/2778) — closed "not planned"
+- [GitHub Issue #8069: Resume gives different session_id](https://github.com/anthropics/claude-code/issues/8069) — closed "not planned"
+- [GitHub Issue #97: Customizable Session Storage Backend](https://github.com/anthropics/claude-agent-sdk-typescript/issues/97)
