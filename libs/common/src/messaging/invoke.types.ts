@@ -3,7 +3,7 @@ import type { AgentRole } from './agent-role.enum';
 /**
  * A request to invoke an agent through the Message Broker.
  *
- * Created by any caller (including the Terminal App's moderator) and routed
+ * Created by any caller (including the moderator) and routed
  * by the broker to the target agent's {@link AgentConnection.handle} method.
  * The `correlationId` ties together every hop in a delegation chain so that
  * safeguards (circular call prevention, depth limiting) and observability

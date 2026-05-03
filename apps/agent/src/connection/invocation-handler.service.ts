@@ -60,6 +60,7 @@ export function toCanUseTool(
 @Injectable()
 export class InvocationHandler {
   private readonly logger = new Logger(InvocationHandler.name);
+  private readonly inflight = new Map<string, Promise<InvokeResponse>>();
 
   constructor(
     private readonly claudeCode: ClaudeCodeService,
@@ -75,10 +76,31 @@ export class InvocationHandler {
         `action="${request.action}" caller=${request.caller} depth=${request.depth}`,
     );
 
+    const existing = this.inflight.get(request.correlationId);
+    if (existing) {
+      this.logger.log(
+        `Duplicate invocation reusing in-flight: correlationId=${request.correlationId}`,
+      );
+      return existing;
+    }
+
+    const work = this.runInvocation(request).finally(() => {
+      this.inflight.delete(request.correlationId);
+    });
+    this.inflight.set(request.correlationId, work);
+    return work;
+  }
+
+  private async runInvocation(request: InvokeRequest): Promise<InvokeResponse> {
     try {
+      const prompt = this.buildPrompt(request);
+      const systemPrompt = this.promptService.getSystemPrompt(request.caller);
+
+      this.logInitialPrompt(request, systemPrompt, prompt);
+
       const result = await this.claudeCode.execute({
-        prompt: this.buildPrompt(request),
-        systemPrompt: this.promptService.getSystemPrompt(request.caller),
+        prompt,
+        systemPrompt,
         mcpServers: this.bridge.createBridge(request),
         plugins: this.permissions.getPlugins(),
         disallowedTools: this.permissions.getDisallowedTools(),
@@ -110,6 +132,32 @@ export class InvocationHandler {
       );
       return { success: false, error: `SDK execution failed: ${message}` };
     }
+  }
+
+  private logInitialPrompt(
+    request: InvokeRequest,
+    systemPrompt: string,
+    userPrompt: string,
+  ): void {
+    const isResume = !!request.sessionId;
+    const systemPromptNote = isResume
+      ? `${systemPrompt.length} chars (suppressed on resume — session carries it)`
+      : `${systemPrompt.length} chars`;
+    this.logger.log(
+      `Initial prompt assembled: correlationId=${request.correlationId} ` +
+        `caller=${request.caller} resume=${isResume} ` +
+        `systemPrompt=${systemPromptNote} userPromptChars=${userPrompt.length}`,
+    );
+    const systemPromptBlock = isResume
+      ? `--- System Prompt (caller=${request.caller}) [SUPPRESSED — resume] ---\n` +
+        `(${systemPrompt.length} chars; not sent to SDK because resume=${request.sessionId})\n`
+      : `--- System Prompt (caller=${request.caller}) ---\n${systemPrompt}\n`;
+    this.logger.debug(
+      `\n=== Initial prompt for correlationId=${request.correlationId} ===\n` +
+        systemPromptBlock +
+        `--- User Prompt ---\n${userPrompt}\n` +
+        `=== End of initial prompt (correlationId=${request.correlationId}) ===`,
+    );
   }
 
   private buildPrompt(request: InvokeRequest): string {

@@ -642,6 +642,205 @@ describe('InvocationHandler', () => {
       );
     });
   });
+  // Regression test for QRM6-BUG-014: bootstrapContext was silently stripped
+  // by the controller's Zod schema. This test verifies that when the handler
+  // receives a request with non-trivial bootstrapContext (both project and
+  // conversation populated), the rendered prompt contains all expected sections.
+  describe('bootstrap context end-to-end rendering (BUG-014)', () => {
+    it('should render Prior Decisions with both Project and Conversation sections', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle({
+        ...baseRequest,
+        bootstrapContext: {
+          project: {
+            'tech-stack': 'NestJS with TypeScript',
+            'auth-pattern': 'JWT with refresh tokens',
+          },
+          conversation: {
+            'task-breakdown': 'implement auth module with guards',
+            'architect-decision': 'use passport.js strategy pattern',
+          },
+          meta: {
+            itemCount: 4,
+            estimatedTokens: 581,
+            scopesQueried: ['project', 'conversation'],
+          },
+        },
+      });
+
+      const call = mockExecute.mock.calls[0][0] as { prompt: string };
+      // All three heading levels must be present
+      expect(call.prompt).toContain('## Prior Decisions');
+      expect(call.prompt).toContain('### Project Context');
+      expect(call.prompt).toContain('### Conversation Context');
+      // All key-value pairs must be rendered
+      expect(call.prompt).toContain('- tech-stack: "NestJS with TypeScript"');
+      expect(call.prompt).toContain(
+        '- auth-pattern: "JWT with refresh tokens"',
+      );
+      expect(call.prompt).toContain(
+        '- task-breakdown: "implement auth module with guards"',
+      );
+      expect(call.prompt).toContain(
+        '- architect-decision: "use passport.js strategy pattern"',
+      );
+      // Prior Decisions must come before the task
+      const priorIdx = call.prompt.indexOf('## Prior Decisions');
+      const taskIdx = call.prompt.indexOf('Task:');
+      expect(priorIdx).toBeLessThan(taskIdx);
+    });
+  });
+
+  describe('in-flight idempotency (BUG-010)', () => {
+    it('should deduplicate concurrent calls with the same correlationId', async () => {
+      // Use a deferred promise to control when execute() resolves
+      let resolveExec!: (v: ExecuteResult) => void;
+      mockExecute.mockReturnValue(
+        new Promise<ExecuteResult>((resolve) => {
+          resolveExec = resolve;
+        }),
+      );
+
+      const promise1 = handler.handle(baseRequest);
+      const promise2 = handler.handle(baseRequest);
+
+      // Resolve the single execute call
+      resolveExec(successResult);
+
+      const [result1, result2] = await Promise.all([promise1, promise2]);
+
+      // Only one execute() call should have been made
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+      // Both callers get the same result
+      expect(result1).toEqual(result2);
+      expect(result1).toEqual({
+        success: true,
+        result: 'Here is my design.',
+        totalCostUsd: 0.0123,
+        durationMs: 5000,
+        sessionId: 'sess-abc',
+      });
+    });
+
+    it('should log duplicate invocation when reusing in-flight', async () => {
+      let resolveExec!: (v: ExecuteResult) => void;
+      mockExecute.mockReturnValue(
+        new Promise<ExecuteResult>((resolve) => {
+          resolveExec = resolve;
+        }),
+      );
+
+      const promise1 = handler.handle(baseRequest);
+      // Second call triggers duplicate log
+      const promise2 = handler.handle(baseRequest);
+
+      resolveExec(successResult);
+      await Promise.all([promise1, promise2]);
+
+      const dupLog = (logSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Duplicate invocation reusing in-flight'),
+      )?.[0] as string;
+      expect(dupLog).toBeDefined();
+      expect(dupLog).toContain('correlationId=corr-123');
+    });
+
+    it('should run separate execute() calls for different correlationIds', async () => {
+      let resolveExec1!: (v: ExecuteResult) => void;
+      let resolveExec2!: (v: ExecuteResult) => void;
+      mockExecute
+        .mockReturnValueOnce(
+          new Promise<ExecuteResult>((resolve) => {
+            resolveExec1 = resolve;
+          }),
+        )
+        .mockReturnValueOnce(
+          new Promise<ExecuteResult>((resolve) => {
+            resolveExec2 = resolve;
+          }),
+        );
+
+      const request2: InvokeRequest = {
+        ...baseRequest,
+        correlationId: 'corr-456',
+      };
+
+      const promise1 = handler.handle(baseRequest);
+      const promise2 = handler.handle(request2);
+
+      resolveExec1(successResult);
+      resolveExec2(successResult);
+
+      await Promise.all([promise1, promise2]);
+
+      // Two distinct correlationIds → two execute() calls
+      expect(mockExecute).toHaveBeenCalledTimes(2);
+    });
+
+    it('should allow fresh invocation after prior one completes (map cleanup)', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      // First call — completes fully
+      await handler.handle(baseRequest);
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+
+      // Second call with same correlationId — should start fresh
+      await handler.handle(baseRequest);
+      expect(mockExecute).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clean up map entry even when invocation fails', async () => {
+      mockExecute
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValueOnce(successResult);
+
+      // First call — throws, but should clean up map
+      const result1 = await handler.handle(baseRequest);
+      expect(result1.success).toBe(false);
+
+      // Second call with same correlationId — should start fresh
+      const result2 = await handler.handle(baseRequest);
+      expect(result2.success).toBe(true);
+      expect(mockExecute).toHaveBeenCalledTimes(2);
+    });
+
+    it('should propagate failure to all concurrent awaiters', async () => {
+      let rejectExec!: (e: Error) => void;
+      mockExecute.mockReturnValue(
+        new Promise<ExecuteResult>((_, reject) => {
+          rejectExec = reject;
+        }),
+      );
+      const p1 = handler.handle(baseRequest);
+      const p2 = handler.handle(baseRequest);
+      rejectExec(new Error('boom'));
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1).toEqual(r2);
+      expect(r1.success).toBe(false);
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+    });
+
+    it('should deduplicate three concurrent calls matching the 2026-04-25 incident', async () => {
+      let resolveExec!: (v: ExecuteResult) => void;
+      mockExecute.mockReturnValue(
+        new Promise<ExecuteResult>((resolve) => {
+          resolveExec = resolve;
+        }),
+      );
+      const p1 = handler.handle(baseRequest);
+      const p2 = handler.handle(baseRequest);
+      const p3 = handler.handle(baseRequest);
+      resolveExec(successResult);
+      const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+      expect(r1).toEqual(r2);
+      expect(r2).toEqual(r3);
+      expect(r1.success).toBe(true);
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('uncommitted changes check', () => {
     it('should run git status --porcelain after execution completes', async () => {
       mockExecute.mockResolvedValue(successResult);

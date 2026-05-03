@@ -7,7 +7,7 @@ Quorum is a multi-agent AI orchestration system for semi-autonomous software dev
 ## Tech Stack
 
 - **Runtime**: Node.js with TypeScript (strict: `moduleResolution: "nodenext"`, `isolatedModules: true`)
-- **Framework**: NestJS monorepo (apps: `terminal`, `mcp-server`, `agent`; lib: `common`)
+- **Framework**: NestJS monorepo (apps: `mcp-server`, `agent`; lib: `common`)
 - **Bundler**: Webpack (handles module resolution — no `.js` extensions in imports)
 - **Validation**: Zod v4
 - **Containerization**: Docker Compose with unified Dockerfile (`APP_NAME` build arg)
@@ -16,7 +16,7 @@ Quorum is a multi-agent AI orchestration system for semi-autonomous software dev
 ## Build & Verify Commands
 
 ```bash
-npm run build        # Compile all 4 apps
+npm run build        # Compile all apps
 npm run lint         # ESLint — must pass with 0 errors, 0 warnings
 npm run test         # Jest — all tests must pass
 npm run test:e2e     # End-to-end tests
@@ -32,7 +32,6 @@ quorum/
 ├── docs/              # System documentation — living reference (architect-owned)
 ├── tickets/           # Implementation timeline knowledge base (see tickets/README.md)
 ├── apps/
-│   ├── terminal/      # User-facing moderator (stdin/stdout chat, raw Anthropic SDK)
 │   ├── mcp-server/    # Communication hub (registry, broker, context store)
 │   └── agent/         # Agent runtime (single image, role via AGENT_ROLE env var)
 ├── libs/

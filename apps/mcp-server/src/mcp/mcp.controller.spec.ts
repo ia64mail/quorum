@@ -7,8 +7,11 @@ import { McpService } from './mcp.service';
 // Mocks
 // ---------------------------------------------------------------------------
 
+const mockMcpServer = { _mockServer: true };
+
 const mockMcpService = {
-  connect: jest.fn().mockResolvedValue(undefined),
+  connect: jest.fn().mockResolvedValue(mockMcpServer),
+  disconnect: jest.fn(),
 };
 
 function mockReq(

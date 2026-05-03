@@ -145,7 +145,7 @@ All roles share a common set of disallowed tools: `AskUserQuestion` (would hang 
 
 ## Container Hardening
 
-Agent containers run with defense-in-depth security constraints. The Dockerfile uses a multi-target build: `default` for mcp-server/terminal (Alpine), `agent` for agents (Debian bookworm-slim with toolchain).
+Agent containers run with defense-in-depth security constraints. The Dockerfile uses a multi-target build: `default` for mcp-server, `agent` for agents, and `moderator` for the Claude Code CLI moderator (all Debian bookworm-slim).
 
 ### Agent Target (`node:24-bookworm-slim`)
 
@@ -209,12 +209,6 @@ Additionally, `ClaudeCodeService` extracts tool call information from assistant 
 | `AGENT_WORKSPACE_DIR` | `/mnt/quorum/workspace` | Working directory for SDK subprocess |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-5-20250929` | Model for SDK queries |
 | `ANTHROPIC_MAX_TOKENS` | `4096` | Max tokens per response |
-
-## Terminal Moderator Exception
-
-The terminal app's Moderator uses the **raw Anthropic SDK** (`@anthropic-ai/sdk`), not the Claude Agent SDK. The moderator is pure orchestration (no filesystem operations, no code generation), so the Claude Code capability surface adds no value. The manual 10-round tool loop in `ChatService` is simpler and already tested.
-
-The terminal reads `quorum.md` from the workspace at startup and injects it into the moderator's system prompt for project context awareness.
 
 ## References
 

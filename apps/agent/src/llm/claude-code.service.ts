@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import {
   query,
+  InMemorySessionStore,
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -9,10 +10,18 @@ import { AgentConfigService } from '../config';
 import type { ExecuteParams, ExecuteResult } from './claude-code.types';
 import { createObservabilityHooks } from './sdk-hooks.factory';
 
+// QRM6-BUG-012 follow-up: bypass the SDK's broken binary picker (sdk.mjs `N7`
+// tries `-musl` before glibc with no libc detection — fails on Debian when
+// both variants are installed). Pin the binary path to the glibc variant
+// for the current arch. Defense-in-depth alongside the `rm -rf …-musl` step
+// in the Dockerfile.
+const CLAUDE_BINARY_PATH = `/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-${process.arch}/claude`;
+
 @Injectable()
 export class ClaudeCodeService implements OnApplicationShutdown {
   private readonly logger = new Logger(ClaudeCodeService.name);
   private readonly activeControllers = new Set<AbortController>();
+  private readonly sessionStore = new InMemorySessionStore();
 
   constructor(private readonly config: AgentConfigService) {}
 
@@ -69,6 +78,8 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     let sessionId: string | undefined;
     let messageCount = 0;
 
+    const isResume = !!params.resume;
+
     const prompt = params.mcpServers
       ? toAsyncIterable(params.prompt)
       : params.prompt;
@@ -78,7 +89,13 @@ export class ClaudeCodeService implements OnApplicationShutdown {
       options: {
         cwd: this.config.agent.workspaceDir,
         model: this.config.anthropic.model,
-        systemPrompt: params.systemPrompt,
+        pathToClaudeCodeExecutable: CLAUDE_BINARY_PATH,
+        // On resume, the resumed session already carries the original system
+        // prompt; re-sending it busts the SDK prompt cache when MCP servers
+        // are configured (anthropics/claude-agent-sdk-typescript#247) and
+        // duplicates context. The retry-fresh fallback (executeQuery rerun
+        // with resume:undefined) reinstates it via the same conditional.
+        ...(isResume ? {} : { systemPrompt: params.systemPrompt }),
         permissionMode: 'default',
         persistSession: true,
         settingSources: ['project'],
@@ -101,13 +118,19 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           ? { disallowedTools: params.disallowedTools }
           : {}),
         ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
+        // QRM6-BUG-005: sessionStore enables the SDK's store-based resume path.
+        // Without it, `resume` only passes --resume to the CLI which silently
+        // starts fresh when the session file is missing (e.g. ephemeral containers).
+        // The InMemorySessionStore is auto-populated by TranscriptMirrorBatcher
+        // on first invocation and loaded back via store.load() on resume.
+        sessionStore: this.sessionStore,
         ...(params.resume ? { resume: params.resume } : {}),
       },
     });
 
     for await (const message of gen) {
       messageCount++;
-      const mapped = this.processMessage(message, sessionId);
+      const mapped = this.processMessage(message, sessionId, !!params.resume);
       if (mapped) return mapped;
       if (message.type === 'system' && message.subtype === 'init') {
         sessionId = message.session_id;
@@ -140,11 +163,16 @@ export class ClaudeCodeService implements OnApplicationShutdown {
   private processMessage(
     message: SDKMessage,
     sessionId: string | undefined,
+    isResume: boolean,
   ): ExecuteResult | null {
     switch (message.type) {
       case 'system':
         if (message.subtype === 'init') {
-          this.logger.debug(`Session started: ${message.session_id}`);
+          if (isResume) {
+            this.logger.debug(`Session resumed: ${message.session_id}`);
+          } else {
+            this.logger.debug(`Session started: ${message.session_id}`);
+          }
         }
         return null;
 

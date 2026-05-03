@@ -1,11 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { AgentRole } from '@app/common';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { AgentRole, ContextStore } from '@app/common';
 import type { InvokeRequest } from '@app/common';
 import { AgentRegistry } from '../registry/agent-registry.service';
+import { McpElicitationConnection } from '../registry/mcp-elicitation-connection';
 import { MockConnection } from '../registry/mock-connection';
 import { McpServerConfigService } from '../config';
 import { BootstrapContextService } from './bootstrap-context.service';
 import { MessageBroker } from './message-broker.service';
+import { ROLE_TIMEOUTS } from './role-timeouts';
 
 function makeRequest(overrides: Partial<InvokeRequest> = {}): InvokeRequest {
   return {
@@ -33,8 +36,17 @@ describe('MessageBroker', () => {
     assemble: jest.fn().mockResolvedValue(null),
   };
 
+  const mockContextStore = {
+    set: jest.fn().mockResolvedValue(undefined),
+    get: jest.fn(),
+    getAll: jest.fn(),
+    search: jest.fn(),
+    getStats: jest.fn(),
+  };
+
   beforeEach(async () => {
     mockBootstrapService.assemble.mockResolvedValue(null);
+    mockContextStore.set.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -42,6 +54,7 @@ describe('MessageBroker', () => {
         MessageBroker,
         { provide: McpServerConfigService, useValue: mockConfig },
         { provide: BootstrapContextService, useValue: mockBootstrapService },
+        { provide: ContextStore, useValue: mockContextStore },
       ],
     }).compile();
 
@@ -131,6 +144,90 @@ describe('MessageBroker', () => {
     });
   });
 
+  describe('elicitation bypasses circular check', () => {
+    function makeElicitationConnection(
+      acceptAnswer: string,
+    ): McpElicitationConnection {
+      const fakeServer = {
+        server: {
+          elicitInput: jest.fn().mockResolvedValue({
+            action: 'accept',
+            content: { answer: acceptAnswer },
+          }),
+        },
+      } as unknown as McpServer;
+      return new McpElicitationConnection(AgentRole.moderator, fakeServer);
+    }
+
+    it('moderator → developer → moderator(elicitation) succeeds (QRM6-BUG-004)', async () => {
+      const moderatorConn = makeElicitationConnection('use option A');
+      const devConnection = new MockConnection(AgentRole.developer);
+
+      // Developer asks the moderator a clarification — via elicitation,
+      // which would previously trip safeguard 2 because moderator is in chain.
+      devConnection.handleFn = async () => {
+        return broker.invoke(
+          makeRequest({
+            correlationId: 'corr-elicit',
+            caller: AgentRole.developer,
+            target: AgentRole.moderator,
+            depth: 1,
+          }),
+        );
+      };
+
+      registry.register(moderatorConn);
+      registry.register(devConnection);
+
+      const response = await broker.invoke(
+        makeRequest({
+          correlationId: 'corr-elicit',
+          caller: AgentRole.moderator,
+          target: AgentRole.developer,
+          depth: 0,
+        }),
+      );
+
+      expect(response.success).toBe(true);
+      expect(response.result).toBe('use option A');
+    });
+
+    it('still rejects circular HTTP call (regression — fix is connection-type-specific)', async () => {
+      const httpModeratorConn = new MockConnection(AgentRole.moderator);
+      let nestedResponse: { success: boolean; error?: string } | undefined;
+
+      const devConnection = new MockConnection(AgentRole.developer);
+      devConnection.handleFn = async () => {
+        // Nested call back to moderator within the same correlation chain.
+        nestedResponse = await broker.invoke(
+          makeRequest({
+            correlationId: 'corr-circular',
+            caller: AgentRole.developer,
+            target: AgentRole.moderator,
+            depth: 1,
+          }),
+        );
+        return { success: true, result: 'developer continued' };
+      };
+
+      registry.register(httpModeratorConn);
+      registry.register(devConnection);
+
+      await broker.invoke(
+        makeRequest({
+          correlationId: 'corr-circular',
+          caller: AgentRole.moderator,
+          target: AgentRole.developer,
+          depth: 0,
+        }),
+      );
+
+      expect(nestedResponse).toBeDefined();
+      expect(nestedResponse!.success).toBe(false);
+      expect(nestedResponse!.error).toContain('Circular call');
+    });
+  });
+
   describe('agent not found', () => {
     it('should return error for unregistered target', async () => {
       const response = await broker.invoke(
@@ -156,8 +253,11 @@ describe('MessageBroker', () => {
 
   describe('timeout', () => {
     it('should return timeout error when agent.handle exceeds timeout', async () => {
-      // Use moderator as target — it has no role-specific timeout,
-      // so the short defaultTimeoutMs (50ms) applies.
+      // Temporarily override moderator role timeout so the short
+      // defaultTimeoutMs (50ms) applies.
+      const savedModeratorTimeout = ROLE_TIMEOUTS[AgentRole.moderator];
+      delete ROLE_TIMEOUTS[AgentRole.moderator];
+
       const shortConfig = {
         ...mockConfig,
         broker: { maxCallDepth: 5, defaultTimeoutMs: 50 },
@@ -169,6 +269,7 @@ describe('MessageBroker', () => {
           MessageBroker,
           { provide: McpServerConfigService, useValue: shortConfig },
           { provide: BootstrapContextService, useValue: mockBootstrapService },
+          { provide: ContextStore, useValue: mockContextStore },
         ],
       }).compile();
 
@@ -182,12 +283,17 @@ describe('MessageBroker', () => {
       };
       shortRegistry.register(connection);
 
-      const response = await shortBroker.invoke(
-        makeRequest({ target: AgentRole.moderator }),
-      );
+      try {
+        const response = await shortBroker.invoke(
+          makeRequest({ target: AgentRole.moderator }),
+        );
 
-      expect(response.success).toBe(false);
-      expect(response.error).toContain('timed out after');
+        expect(response.success).toBe(false);
+        expect(response.error).toContain('timed out after');
+      } finally {
+        // Restore moderator timeout
+        ROLE_TIMEOUTS[AgentRole.moderator] = savedModeratorTimeout;
+      }
     });
   });
 
@@ -314,6 +420,34 @@ describe('MessageBroker', () => {
       await broker.invoke(makeRequest({ target: AgentRole.developer }));
 
       expect(mockBootstrapService.assemble).not.toHaveBeenCalled();
+    });
+
+    it('should skip bootstrap assembly when sessionId is set (resume)', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      let capturedRequest: InvokeRequest | undefined;
+      connection.handleFn = async (req) => {
+        capturedRequest = req;
+        return { success: true, result: 'done' };
+      };
+      registry.register(connection);
+      mockBootstrapService.assemble.mockClear();
+
+      await broker.invoke(makeRequest({ sessionId: 'sess-resume-1' }));
+
+      expect(mockBootstrapService.assemble).not.toHaveBeenCalled();
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest!.bootstrapContext).toBeUndefined();
+    });
+
+    it('should still call assemble when sessionId is empty string (force-fresh)', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      registry.register(connection);
+      mockBootstrapService.assemble.mockClear();
+      mockBootstrapService.assemble.mockResolvedValue(null);
+
+      await broker.invoke(makeRequest({ sessionId: '' }));
+
+      expect(mockBootstrapService.assemble).toHaveBeenCalledWith('corr-1');
     });
   });
 });

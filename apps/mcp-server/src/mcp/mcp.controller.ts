@@ -10,6 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { McpService } from './mcp.service';
 
 /** QRM5-BUG-005: interval between SSE keepalive pings (ms). */
@@ -30,6 +31,7 @@ const SSE_KEEPALIVE_INTERVAL_MS = 30_000;
 export class McpController {
   private readonly logger = new Logger(McpController.name);
   private readonly sessions = new Map<string, StreamableHTTPServerTransport>();
+  private readonly mcpServers = new Map<string, McpServer>();
 
   constructor(private readonly mcpService: McpService) {}
 
@@ -43,6 +45,8 @@ export class McpController {
     // pick up the SDK-assigned id after `handleRequest`.
     let capturedSessionId = sessionId;
     const postStart = Date.now();
+    // QRM6-BUG-011: track whether SSE keepalive was engaged for this POST.
+    let keepaliveFired = false;
     res.on('finish', () => {
       this.logger.debug(
         `POST finish: sessionId=${capturedSessionId ?? 'new'} ` +
@@ -53,9 +57,30 @@ export class McpController {
       this.logger.debug(
         `POST close: sessionId=${capturedSessionId ?? 'new'} ` +
           `status=${res.statusCode} writableFinished=${res.writableFinished} ` +
+          `keepaliveFired=${keepaliveFired} ` +
           `durationMs=${Date.now() - postStart}`,
       );
     });
+
+    // QRM6-BUG-011 Fix #2: start SSE comment-frame heartbeat once the
+    // response is committed as text/event-stream. CC CLI and any other MCP
+    // client whose undici stack defaults bodyTimeout to ~300s relies on the
+    // stream producing bytes during long-running tool calls.
+    const maybeStartKeepalive = () => {
+      if (res.writableEnded) {
+        clearInterval(headerWatch);
+        return;
+      }
+      if (keepaliveFired || !res.headersSent) return;
+      const ct = res.getHeader('content-type');
+      if (typeof ct === 'string' && ct.includes('text/event-stream')) {
+        this.startSseKeepalive(res);
+        keepaliveFired = true;
+      }
+    };
+    const headerWatch = setInterval(maybeStartKeepalive, 250);
+    res.on('finish', () => clearInterval(headerWatch));
+    res.on('close', () => clearInterval(headerWatch));
 
     if (sessionId && this.sessions.has(sessionId)) {
       const transport = this.sessions.get(sessionId)!;
@@ -73,7 +98,7 @@ export class McpController {
       sessionIdGenerator: () => randomUUID(),
     });
 
-    await this.mcpService.connect(transport);
+    const mcpServer = await this.mcpService.connect(transport);
 
     // handleRequest processes the initialize message and generates the session ID
     await transport.handleRequest(req, res, req.body);
@@ -83,13 +108,16 @@ export class McpController {
     if (newSessionId) {
       capturedSessionId = newSessionId;
       this.sessions.set(newSessionId, transport);
+      this.mcpServers.set(newSessionId, mcpServer);
       this.logger.log(`Session created: ${newSessionId}`);
     }
 
     // Clean up on close
     transport.onclose = () => {
       if (newSessionId) {
+        this.mcpService.disconnect(mcpServer);
         this.sessions.delete(newSessionId);
+        this.mcpServers.delete(newSessionId);
         this.logger.log(`Session closed: ${newSessionId}`);
       }
     };
@@ -127,8 +155,13 @@ export class McpController {
     }
 
     const transport = this.sessions.get(sessionId)!;
+    const mcpServer = this.mcpServers.get(sessionId);
     await transport.handleRequest(req, res);
+    if (mcpServer) {
+      this.mcpService.disconnect(mcpServer);
+    }
     this.sessions.delete(sessionId);
+    this.mcpServers.delete(sessionId);
     this.logger.log(`Session deleted: ${sessionId}`);
   }
 
@@ -147,7 +180,13 @@ export class McpController {
         clearInterval(interval);
         return;
       }
-      res.write(': ping\n\n');
+      // QRM6-BUG-011: try/catch guards against destroyed sockets where
+      // writableEnded is false but the underlying socket is already gone.
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(interval);
+      }
     }, SSE_KEEPALIVE_INTERVAL_MS);
 
     res.on('close', () => {

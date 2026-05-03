@@ -9,10 +9,33 @@ import type { ExecuteParams } from './claude-code.types';
 
 const mockQuery = jest.fn();
 
-jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
-  __esModule: true,
-  query: (...args: unknown[]) => mockQuery(...args) as unknown,
-}));
+jest.mock('@anthropic-ai/claude-agent-sdk', () => {
+  class MockStore {
+    private sessions = new Map<string, unknown[]>();
+    async load(sessionId: string): Promise<unknown[]> {
+      return this.sessions.get(sessionId) ?? [];
+    }
+    async append(sessionId: string, data: unknown): Promise<void> {
+      const existing = this.sessions.get(sessionId) ?? [];
+      existing.push(data);
+      this.sessions.set(sessionId, existing);
+    }
+    async list(): Promise<string[]> {
+      return Array.from(this.sessions.keys());
+    }
+    async delete(sessionId: string): Promise<void> {
+      this.sessions.delete(sessionId);
+    }
+    async listSubkeys(sessionId: string): Promise<string[]> {
+      return this.sessions.has(sessionId) ? [sessionId] : [];
+    }
+  }
+  return {
+    __esModule: true,
+    query: (...args: unknown[]) => mockQuery(...args) as unknown,
+    InMemorySessionStore: MockStore,
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers — async generator factories
@@ -299,6 +322,11 @@ describe('ClaudeCodeService', () => {
       disallowedTools: ['Bash'],
       debugFile: '/tmp/sdk-debug.log',
     });
+    // QRM6-BUG-005: sessionStore must always be present
+    expect(callArgs.options.sessionStore).toBeDefined();
+    expect(
+      typeof (callArgs.options.sessionStore as Record<string, unknown>).load,
+    ).toBe('function');
     expect(callArgs.options.env).toEqual(
       expect.objectContaining({ ANTHROPIC_API_KEY: 'sk-ant-test-key' }),
     );
@@ -400,8 +428,9 @@ describe('ClaudeCodeService', () => {
     expect(callArgs.options.maxTurns).toBe(60);
   });
 
-  // 8. Resume parameter
-  it('should pass resume option to SDK when provided', async () => {
+  // 8. Resume parameter — QRM6-BUG-005: passes `resume` + `sessionStore` to SDK
+  //    so the store-based resume path is used instead of the broken CLI flag path.
+  it('should pass resume and sessionStore to SDK when resume is provided', async () => {
     mockQuery.mockReturnValue(
       generateMessages([initMessage(), successResult()]),
     );
@@ -413,9 +442,14 @@ describe('ClaudeCodeService', () => {
       options: Record<string, unknown>;
     };
     expect(callArgs.options.resume).toBe('sess-resume-1');
+    expect(callArgs.options.sessionStore).toBeDefined();
+    expect(
+      typeof (callArgs.options.sessionStore as Record<string, unknown>).load,
+    ).toBe('function');
+    expect(callArgs.options).not.toHaveProperty('continue');
   });
 
-  it('should not pass resume option to SDK when not provided', async () => {
+  it('should pass sessionStore but not resume when resume is not provided', async () => {
     mockQuery.mockReturnValue(
       generateMessages([initMessage(), successResult()]),
     );
@@ -427,11 +461,74 @@ describe('ClaudeCodeService', () => {
       options: Record<string, unknown>;
     };
     expect(callArgs.options).not.toHaveProperty('resume');
+    expect(callArgs.options).not.toHaveProperty('continue');
+    // sessionStore is always present (singleton)
+    expect(callArgs.options.sessionStore).toBeDefined();
+    expect(
+      typeof (callArgs.options.sessionStore as Record<string, unknown>).load,
+    ).toBe('function');
   });
 
-  // 8a. Graceful fallback on resume failure
-  it('should retry without resume when resume fails', async () => {
-    // First call (with resume) throws
+  // 8c. systemPrompt suppression on resume — avoid SDK MCP cache busting
+  //     (anthropics/claude-agent-sdk-typescript#247) and duplicate context.
+  it('should pass systemPrompt to SDK on fresh sessions', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.systemPrompt).toBe('You are a developer.');
+  });
+
+  it('should omit systemPrompt from SDK options when resume is provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({ ...baseParams, resume: 'sess-resume-1' });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options).not.toHaveProperty('systemPrompt');
+    expect(callArgs.options.resume).toBe('sess-resume-1');
+  });
+
+  // 8b. Singleton sessionStore — same instance across multiple invocations
+  it('should use the same sessionStore instance across invocations', async () => {
+    mockQuery
+      .mockReturnValueOnce(
+        generateMessages([initMessage('sess-1'), successResult()]),
+      )
+      .mockReturnValueOnce(
+        generateMessages([initMessage('sess-2'), successResult()]),
+      );
+
+    await service.execute(baseParams);
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const firstCallArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const secondCallArgs = mockQuery.mock.calls[1][0] as {
+      options: Record<string, unknown>;
+    };
+    const firstStore = firstCallArgs.options.sessionStore;
+    const secondStore = secondCallArgs.options.sessionStore;
+    expect(firstStore).toBe(secondStore);
+  });
+
+  // 8a. Graceful fallback on resume failure (QRM6-BUG-005: sessionStore path)
+  it('should retry without resume when sessionStore-based resume fails', async () => {
+    // First call (with resume + sessionStore) throws
     mockQuery
       .mockReturnValueOnce(
         // eslint-disable-next-line require-yield
@@ -439,7 +536,7 @@ describe('ClaudeCodeService', () => {
           throw new Error('Session not found');
         })(),
       )
-      // Second call (fresh) succeeds
+      // Second call (fresh, no resume) succeeds
       .mockReturnValueOnce(
         generateMessages([
           initMessage('sess-new'),
@@ -455,19 +552,34 @@ describe('ClaudeCodeService', () => {
     expect(result.success).toBe(true);
     expect(mockQuery).toHaveBeenCalledTimes(2);
 
-    // First call had resume
+    // First call had resume + sessionStore
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const firstCallArgs = mockQuery.mock.calls[0][0] as {
       options: Record<string, unknown>;
     };
     expect(firstCallArgs.options.resume).toBe('sess-stale');
+    expect(firstCallArgs.options.sessionStore).toBeDefined();
+    expect(
+      typeof (firstCallArgs.options.sessionStore as Record<string, unknown>)
+        .load,
+    ).toBe('function');
+    expect(firstCallArgs.options).not.toHaveProperty('continue');
 
-    // Second call did not have resume
+    // Second call had sessionStore but no resume
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const secondCallArgs = mockQuery.mock.calls[1][0] as {
       options: Record<string, unknown>;
     };
     expect(secondCallArgs.options).not.toHaveProperty('resume');
+    expect(secondCallArgs.options).not.toHaveProperty('continue');
+    expect(secondCallArgs.options.sessionStore).toBeDefined();
+    expect(
+      typeof (secondCallArgs.options.sessionStore as Record<string, unknown>)
+        .load,
+    ).toBe('function');
+    // First call (resume) suppressed systemPrompt; retry-fresh path reinstates it
+    expect(firstCallArgs.options).not.toHaveProperty('systemPrompt');
+    expect(secondCallArgs.options.systemPrompt).toBe('You are a developer.');
   });
 
   it('should return error when execution fails without resume', async () => {

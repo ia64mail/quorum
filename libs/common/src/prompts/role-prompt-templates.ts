@@ -2,18 +2,20 @@ import { AgentRole } from '../messaging/agent-role.enum';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * SYSTEM_PREAMBLE — shared context prepended to every prompt.
+ * SYSTEM_PREAMBLE — shared context prepended to every agent role prompt.
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * Gives every agent (and the terminal moderator) a grounded understanding of
- * the Quorum system, communication model, shared context, capabilities,
- * workspace, and autonomous operation.
+ * Gives every agent a grounded understanding of the Quorum system,
+ * communication model, shared context, capabilities, workspace, and
+ * autonomous operation.
  *
- * Consumed by BOTH prompt pathways — changes here propagate automatically:
- *   1. `TERMINAL_MODERATOR_PROMPT` in `apps/terminal/src/chat/chat.service.ts`
- *      (human-facing moderator, raw Anthropic SDK) — imports & inlines this.
- *   2. `ROLE_PROMPT_TEMPLATES` below (agent-to-agent via invoke_agent, Claude
- *      Code subprocess) — `getRolePromptTemplate()` prepends this.
+ * Consumed by two prompt pathways:
+ *   1. `ROLE_PROMPT_TEMPLATES` below — `getRolePromptTemplate()` prepends
+ *      this preamble to every agent role prompt (agent-to-agent invocations
+ *      via Claude Agent SDK subprocess).
+ *   2. The user-facing moderator prompt lives in `CLAUDE.md` at the
+ *      workspace root (loaded by CC CLI). It shares the same conceptual
+ *      model but does not import this constant directly.
  *
  * Put ONLY truly cross-cutting guidance here. Content that is specific to
  * one audience (e.g. dispatch rules for the moderator, code-editing rules
@@ -105,37 +107,27 @@ This costs one tool call per checkpoint but can save dozens of tool calls on ret
  * Generic fallback template for agent roles without a specific prompt template.
  * Minimal identity — the preamble provides the system understanding.
  *
- * Used via `getRolePromptTemplate()` — reaches agents invoked through MCP, not
- * the terminal moderator.
+ * Used via `getRolePromptTemplate()` for any agent role that does not have a
+ * dedicated entry in `ROLE_PROMPT_TEMPLATES`.
  */
 export const GENERIC_PROMPT_TEMPLATE = `You received a request from the {{caller}} agent.
 You have access to Claude Code built-in tools for working with the codebase (file operations, search, bash) and MCP tools for inter-agent communication. Check your role's permission restrictions — some tools may be unavailable. Read quorum.md and query context before starting work.`;
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * ROLE_PROMPT_TEMPLATES — prompts served to agents invoked via `invoke_agent`.
+ * ROLE_PROMPT_TEMPLATES — role prompts for all agent invocations.
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * Used by `RolePromptService` (agent app) when one agent invokes another
- * through the MCP server. Each agent runs as a Claude Code subprocess and
- * receives its role's template as the system prompt.
+ * through the MCP server via `invoke_agent`. Each agent runs as a Claude
+ * Agent SDK subprocess and receives its role's template as the system prompt.
  *
- * ⚠️ These templates do NOT reach the human-facing terminal moderator. The
- *    terminal chat uses `TERMINAL_MODERATOR_PROMPT` defined inline in
- *    `apps/terminal/src/chat/chat.service.ts`, on a separate runtime (raw
- *    Anthropic SDK, not Claude Code).
- *
- * ⚠️ The `[AgentRole.moderator]` entry below is reached ONLY during
- *    agent-to-moderator clarification calls (an agent asks the moderator to
- *    relay a question to the human user). It is NOT the prompt that decides
- *    which agent to dispatch for a user's request — that is
- *    `TERMINAL_MODERATOR_PROMPT`.
- *
- *    Behavior changes meant to affect dispatch (routing rules, skill
- *    invocation, failure recovery, session resume) MUST also be applied to
- *    `TERMINAL_MODERATOR_PROMPT`. Past regressions from skipping this:
- *      - QRM5-BUG-002 (skill dispatch for /code-review)
- *      - commit 5a5581f (failure recovery guidance)
+ * The `[AgentRole.moderator]` entry is the moderator's agent-facing role
+ * definition — the full prompt for any agent-to-moderator invocation
+ * (clarification, escalation, or delegation). The user-facing moderator
+ * prompt lives in `CLAUDE.md` at the workspace root, loaded by CC CLI in
+ * the moderator container. These are independent prompts optimized for
+ * their respective contexts; no sync obligation exists between them.
  *
  * Structure: each template follows Identity, Capabilities, Responsibilities,
  * Collaboration, Context Management, Communication Style, Constraints. The
@@ -146,10 +138,9 @@ You have access to Claude Code built-in tools for working with the codebase (fil
  * invocation time with the requesting agent's role.
  */
 const ROLE_PROMPT_TEMPLATES: Partial<Record<AgentRole, string>> = {
-  // ⚠️ This moderator entry is for agent-to-moderator CLARIFICATION calls only.
-  // The user-facing moderator that drives orchestration lives in
-  // `apps/terminal/src/chat/chat.service.ts` (`TERMINAL_MODERATOR_PROMPT`).
-  // Keep cross-cutting moderator behavior in sync across BOTH locations.
+  // Moderator agent-facing role prompt — the full prompt for any agent-to-moderator
+  // invocation (clarification, escalation, delegation). The user-facing moderator
+  // prompt lives in CLAUDE.md (loaded by CC CLI in the moderator container).
   [AgentRole.moderator]: `You are the **Moderator**. You received a request from the {{caller}} agent.
 
 ## Identity

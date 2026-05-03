@@ -305,7 +305,7 @@ sequenceDiagram
 
 Automatic context injection on every `invoke_agent` call — agents start with relevant decisions instead of querying from scratch.
 
-**Trigger:** Automatic — the Message Broker injects bootstrap context before delivering every invocation (when enabled).
+**Trigger:** Automatic — the Message Broker injects bootstrap context before delivering every **fresh** invocation (when enabled). On session resume (`request.sessionId` set to a non-empty string), assembly is skipped — the resumed session's transcript already carries the original Prior Decisions block in conversation history, so re-injection would duplicate context. The `sessionId: ""` force-fresh override still triggers assembly. See [QRM6-BUG-013](../tickets/QRM6-BUG-013-redundant-prompt-injection-on-session-resume.md) for the rationale (SDK MCP cache-busting, duplicate-Prior-Decisions hazard).
 
 **Flow:**
 
@@ -319,15 +319,19 @@ sequenceDiagram
 
     TL->>B: invoke_agent(developer, "implement QRM-042")
 
-    B->>BCS: assemble(correlationId)
-    BCS->>CS: getAll(project)
-    CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
-    BCS->>CS: getAll(conversation, correlationId)
-    CS-->>BCS: {taskBreakdown: [...], constraints: [...]}
-    Note over BCS: Apply token budget (greedy, newer items first)
-    BCS-->>B: BootstrapContext
+    alt fresh session (request.sessionId empty)
+        B->>BCS: assemble(correlationId)
+        BCS->>CS: getAll(project)
+        CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+        BCS->>CS: getAll(conversation, correlationId)
+        CS-->>BCS: {taskBreakdown: [...], constraints: [...]}
+        Note over BCS: Apply token budget (greedy, newer items first)
+        BCS-->>B: BootstrapContext
 
-    B->>B: request.bootstrapContext = assembled context
+        B->>B: request.bootstrapContext = assembled context
+    else resumed session (request.sessionId set)
+        Note over B,BCS: Skip assembly — Prior Decisions already in session transcript
+    end
     B->>D: handle(request)
 
     Note over D: buildPrompt() renders "## Prior Decisions"<br/>with ### Project Context and ### Conversation Context

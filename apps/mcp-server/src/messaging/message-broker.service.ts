@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { AgentRole, ContextScope, ContextStore } from '@app/common';
 import type {
-  AgentRole,
   BootstrapContext,
   InvokeRequest,
   InvokeResponse,
@@ -8,6 +8,7 @@ import type {
 import { BootstrapContextService } from './bootstrap-context.service';
 import { McpServerConfigService } from '../config';
 import { AgentRegistry } from '../registry';
+import { McpElicitationConnection } from '../registry/mcp-elicitation-connection';
 import { ROLE_TIMEOUTS } from './role-timeouts';
 
 @Injectable()
@@ -19,6 +20,8 @@ export class MessageBroker {
     private readonly registry: AgentRegistry,
     private readonly config: McpServerConfigService,
     private readonly bootstrapContext: BootstrapContextService,
+    @Inject(ContextStore)
+    private readonly contextStore: ContextStore,
   ) {}
 
   async invoke(request: InvokeRequest): Promise<InvokeResponse> {
@@ -35,16 +38,9 @@ export class MessageBroker {
       return { success: false, error };
     }
 
-    // Safeguard 2 — Circular call prevention (O(1) amortized)
-    const chain = this.callChains.get(correlationId) ?? new Set<AgentRole>();
-
-    if (chain.has(target)) {
-      const error = `Circular call: ${[...chain].join(' → ')} → ${target}`;
-      this.logger.warn(`Rejected: ${error} [correlationId=${correlationId}]`);
-      return { success: false, error };
-    }
-
-    // Safeguard 3 — Agent availability (O(1) lookup)
+    // Safeguard 2 — Agent availability (O(1) lookup)
+    // Runs before the circular check so we know the connection type and can
+    // exempt elicitation targets (which are human prompts, not recursive LLM calls).
     const agent = this.registry.get(target);
 
     if (!agent) {
@@ -59,6 +55,20 @@ export class MessageBroker {
       return { success: false, error };
     }
 
+    // Safeguard 3 — Circular call prevention (O(1) amortized)
+    // Skipped for elicitation targets: the moderator-via-elicitation path
+    // (moderator → developer → moderator) is the QRM6 clarification flow,
+    // not a recursive LLM loop. Elicitation delivers a user prompt that
+    // cannot itself emit further invoke_agent calls.
+    const chain = this.callChains.get(correlationId) ?? new Set<AgentRole>();
+    const isElicitation = agent instanceof McpElicitationConnection;
+
+    if (!isElicitation && chain.has(target)) {
+      const error = `Circular call: ${[...chain].join(' → ')} → ${target}`;
+      this.logger.warn(`Rejected: ${error} [correlationId=${correlationId}]`);
+      return { success: false, error };
+    }
+
     // Track caller in chain
     chain.add(caller);
     this.callChains.set(correlationId, chain);
@@ -68,19 +78,24 @@ export class MessageBroker {
       const timeout =
         ROLE_TIMEOUTS[target] ?? this.config.broker.defaultTimeoutMs;
 
-      // Assemble bootstrap context (non-fatal — deliver without on failure)
-      let bootstrapResult: BootstrapContext | null = null;
-      try {
-        bootstrapResult = await this.bootstrapContext.assemble(correlationId);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.logger.warn(
-          `Bootstrap context assembly failed — proceeding without: ${message} [correlationId=${correlationId}]`,
-        );
-      }
+      // Assemble bootstrap context only on fresh sessions. Resumed sessions
+      // already carry Prior Decisions in conversation history; re-injecting
+      // them would duplicate context and (with SDK MCP cache busting,
+      // anthropics/claude-agent-sdk-typescript#247) re-pay full input cost.
+      if (!request.sessionId) {
+        let bootstrapResult: BootstrapContext | null = null;
+        try {
+          bootstrapResult = await this.bootstrapContext.assemble(correlationId);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.warn(
+            `Bootstrap context assembly failed — proceeding without: ${message} [correlationId=${correlationId}]`,
+          );
+        }
 
-      if (bootstrapResult) {
-        request.bootstrapContext = bootstrapResult;
+        if (bootstrapResult) {
+          request.bootstrapContext = bootstrapResult;
+        }
       }
 
       const response = await this.deliverWithTimeout(
@@ -88,6 +103,35 @@ export class MessageBroker {
         timeout,
         target,
       );
+
+      // Auto-persist successful moderator clarifications to the context store.
+      // Mirrors ClarificationHandler.persistDecision() — same key format, scope,
+      // and value shape. Non-fatal: persist failure is logged but does not affect
+      // the InvokeResponse returned to the caller.
+      if (
+        target === AgentRole.moderator &&
+        response.success &&
+        response.result
+      ) {
+        try {
+          await this.contextStore.set({
+            scope: ContextScope.project,
+            key: `clarification:${caller}:${correlationId}`,
+            value: {
+              question: request.action,
+              answer: response.result,
+              askedBy: caller,
+              correlationId,
+            },
+            createdBy: 'moderator',
+          });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.warn(
+            `Failed to persist clarification decision: ${message} [correlationId=${correlationId}]`,
+          );
+        }
+      }
 
       this.logger.log(
         `Completed: correlationId=${correlationId} target=${target} success=${response.success}`,

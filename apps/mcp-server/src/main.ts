@@ -14,7 +14,7 @@ async function bootstrap() {
   // `requestTimeout` and `headersTimeout` to 300s — these apply to slow
   // *incoming* request bodies, not slow responses, so they are NOT the
   // actual cause of long-call stalls (the real fix is client-side undici
-  // `bodyTimeout`; see apps/terminal/src/connection/mcp-client.service.ts).
+  // `bodyTimeout`; see apps/agent/src/connection/mcp-client.service.ts).
   // Raising them anyway so the client-side AbortController remains the sole
   // timeout authority across the whole stack, matching the outgoing-side
   // pattern in apps/mcp-server/src/registry/http-agent-connection.ts.
@@ -24,6 +24,14 @@ async function bootstrap() {
   const httpServer = app.getHttpServer() as Server;
   httpServer.requestTimeout = serverTimeoutMs;
   httpServer.headersTimeout = serverTimeoutMs;
+
+  // QRM6-BUG-011 Fix #3: enable TCP keepalive on every incoming connection.
+  // When a flow goes truly dead (route flap, container restart, conntrack
+  // eviction), the kernel detects the dead socket within ~30s instead of
+  // leaving a zombie ESTABLISHED connection.
+  httpServer.on('connection', (socket) => {
+    socket.setKeepAlive(true, 30_000);
+  });
 
   await app.listen(config.app.port);
 }

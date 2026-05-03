@@ -173,26 +173,26 @@ sequenceDiagram
 
 ### User Clarification (via Moderator)
 
-Agents can invoke the `moderator` to escalate decisions to the user. This uses a dedicated `ClarificationHandler` that bypasses the Moderator LLM — preventing a deadlock where the Moderator would be blocked waiting for the very agent that's now trying to invoke it.
+Agents can invoke the `moderator` to escalate decisions to the user. The MCP server routes the invocation to the moderator's Claude Code CLI container, which surfaces the question to the user via MCP elicitation.
 
 ```mermaid
 sequenceDiagram
     participant D as Developer
     participant B as Broker
-    participant T as Terminal
+    participant M as Moderator
     participant U as User
 
     D->>B: invoke_agent(moderator, "push or pull architecture?")
-    B->>T: POST /invoke
-    T->>U: Display question
-    U->>T: "pull-based"
-    T->>T: Persist to Context Store
-    T->>B: { success: true, result: "pull-based" }
+    B->>M: MCP elicitation
+    M->>U: Display question
+    U->>M: "pull-based"
+    M->>M: Persist to Context Store
+    M->>B: { success: true, result: "pull-based" }
     B->>D: return answer
     Note over D: Continues with user's decision
 ```
 
-The `ClarificationHandler` displays the question verbatim, collects the answer, auto-persists it to the Context Store (project scope, keyed as `clarification:{caller}:{correlationId}`), and returns the answer. A `StdinLockService` (async mutex) prevents interleaved I/O between the chat loop and clarification prompts.
+The moderator surfaces the question to the user, collects the answer, persists it to the Context Store (project scope), and returns the answer to the calling agent.
 
 ## Summary
 
@@ -202,7 +202,7 @@ Quorum's bidirectional MCP architecture enables:
 |------------|-----------|
 | Agent-to-agent communication | `invoke_agent` tool via Message Broker |
 | Mid-task consultation | Synchronous request-response (wait: true) |
-| User escalation | Invoke moderator → ClarificationHandler → user |
+| User escalation | Invoke moderator → MCP elicitation → user |
 | Task decomposition | Chained synchronous calls with depth tracking |
 | Call safety | Circular call prevention, depth limit, role-based timeouts |
 | Fire-and-forget (wait: false) | Schema accepts the parameter but broker always awaits — not yet implemented |

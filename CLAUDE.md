@@ -21,18 +21,16 @@ Agents communicate via MCP server and collaborate according to their roles. Each
 - **Runtime**: Node.js with TypeScript
 - **Framework**: NestJS
 - **Agent LLM**: Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) — agents run as Claude Code subprocesses
-- **Moderator LLM**: Raw Anthropic SDK (`@anthropic-ai/sdk`) — pure orchestration, no Claude Code
+- **Moderator**: Claude Code CLI in a dedicated container — pure orchestration via MCP tools
 - **Protocol**: MCP SDK (`@modelcontextprotocol/sdk`) over Streamable HTTP
 - **Containerization**: Docker
-- **UI**: ink + React terminal interface
 
 ## Project Structure
 
-NestJS monorepo with 3 apps and 1 shared library:
+NestJS monorepo with 2 apps and 1 shared library:
 
 ```
 apps/
-  terminal/       # Terminal App — Console UI, Moderator LLM (raw Anthropic SDK), ClarificationHandler
   mcp-server/     # MCP Server — 7 tools, 2 resources, Agent Registry, Message Broker, Context Store
   agent/          # Agent App — single image, multi-role via AGENT_ROLE env var (Claude Agent SDK)
 libs/
@@ -92,6 +90,9 @@ npm run test:e2e
 # Docker — builds and starts all containers with correct host uid/gid
 ./scripts/start.sh
 ./scripts/start.sh -d     # detached mode
+
+# Moderator — attach to the running moderator container
+./scripts/moderator.sh
 ```
 
 ## Architecture Concept
@@ -99,7 +100,7 @@ npm run test:e2e
 The system enables high-level task decomposition through agent collaboration. Example flow:
 1. User requests moderator to build a feature
 2. Moderator invokes architect to design the solution
-3. User provides feedback on design (agents can escalate via moderator's ClarificationHandler)
+3. User provides feedback on design (agents can escalate via moderator)
 4. Moderator instructs team lead to create implementation ticket stubs
 5. Moderator assigns developer to implement tickets
 6. Developer can request architectural review from architect, code review from team lead
