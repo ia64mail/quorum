@@ -649,6 +649,55 @@ All layers can be in a single commit since they form one coherent fix.
 
 4. **SSE keepalive dual-purpose:** The `startSseKeepalive` function now serves both QRM5-BUG-005/QRM6-BUG-011 (undici bodyTimeout prevention) and QRM7-001 (lastSeenAt refresh). Successful `res.write(': ping\n\n')` proves TCP liveness and refreshes the session, preventing false-positive reaping during long `invoke_agent` calls.
 
+## Post-Fix Verification — `mcp-server-20260504T001855.jsonl` (2026-05-03 run)
+
+First production run with QRM7-001 deployed. Captures the same failure pattern that drove the ticket and shows it being handled correctly.
+
+### Quantitative comparison
+
+| Metric | Pre-fix run (`20260501T144144.jsonl`, 11h 25min) | Post-fix run (`20260504T001855.jsonl`, ~10h) |
+|---|---|---|
+| `Session created` | 49 | 13 |
+| `Session closed` | 0 | 0 |
+| **`Session reaped`** | **0** (no reaper existed) | **13** ✅ |
+| `Registered agent: moderator` | 1 | 2 |
+
+The 1:1 ratio of created-to-reaped sessions confirms Layer 3 is firing and bounding state growth. The drop in session creation rate (from every ~15 min to less depends on run length) is incidental — both runs are dominated by CC CLI's internal transport-recycling cadence, which Quorum doesn't control.
+
+### Timeline of a moderator drop, end-to-end
+
+The same failure mode that motivated the ticket — moderator's MCP session dying without re-attach — was observed and handled cleanly:
+
+| Time (UTC) | Event |
+|---|---|
+| `00:19:04` | Session `dd472222` created (moderator's session at startup) |
+| `00:20:57` | `Registered agent: moderator` bound to `dd472222` |
+| `00:21:49 → 00:35:44` | 7 successful `invoke_agent` calls against this session, all `success=true`, `handlerMs` up to 185s |
+| `00:35:44` | Last POST closes; SSE keepalive on POST stops |
+| `00:37:25` | Session `dd472222` reaped — 1m41s after last touch, GET-stream keepalive went silent (CC CLI transport recycled client-side) |
+| `00:37:25 → 00:54:08` | 18-minute gap. 4 ephemeral sessions created and reaped on a 2:18 cycle. **No `register_agent` fires** — moderator is genuinely unreachable, registry correctly reports it |
+| `00:54:08` | Session `181aab1b` created (user re-attached `claude`) |
+| `00:54:15` | `Registered agent: moderator` re-binds onto fresh session |
+| `00:54:24` | `invoke_agent → teamlead` resumes, `success=true handlerMs=59897` |
+
+Pre-fix, this 18-minute window would have routed every agent → moderator call to the corpse and burned the full 5-minute elicitation timeout per call. Post-fix, the broker fail-fasts via `isConnected()=false` immediately.
+
+### Verified design properties
+
+1. **Reaper does not interfere with active calls.** All 7 in-flight `invoke_agent` POSTs on `dd472222` completed before the session went idle. The POST-response SSE keepalive kept `lastSeenAt` fresh during each call. The reap fired 1m41s after the last POST returned, not during one — exactly the in-flight-elicitation safety property AC #4 requires.
+
+2. **`Registered agent: moderator` correctly fires twice.** Once at original attach (`00:20:57`), once at re-attach (`00:54:15`). The second `register_agent` overwrites the stale registry entry by role, as predicted by Review Note #2.
+
+3. **No `Session closed` events.** Layer 2 (TCP keepalive) is configured but `transport.onclose` still doesn't fire — the kernel-level keepalive probes either succeed against CC CLI's recycled transport or the SDK doesn't surface the close. This is acceptable: Layer 3 (reaper) catches everything Layer 2 misses, exactly as the layered design intended. Layer 2 was always best-effort; the system doesn't depend on it.
+
+### Residual gap (acknowledged in design, not regressed)
+
+There remains a window of up to `SESSION_LIVENESS_TIMEOUT_MS` (2 min) where CC CLI's transport is dead but `lastSeenAt` hasn't expired. An `invoke_agent(target=moderator)` issued during this window still routes to the dead `McpElicitationConnection` and waits the elicitation timeout. This is inherent to the polling-based liveness model and was a conscious design tradeoff — shortening the timeout risks false negatives during legitimate idle. Eliminating the window entirely would require client cooperation (Layer 4 SIGTERM `DELETE`, which CC CLI cannot be patched to send) or a push-based liveness signal not available in Streamable HTTP MCP.
+
+### Conclusion
+
+The fix is delivering its three promised properties in production: (1) registry truthfulness, (2) bounded session-state memory, (3) sub-second fail-fast routing once the liveness window expires. No regressions observed. The "transport drop" symptom users see in CC CLI logs is client-side transport recycling — out of scope for this ticket and unchanged by the fix.
+
 ## Dependencies and References
 
 ### Prerequisites
