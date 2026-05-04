@@ -1,14 +1,14 @@
 ---
 ticketId: QRM7-002
 title: Schema-First InvokeRequest Migration — Eliminate Dual Declaration
-status: Ready
+status: Done
 created: 2026-05-01
 parent: QRM6-BUG-014
 ---
 
 # QRM7-002: Schema-First InvokeRequest Migration — Eliminate Dual Declaration
 
-**Status:** Ready — architect review complete, all corrections incorporated.
+**Status:** Done — implemented and reviewed 2026-05-04.
 
 ## Summary
 
@@ -64,13 +64,42 @@ Using `export type` for the inferred types ensures they are erased at compile ti
 
 ## Acceptance Criteria
 
-- [ ] `invokeRequestSchema` is exported from `libs/common/src/messaging/invoke.types.ts`
-- [ ] `InvokeRequest` is derived via `z.infer<typeof invokeRequestSchema>` — no separate interface declaration
-- [ ] `BootstrapContext` and `BootstrapContextMeta` similarly derived from their schemas
-- [ ] The `_SchemaMatchesInvokeRequest` guard is removed (no longer needed)
-- [ ] All schema fields have `.describe()` calls preserving documentation from the current JSDoc interface comments (e.g., `z.string().describe('Correlation ID for the invocation chain')`) — `z.infer` strips JSDoc, so `.describe()` is the schema-first equivalent
-- [ ] All existing tests pass without modification (or with import-only changes)
-- [ ] `npm run build && npm run lint && npm run test` clean
+- [x] `invokeRequestSchema` is exported from `libs/common/src/messaging/invoke.types.ts`
+- [x] `InvokeRequest` is derived via `z.infer<typeof invokeRequestSchema>` — no separate interface declaration
+- [x] `BootstrapContext` and `BootstrapContextMeta` similarly derived from their schemas
+- [x] The `_SchemaMatchesInvokeRequest` guard is removed (no longer needed)
+- [x] All schema fields have `.describe()` calls preserving documentation from the current JSDoc interface comments (e.g., `z.string().describe('Correlation ID for the invocation chain')`) — `z.infer` strips JSDoc, so `.describe()` is the schema-first equivalent
+- [x] All existing tests pass without modification (or with import-only changes)
+- [x] `npm run build && npm run lint && npm run test` clean
+
+## Implementation Notes
+
+**Status:** Accepted — implemented and reviewed 2026-05-04.
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `libs/common/src/messaging/invoke.types.ts` | Moved `invokeRequestSchema`, `bootstrapContextSchema`, `bootstrapContextMetaSchema` here from invocation controller. Derived `InvokeRequest`, `BootstrapContext`, `BootstrapContextMeta` via `z.infer`. Added `.describe()` on all schema fields to preserve documentation that `z.infer` strips from JSDoc. |
+| `libs/common/src/messaging/index.ts` | Added value exports for schemas (`invokeRequestSchema`, `bootstrapContextSchema`, `bootstrapContextMetaSchema`) and `export type` for inferred types (`InvokeRequest`, `BootstrapContext`, `BootstrapContextMeta`). |
+| `apps/agent/src/connection/invocation.controller.ts` | Removed local schema declarations, `_SchemaMatchesInvokeRequest` compile-time guard, and TODO comment acknowledging schema-first as the ideal solution. Imports `invokeRequestSchema` from `@app/common`. Removed redundant `as InvokeRequest` cast. |
+| `apps/mcp-server/src/testing/test.controller.ts` | Removed stale local `invokeRequestSchema` copy (was missing `bootstrapContext` and `sessionId` fields). Imports schema from `@app/common`. Removed redundant `as InvokeRequest` cast. |
+
+### Deviations
+
+- **0 deviations** — implementation matches the ticket scope and architect-approved design exactly.
+
+### Verification
+
+- `npm run build` ✅ — all apps compile cleanly
+- `npm run lint` ✅ — 0 errors, 0 warnings
+- `npm run test` ✅ — 44 suites, 700 tests pass
+
+### Review Notes
+
+1. **Architect review:** Approved with no changes requested. One non-blocking observation: the `conversation` field `.describe()` dropped the "Empty if no correlationId" trailing sentence from the original JSDoc. This is cosmetic — the describe text still conveys the field's purpose, and Zod `.describe()` is not consumed at runtime.
+
+2. **Team lead code review:** Approved with no changes requested. Integration verified — all consumers resolve correctly after the declaration source move, no shape changes to the type.
 
 ## References
 
