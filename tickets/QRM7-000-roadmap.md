@@ -130,6 +130,7 @@ QRM7-003 (Permission Persistence) ─── SUPERSEDED by QRM7-004
 QRM7-004 (Moderator cwd Fix)      ─── independent (closes QRM7-003)
 QRM7-005 (Log Adapter)            ─── independent
 QRM7-006 (Unit Test Gap-Fill)     ─── independent
+QRM7-007 (Moderator Subscription) ─── independent
 ```
 
 All tickets are independent and can run in parallel. QRM7-003 requires no implementation — it is closed when QRM7-004 lands and its acceptance criteria are verified.
@@ -139,19 +140,34 @@ All tickets are independent and can run in parallel. QRM7-003 requires no implem
 1. **QRM7-004** (cwd fix) — smallest change, highest daily-use improvement, also resolves QRM7-003
 2. **QRM7-001** (session cleanup) — most critical correctness fix, largest implementation surface
 3. **QRM7-002** (schema-first) — code quality, prevents future silent-strip bugs
-4. **QRM7-006** (unit tests) — CI hardening, can run after any of the above
-5. **QRM7-005** (log adapter) — tooling convenience, no functional urgency
+4. **QRM7-007** (moderator subscription auth) — small compose change, immediately reduces metered-API spend on moderator turns
+5. **QRM7-006** (unit tests) — CI hardening, can run after any of the above
+6. **QRM7-005** (log adapter) — tooling convenience, no functional urgency
 
 ## Additional Goals
 
-> **TBD** — Additional QRM7 goals beyond stabilization will be discussed and appended to this roadmap. Candidate areas include but are not limited to:
+Beyond the stabilization carry-forwards above, the following goals are appended as they are scoped:
+
+### QRM7-007 — Shift Moderator from API Key to Subscription (OAuth) Auth
+
+**Status:** Open
+
+The moderator currently inherits `ANTHROPIC_API_KEY` via the compose `x-shared-env` anchor and bills against the org's metered API quota for every CC CLI orchestration turn. With a Claude.ai subscription seat available, the moderator should authenticate via `claude /login` (OAuth) so its interactive turns are covered by the flat per-month seat. Agents must keep the API key — Claude Agent SDK calls the Anthropic API programmatically, which subscription seats do not grant.
+
+**Touches:** `docker-compose.yml` (drop `<<: *shared-env` from moderator service), `docker/moderator/settings.json` (add `forceLoginMethod: "claudeai"` defense-in-depth)
+
+**One-time:** interactive `/login` via `docker compose exec -it moderator claude`; OAuth token persists on the existing `moderator-claude-data` volume.
+
+**Depends on:** —
+
+**Full ticket:** [QRM7-007](QRM7-007-moderator-subscription-auth.md)
+
+> Further QRM7 goals will be discussed and appended here. Candidate areas:
 >
 > - Feature work (new capabilities, workflow improvements)
 > - Tooling and developer experience
 > - Infrastructure and scaling
 > - Documentation consolidation
->
-> This section will be updated once goals are finalized.
 
 ## Carry-Forward Registry
 
