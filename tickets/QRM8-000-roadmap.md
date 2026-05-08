@@ -68,7 +68,7 @@ Under QRM8-002 worktrees, each invocation's cwd is `/var/agent-worktrees/<correl
 
 ### D1: Worktree Per Invocation
 
-**Decision:** Each agent invocation creates an isolated git worktree at `/var/agent-worktrees/<correlationId>` and the SDK subprocess runs there instead of the shared workspace. The worktree is created before `claudeCode.execute()` and removed in the `finally` block of `InvocationHandler.runInvocation()` (`invocation-handler.service.ts:87`).
+**Decision:** Each agent invocation specifies a target branch via `InvokeRequest.branch` (required field) and creates an isolated git worktree at `/var/agent-worktrees/<correlationId>` on that branch. The SDK subprocess runs in the worktree instead of the shared workspace. The worktree is created before `claudeCode.execute()` and removed in the `finally` block of `InvocationHandler.runInvocation()` (`invocation-handler.service.ts:87`).
 
 **Rationale:** Eliminates the shared-working-tree concurrency problem at ~1s overhead per invocation (vs. 30–90s for per-invocation containers). Each invocation gets a branch checkout without affecting any other in-flight work.
 
@@ -115,7 +115,7 @@ Under QRM8-002 worktrees, each invocation's cwd is `/var/agent-worktrees/<correl
 
 ### D6: Branch-in-Flight Guard in MessageBroker
 
-**Decision:** Add a broker-level guard that prevents two concurrent invocations from operating on the same branch. New `branchLocks: Map<string, { correlationId: string; target: AgentRole }>` in `MessageBroker`, checked after existing safeguards (depth, availability, circular call) and before delivery. Lock acquired when delivery starts; released in the `finally` block (mirrors `callChains` lifecycle). Requests without a `branch` field bypass this guard (backward compatibility).
+**Decision:** Add a broker-level guard that prevents two concurrent invocations from operating on the same branch. New `branchLocks: Map<string, { correlationId: string; target: AgentRole }>` in `MessageBroker`, checked after existing safeguards (depth, availability, circular call) and before delivery. Lock acquired when delivery starts; released in the `finally` block (mirrors `callChains` lifecycle). With `branch` now a required field (D1), the guard applies universally to every invocation.
 
 **Rationale:** Partial resolution of ICEBOX #1 (Duplicate Invocation Prevention). Combined with `InvocationHandler.inflight` deduplication (`invocation-handler.service.ts:79-91`), the system has two-layer protection. The remaining gap (retries with different branches) is low-risk and deferred.
 
@@ -148,6 +148,16 @@ Under QRM8-002 worktrees, each invocation's cwd is `/var/agent-worktrees/<correl
 **Silent-fallback detection (acceptance criterion):** When `request.sessionId` is provided but `result.sessionId !== request.sessionId`, the SDK silently fell back to fresh. Log a `WARN` in `InvocationHandler.logResult()` — makes the failure visible without breaking the flow.
 
 **Optional v1 — cross-MCP-restart durability:** The `agentSessions` map is in-process memory. On MCP server restart, it's gone (observed multiple times in prior sessions). Optionally persist latest-per-role to `context_store` project scope (`latest-session:<role>` key) on each response, restore on MCP startup. Worth flagging but not blocking for QRM8.
+
+### D10: Turn-Start Pull Reminder in `new_conversation` Response
+
+**Decision:** The `new_conversation` MCP tool's response includes a `reminder` field instructing the moderator to run `git fetch origin && git pull --ff-only` before reading any workspace files. The response format changes from `{ correlationId }` to `{ correlationId, reminder }`. Implementation site: `apps/mcp-server/src/mcp/mcp.service.ts:697-738`.
+
+**Rationale:** With the host bind mount removed (D4), the moderator's workspace is its own git clone — it can go stale between turns as agents push commits. The pull reminder fires at the only moment freshness actually matters (start of each turn) and is mechanical: the MCP tool always returns it, regardless of prompt drift. This is more reliable than depending on `docker/moderator/CLAUDE.md` prompt discipline alone, though the prompt should still document the practice.
+
+**Reminder content:** `"Run git fetch origin && git pull --ff-only before reading any workspace files — agent commits since your last turn may not be in your local clone."`
+
+**Resolves Concern #6** — the gap between "prompt-driven pull" and "mechanical pull" is closed by embedding the reminder in the tool response that already fires on every turn boundary.
 
 ## Technical Architecture
 
@@ -225,7 +235,7 @@ InvocationHandler.runInvocation(request)
   │
   ├── git worktree add /var/agent-worktrees/<correlationId> <branch>
   │     cwd: /var/agent-repo/
-  │     branch = request.branch ?? default branch
+  │     branch = request.branch                    # required field — no default
   │
   ├── claudeCode.execute({ ..., cwd: '/var/agent-worktrees/<correlationId>' })
   │     SDK subprocess runs in the worktree
@@ -400,6 +410,10 @@ No mechanical fences. No auto-memory deny rules. Moderator memory unchanged (per
 
 10. **Cross-turn resume is the default:** `invoke_agent` without explicit sessionId resumes the prior session for that role across turn boundaries. `sessionId: ""` forces fresh. Moderator prompt documents the new default.
 
+11. **Moderator turn-start reminder:** `new_conversation` response includes a `reminder` field. Moderator's first action after `new_conversation` is `git pull` (verifiable in logs).
+
+12. **Mandatory branch validation:** All `invoke_agent` calls include a `branch` field. Requests without `branch` are rejected by zod validation with a descriptive error.
+
 ## Scope Exclusions
 
 | Item | Why excluded | Revisit when |
@@ -409,7 +423,7 @@ No mechanical fences. No auto-memory deny rules. Moderator memory unchanged (per
 | **Context Store quality upgrades** | Background summarization, agent-scope bootstrap injection, decay/TTL — these make `context_store(scope='agent')` a full replacement for CC memory. Valuable but out of scope for QRM8's isolation theme. | QRM9. Monitor agent performance after QRM8-007 lands; if agents show degraded multi-step task quality, escalate priority |
 | **Per-role git identity** | All commits attributed to PAT owner's GitHub identity. Per-role identity (separate GitHub Apps or bot accounts) enables audit trails per agent. | When audit accountability matters — deferred until the single-PAT model causes real confusion |
 | **Web UI / remote moderator** | QRM8 removes bind mounts but keeps the moderator as a local Docker-attached CLI session. Remote access (web UI, SSH tunnel) is a separate concern. | User demand for remote access without Docker exec |
-| **`new_conversation` rule clarification** | The moderator prompt should be updated to explain that `new_conversation` no longer clears session cache. This is a prompt refinement, not a code change, and can land alongside QRM8-005 or independently. | QRM8-005 or shortly after |
+| **`new_conversation` prompt alignment** | The moderator prompt in `docker/moderator/CLAUDE.md` should align language with D9 (session cache persists across turns) and D10 (turn-start reminder). This is a prompt refinement, not a code change. The mechanical reminder (D10) reduces the urgency — the prompt change is polish, not a safety gap. | QRM8-005 or shortly after |
 | **Automatic `agentSessions` restore from context_store on MCP restart** | The optional cross-MCP-restart durability for D9. Valuable but not blocking — MCP restarts are infrequent and FileSessionStore data survives regardless (only the cache pointer is lost). | If MCP restart frequency increases or session resume failures become a pain point |
 
 ---
@@ -420,7 +434,7 @@ No mechanical fences. No auto-memory deny rules. Moderator memory unchanged (per
 
 **Status:** Open (builds on QRM5-001 session resume foundation)
 
-Replace `InMemorySessionStore` with a `FileSessionStore` that persists SDK session transcripts to a Docker named volume. The current in-memory store (`claude-code.service.ts:24`) loses all session data on process restart — resume only works within a single container lifetime. The `FileSessionStore` implementation follows the design validated in `tickets/tmp/session-resume-investigation.md` (Option A). **Implements D3 (FileSessionStore) and the mcp-server-side change for D9 (cross-turn resume).**
+Replace `InMemorySessionStore` with a `FileSessionStore` that persists SDK session transcripts to a Docker named volume. The current in-memory store (`claude-code.service.ts:24`) loses all session data on process restart — resume only works within a single container lifetime. The `FileSessionStore` implementation follows the design validated in `tickets/tmp/session-resume-investigation.md` (Option A). **Implements D3 (FileSessionStore), the mcp-server-side change for D9 (cross-turn resume), and D10 (turn-start reminder in `new_conversation` response).**
 
 **Key decisions:**
 - Storage path: `/var/agent-sessions/` on a per-role named Docker volume (not the workspace mount, which is removed in QRM8-002)
@@ -429,7 +443,7 @@ Replace `InMemorySessionStore` with a `FileSessionStore` that persists SDK sessi
 - The volume survives container restarts; each agent role gets its own volume to prevent cross-role session leakage
 - `InMemorySessionStore` import removed; `FileSessionStore` injected via NestJS DI for testability
 
-**Touches:** `apps/agent/src/llm/claude-code.service.ts` (swap store), `apps/agent/src/llm/file-session-store.ts` (new), `docker-compose.yml` (add per-role session volumes + mount), `apps/agent/src/llm/claude-code.types.ts` (export store interface if needed), **`apps/mcp-server/src/mcp/mcp.service.ts`** (remove `agentSessions.clear()` from `new_conversation` at line 735 — D9)
+**Touches:** `apps/agent/src/llm/claude-code.service.ts` (swap store), `apps/agent/src/llm/file-session-store.ts` (new), `docker-compose.yml` (add per-role session volumes + mount), `apps/agent/src/llm/claude-code.types.ts` (export store interface if needed), **`apps/mcp-server/src/mcp/mcp.service.ts`** (remove `agentSessions.clear()` from `new_conversation` at line 735 — D9; add `reminder` field to `new_conversation` response at lines 697-738 — D10)
 
 **Acceptance criteria:**
 1. `FileSessionStore.load({sessionId})` returns session entries regardless of `projectKey` value (sessionId-only lookup)
@@ -438,6 +452,7 @@ Replace `InMemorySessionStore` with a `FileSessionStore` that persists SDK sessi
 4. `agentSessions.clear()` removed from `new_conversation` — cached sessionIds survive across turns (D9)
 5. `WARN` logged in `InvocationHandler.logResult()` when `result.sessionId !== request.sessionId` (silent-fallback detection)
 6. (Optional) Persist latest-per-role sessionId to `context_store` project scope (`latest-session:<role>` key) on each response; restore on MCP startup for cross-restart resilience
+7. `new_conversation` response includes a `reminder` field instructing the moderator to run `git fetch origin && git pull --ff-only` before reading workspace files (D10)
 
 **Depends on:** —
 
@@ -451,7 +466,7 @@ Each invocation creates an isolated git worktree at `/var/agent-worktrees/<corre
 
 **Infrastructure changes:**
 - **Agent git clone**: Each agent container needs a persistent base repository to create worktrees from. Replace the `${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw` bind mount with a named volume at `/var/agent-repo/` containing a git clone. First-boot initialization (`git clone`) runs in the container entrypoint or on first invocation.
-- **Branch param**: Add `branch` (optional string) to `invokeRequestSchema` in `libs/common/src/messaging/invoke.types.ts`. Callers pass the target branch; the handler checks it out via `git worktree add`.
+- **Branch param**: Add `branch` (required string) to `invokeRequestSchema` in `libs/common/src/messaging/invoke.types.ts`. Every caller must specify the target branch; zod validation rejects requests without `branch` with a descriptive error. The handler checks out the specified branch via `git worktree add`.
 - **Worktree lifecycle**: `InvocationHandler.runInvocation()` creates the worktree before `claudeCode.execute()` and removes it in `finally`. The worktree path becomes the per-invocation cwd.
 - **cwd parameterization**: `ClaudeCodeService.execute()` currently reads cwd from `this.config.agent.workspaceDir` (line 90). Add `cwd` to `ExecuteParams` so the handler can inject the worktree path per invocation. The config-based default becomes the fallback for non-worktree execution (e.g., tests).
 - **Git fetch before worktree**: `git fetch origin` runs before `git worktree add` to ensure the branch ref is up to date.
@@ -460,7 +475,6 @@ Each invocation creates an isolated git worktree at `/var/agent-worktrees/<corre
 - Worktree directory (`/var/agent-worktrees/`) lives on tmpfs or an ephemeral volume — worktrees are short-lived and cleaned up after each invocation
 - The base repo volume (`/var/agent-repo/`) is persistent (named volume) — survives container restarts, avoids re-cloning
 - `AGENT_WORKSPACE_DIR` env var semantics change: it now points to the base repo, not the workspace; the actual SDK cwd is the worktree path
-- If `branch` is omitted in the request, the handler uses the repo's default branch (defensive fallback)
 
 **Touches:** `libs/common/src/messaging/invoke.types.ts` (add `branch` field), `apps/agent/src/connection/invocation-handler.service.ts` (worktree lifecycle), `apps/agent/src/llm/claude-code.service.ts` (accept cwd in params), `apps/agent/src/llm/claude-code.types.ts` (add cwd to ExecuteParams), `apps/agent/src/config/agent.config.ts` (redefine workspaceDir semantics), `docker-compose.yml` (remove bind mount, add repo + worktree volumes, add agent entrypoint), `Dockerfile` (agent stage: add entrypoint for clone init, create `/var/agent-worktrees/` dir)
 
@@ -498,7 +512,7 @@ Add a broker-level guard that prevents two concurrent invocations from operating
 - New `branchLocks: Map<string, { correlationId: string; target: AgentRole }>` in `MessageBroker`
 - Checked after existing safeguards (depth, availability, circular call) and before delivery
 - Lock acquired when delivery starts; released in the `finally` block (mirrors `callChains` lifecycle)
-- Requests without a `branch` field bypass this guard (backward compatibility)
+- With `branch` now a required field, the guard applies universally — every invocation contributes a branch lock
 
 **Relationship to ICEBOX #1 (Duplicate Invocation Prevention):** This guard partially resolves the icebox item by preventing same-branch collisions — the most damaging form of duplicate invocation. Combined with the existing `InvocationHandler.inflight` deduplication (`invocation-handler.service.ts:78-91`), the system now has two-layer protection. The remaining gap (retries with different branches) is low-risk and deferred.
 
@@ -518,8 +532,9 @@ Remove the moderator's workspace bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/w
 - `docker/moderator/entrypoint.sh` gains first-boot `git clone` logic (clone into `/mnt/quorum/workspace` on the named volume if the directory is empty or not a git repo)
 - `gh auth login --with-token` runs at container start using `GH_TOKEN` env var; token persists to `~/.config/gh/hosts.yml` on the named volume; `unset GH_TOKEN` before CC CLI starts so the model cannot read it from the environment
 - `gh auth setup-git` configures git credential helper for HTTPS push/pull
-- Moderator's prompt instructs it to run `git fetch origin && git pull --ff-only` after each `new_conversation` call (prompt-driven, not mechanical)
+- Moderator's prompt instructs it to run `git fetch origin && git pull --ff-only` after each `new_conversation` call (reinforced mechanically by D10's reminder field in the `new_conversation` response)
 - **[D9] Prompt note for cross-turn resume:** "Cross-turn session resume now works by default — cached sessionIds persist across `new_conversation` boundaries. Pass `sessionId: ""` only when genuinely switching topics or when you want a completely fresh agent session."
+- **Mandatory `branch` parameter:** Moderator must specify `branch` in every `invoke_agent` call — there is no default. For read-only or review invocations, use the feature branch in scope (or `main` for general codebase exploration).
 - Tool-guard defense-in-depth: deny `cat ~/.config/gh/hosts.yml` and similar paths via moderator settings.json deny rules
 - `docker-compose.yml`: remove workspace bind mount from moderator service; add GH_TOKEN to moderator environment (with note to unset in entrypoint)
 
@@ -677,7 +692,7 @@ QRM6's D5 (`new_conversation` mints correlationId) and D6 (server-side session t
 
 ### ICEBOX #1 — Duplicate Invocation Prevention (Partial Resolution)
 
-QRM8-004's branch-in-flight guard prevents the most damaging form of duplicate invocation (two agents editing the same branch). Combined with `InvocationHandler.inflight` deduplication (per-correlationId, per-agent), the system has two-layer protection. ICEBOX #1 can be updated to reflect the partial resolution; the remaining gap (transport-error retries with different branches or no branch) is low-risk.
+QRM8-004's branch-in-flight guard prevents the most damaging form of duplicate invocation (two agents editing the same branch). Combined with `InvocationHandler.inflight` deduplication (per-correlationId, per-agent), the system has two-layer protection. ICEBOX #1 can be updated to reflect the partial resolution; the remaining gap (transport-error retries targeting different branches) is low-risk.
 
 ### ICEBOX #3 — Agent Session Resume via Correlation ID (Unchanged)
 
@@ -714,9 +729,11 @@ If `InvocationHandler.runInvocation()` crashes after creating a worktree but bef
 
 **Resolved:** Audit confirmed single consumer (`context-store.config.ts:14`), dead under OpenSearch. Promoted to QRM8-008. See Design Decisions D8.
 
-### 6. Moderator git-pull is prompt-driven, not mechanical
+### 6. Moderator git-pull is prompt-driven, not mechanical — resolved by D10
 
-The plan to run `git fetch && git pull --ff-only` at every `new_conversation` call relies on the moderator's prompt compliance. The moderator could forget, resulting in stale reads. A more robust option: add a shell hook or entrypoint cron that pulls periodically (e.g., every 60s). Alternatively, the MCP server's `new_conversation` tool could return a reminder in its response text. Neither is blocking for QRM8, but the gap should be documented for the developer implementing QRM8-005.
+~~The plan to run `git fetch && git pull --ff-only` at every `new_conversation` call relies on the moderator's prompt compliance. The moderator could forget, resulting in stale reads.~~
+
+**Resolved:** D10 adds a `reminder` field to the `new_conversation` tool response instructing the moderator to run `git fetch origin && git pull --ff-only` before reading any workspace files. This fires at the only moment freshness matters (start of turn) and survives prompt drift better than relying on `docker/moderator/CLAUDE.md` discipline alone. Implementation lands in QRM8-001 (same function as D9's `agentSessions.clear()` removal).
 
 ### 7. Tool-guard updates needed across all roles (QRM8-003 scope)
 
@@ -733,7 +750,7 @@ Under the "handler does git" model, **all roles** should deny `git commit`, `git
 
 The following items from `tickets/ICEBOX.md` are noted for awareness:
 
-- **Duplicate Invocation Prevention** — ICEBOX #1 is **partially resolved** by QRM8-004 (branch-in-flight guard). Update the icebox entry to reflect the remaining gap (retries with different branches or no branch). Do not promote further; the residual risk is low.
+- **Duplicate Invocation Prevention** — ICEBOX #1 is **partially resolved** by QRM8-004 (branch-in-flight guard). Update the icebox entry to reflect the remaining gap (retries targeting different branches). Do not promote further; the residual risk is low.
 - **Agent Session Resume via Correlation ID** — ICEBOX #3 remains unchanged. The upstream SDK prompt-cache issues (#247, #192) are independent of QRM8's scope.
 
 ## References
