@@ -66,7 +66,7 @@ Move `invokeRequestSchema` from `apps/agent/` to `libs/common/` and derive the `
 
 ### QRM7-003 — Moderator Permission Grants Not Persisting
 
-**Status:** Draft — **Superseded by QRM7-004**
+**Status:** Closed — **Superseded by QRM7-004** (2026-05-08)
 
 CC CLI 2.1.119+ writes interactive "always allow" grants to `<cwd>/.claude/settings.local.json`. With `cwd=/app` (read-only), writes fail silently. QRM7-003 proposed a writable `/app/.claude/` volume mount, but QRM7-004's cwd relocation solves this more cleanly by landing grants on the existing workspace bind-mount.
 
@@ -76,7 +76,7 @@ CC CLI 2.1.119+ writes interactive "always allow" grants to `<cwd>/.claude/setti
 
 ### QRM7-004 — Moderator cwd Not Aligned with Workspace
 
-**Status:** Draft — **Supersedes QRM7-003**
+**Status:** Done — **Supersedes QRM7-003** (2026-05-08)
 
 The moderator's `WORKDIR /app` is inherited boilerplate from other Dockerfile stages. `/app` is empty in the moderator image (only `/app/logs` bind-mount), yet CC CLI anchors its project root there. This causes: (a) model wastes turns self-correcting path references, (b) project-scope `CLAUDE.md` at `/mnt/quorum/workspace/CLAUDE.md` is not auto-loaded, (c) permission grants fail to persist (QRM7-003's symptom).
 
@@ -188,8 +188,8 @@ The user-visible burst-resume bug: after a long idle gap (laptop hibernation OR 
 ```
 QRM7-001 (Session Cleanup)         ─── independent (DONE 2026-05-03)
 QRM7-002 (Schema-First Migration)  ─── independent
-QRM7-003 (Permission Persistence)  ─── SUPERSEDED by QRM7-004
-QRM7-004 (Moderator cwd Fix)       ─── independent (closes QRM7-003)
+QRM7-003 (Permission Persistence)  ─── SUPERSEDED by QRM7-004 (closed 2026-05-08)
+QRM7-004 (Moderator cwd Fix)       ─── independent (DONE 2026-05-08, closes QRM7-003)
 QRM7-005 (Log Adapter)             ─── independent
 QRM7-006 (Unit Test Gap-Fill)      ─── independent
 QRM7-007 (Moderator Subscription)  ─── independent (DONE 2026-05-04)
@@ -198,14 +198,14 @@ QRM7-009 (Scope Reaper)            ─── after QRM7-001 (deployed)
 QRM7-010 (Moderator Stale Session) ─── after QRM7-001 (deployed); ideally after QRM7-009
 ```
 
-QRM7-001 and QRM7-007 are already complete. QRM7-003 requires no implementation — it is closed when QRM7-004 lands and its acceptance criteria are verified. QRM7-008/009/010 form a coherent post-QRM7-001 cluster: 008 hardens the agent-side retry path; 009 stops the reaper from churning agent sessions in the first place; 010 stabilizes the moderator-side resume path. They are mostly independent of each other but ideally land in the order 009 → 010 → 008 (009 removes the dominant trigger 008 fixes; 010 reuses 009's narrowed reaper semantics).
+QRM7-001, QRM7-004, and QRM7-007 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-008/009/010 form a coherent post-QRM7-001 cluster: 008 hardens the agent-side retry path; 009 stops the reaper from churning agent sessions in the first place; 010 stabilizes the moderator-side resume path. They are mostly independent of each other but ideally land in the order 009 → 010 → 008 (009 removes the dominant trigger 008 fixes; 010 reuses 009's narrowed reaper semantics).
 
 **Recommended sequencing (by operational impact, given current state):**
 
 1. **QRM7-010** (moderator stale session) — ✱ highest user-visible operational tax today; reproduced twice in 48 h (hibernation gap + continuous-uptime idle). Parts 1 + 2 needed together. ✱
 2. **QRM7-009** (scope reaper) — eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
 3. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency once 009 ships but still needed for correctness.
-4. **QRM7-004** (cwd fix) — smallest change, high daily-use improvement, also resolves QRM7-003.
+4. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
 5. **QRM7-002** (schema-first) — code quality, prevents future silent-strip bugs.
 6. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
 7. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
