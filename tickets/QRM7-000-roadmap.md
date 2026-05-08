@@ -8,7 +8,9 @@ Harden the post-QRM6 system for reliable daily use. QRM6 delivered the container
 
 ## Problem
 
-QRM6's live runs exposed several operational issues that individually degrade the user experience and collectively undermine confidence in the system's reliability:
+QRM6's live runs exposed several operational issues that individually degrade the user experience and collectively undermine confidence in the system's reliability. A second wave of related issues was uncovered during the QRM8 design run (`logs/sessions/2026-05-06-qrm8-roadmap-run.md`), all downstream of QRM7-001's reaper deployment — fixing one transport edge case made others observable.
+
+**Carry-forward from QRM6:**
 
 | Issue | Impact | Origin |
 |-------|--------|--------|
@@ -17,6 +19,14 @@ QRM6's live runs exposed several operational issues that individually degrade th
 | Moderator cwd is `/app` (empty directory) | CC CLI anchors on wrong project root; model wastes turns self-correcting; permission grants write to read-only path and don't persist | Observed in QRM6 production runs |
 | No moderator log adapter | `parse-logs.mjs` has no moderator-side input after `apps/terminal/` deletion; session reports lack moderator activity | QRM6-011, deferred from QRM6 |
 | Unit test gap for new server-side components | Session auto-injection, `new_conversation`, elicitation connection, clarification auto-persist lack systematic unit coverage | QRM6-008 deferred |
+
+**Surfaced post-QRM7-001 deployment (QRM8 design run, 2026-05-06 → 08, plus 2026-05-07 evening):**
+
+| Issue | Impact | Origin |
+|-------|--------|--------|
+| Agent retry-once path races the MCP `initialize` handshake | Every reaper-driven agent reconnect produces 1 failed tool call + 4 WARN log lines; 9 events across 5 bursts in the QRM8 run; work-output preserved by SDK adaptation but operator log signal-to-noise is alarming | Issue 3 in `2026-05-06-qrm8-roadmap-run.md`, promoted to QRM7-008 |
+| Reaper churns agent sessions that don't need liveness tracking | Pure collateral damage: agents are reachable via stable callback URL regardless of MCP session state, but the reaper still evicts them on idle, triggering the QRM7-008 race | Same run analysis, promoted to QRM7-009 |
+| Moderator's CC CLI client holds stale session ID across long idle | First 1–4 tool calls after each post-idle resume fail with `Session not found`; user must manually type `/mcp`; ~1–4 min friction per burst-resume; reproduced in continuous-uptime idle (2026-05-07 evening) as well as hibernation gaps | Issue 2 in `2026-05-06-qrm8-roadmap-run.md` + 2026-05-07 evening observation, promoted to QRM7-010 |
 
 ## Milestone Scope
 
@@ -119,30 +129,86 @@ QRM6 landed new server-side components (elicitation connection, session auto-inj
 
 **Depends on:** —
 
+### QRM7-008 — Agent `McpClientService` Retry-Once Path Races MCP `initialize`
+
+**Status:** Open
+
+The agent-side retry-once self-heal added in QRM5-BUG-005 fires `client.callTool()` *before* the new transport's MCP `initialize` round-trip has committed server-side. The retry lands on a freshly-opened-but-not-yet-initialized SDK server and surfaces `Bad Request: Server not initialized` — a different error class from `Session not found`, so `isSessionNotFound()` does not catch it and the call surfaces as a hard SDK tool failure. Work-output is preserved because the SDK adapts; log signal-to-noise is alarming and operator mental model degrades.
+
+**Fix:**
+- **Part 1 (load-bearing):** Replace the `reconnecting` boolean with a memoized `reconnectPromise`. Both call sites (`transport.onclose` and `callTool()` catch block) `await` the same in-flight chain; the catch-block retry no longer fires until `connect → register → discoverTools` resolves.
+- **Part 2 (belt-and-suspenders):** Broaden `isSessionNotFound()` to recognize `Server not initialized` / `Bad Request: Server not initialized` as the same failure class. Single-retry guard preserved.
+
+**Touches:** `apps/agent/src/connection/mcp-client.service.ts`, matching spec file
+
+**Depends on:** —
+
+**Full ticket:** [QRM7-008](QRM7-008-agent-retry-races-mcp-initialize.md)
+
+### QRM7-009 — Scope MCP Session Reaper to Elicitation Sessions
+
+**Status:** Open
+
+QRM7-001's reaper applies uniformly to every MCP session in `sessionStates`, but only the moderator's `McpElicitationConnection` actually depends on session liveness for routing — agents are reached by `HttpAgentConnection` via stable callback URLs that survive any MCP session churn. The result: the reaper evicts agent sessions on idle, forces an unnecessary reconnect via the QRM5-BUG-005 retry path, and exposes the QRM7-008 race. **Pure collateral damage** — 9 spurious failures across the QRM8 run, zero correctness improvements from reaping agents.
+
+**Fix:** `isSessionAlive()` returns `true` for sessions whose role is in the deployable agent set, regardless of `lastSeenAt`. Continues to apply liveness check for moderator and anonymous sessions. `register_agent` for an agent role evicts any prior session bound to the same role, preserving memory-bounding now that idle reaping is off.
+
+This is **complementary** to QRM7-008 (not a substitute): QRM7-009 removes the dominant trigger; QRM7-008 hardens the retry path for residual triggers (real mcp-server restart, container crash recovery).
+
+**Touches:** `apps/mcp-server/src/mcp/mcp.service.ts` (`isSessionAlive`, `register_agent` handler), spec files
+
+**Depends on:** QRM7-001 (must be deployed; QRM7-009 narrows its scope)
+
+**Full ticket:** [QRM7-009](QRM7-009-scope-reaper-to-elicitation-sessions.md)
+
+### QRM7-010 — Moderator's MCP Client Holds Stale Session Across Long Idle
+
+**Status:** Open
+
+The user-visible burst-resume bug: after a long idle gap (laptop hibernation OR continuous-uptime idle on an awake host), the moderator's CC CLI MCP client retries `POST /mcp` with a server-reaped `Mcp-Session-Id`, surfaces `Session not found` to the model, and does not auto-handshake. The user must manually type `/mcp` to recover. CC CLI 2.1.126 — and upstream `@modelcontextprotocol/sdk` `StreamableHTTPClientTransport` — violates MCP Streamable HTTP spec §2.5(4) by refusing to re-initialize on HTTP 404; Anthropic's docs explicitly state this is a deliberate design decision. The bug is unfixed across at least 9 closed CC GitHub issues (2025-09 → 2026-05).
+
+**Fix is layered (three parts, all in scope):**
+
+| Part | Trigger addressed | Code location |
+|------|-------------------|---------------|
+| 1. Monotonic `lastSeenAt` | Hibernation false reap (wall-clock jump on resume) | `apps/mcp-server/src/mcp/mcp.service.ts` |
+| 2. PTY supervisor in moderator container | Continuous-uptime long idle (genuine reap of dead session) | `docker/moderator/` (new `node-pty` proxy wrapping `claude`) |
+| 3. Diagnostic instrumentation | Pin down trigger (2)'s root cause among four candidates | `apps/mcp-server/src/mcp/mcp.controller.ts` (logging only) |
+
+**Touches:** `apps/mcp-server/src/mcp/mcp.service.ts`, `apps/mcp-server/src/mcp/mcp.controller.ts`, `docker/moderator/entrypoint.sh`, new `docker/moderator/supervisor/` directory
+
+**Depends on:** QRM7-001 (this ticket modifies the reaper Q7-001 introduced); ideally lands after QRM7-009 (so the supervisor only intervenes for moderator sessions, not agent sessions that 009 removed from the reaper's path)
+
+**Full ticket:** [QRM7-010](QRM7-010-moderator-stale-mcp-session-after-idle.md)
+
 ---
 
 ## Dependency Graph
 
 ```
-QRM7-001 (Session Cleanup)        ─── independent
-QRM7-002 (Schema-First Migration) ─── independent
-QRM7-003 (Permission Persistence) ─── SUPERSEDED by QRM7-004
-QRM7-004 (Moderator cwd Fix)      ─── independent (closes QRM7-003)
-QRM7-005 (Log Adapter)            ─── independent
-QRM7-006 (Unit Test Gap-Fill)     ─── independent
-QRM7-007 (Moderator Subscription) ─── independent
+QRM7-001 (Session Cleanup)         ─── independent (DONE 2026-05-03)
+QRM7-002 (Schema-First Migration)  ─── independent
+QRM7-003 (Permission Persistence)  ─── SUPERSEDED by QRM7-004
+QRM7-004 (Moderator cwd Fix)       ─── independent (closes QRM7-003)
+QRM7-005 (Log Adapter)             ─── independent
+QRM7-006 (Unit Test Gap-Fill)      ─── independent
+QRM7-007 (Moderator Subscription)  ─── independent (DONE 2026-05-04)
+QRM7-008 (Agent Retry Race)        ─── independent
+QRM7-009 (Scope Reaper)            ─── after QRM7-001 (deployed)
+QRM7-010 (Moderator Stale Session) ─── after QRM7-001 (deployed); ideally after QRM7-009
 ```
 
-All tickets are independent and can run in parallel. QRM7-003 requires no implementation — it is closed when QRM7-004 lands and its acceptance criteria are verified.
+QRM7-001 and QRM7-007 are already complete. QRM7-003 requires no implementation — it is closed when QRM7-004 lands and its acceptance criteria are verified. QRM7-008/009/010 form a coherent post-QRM7-001 cluster: 008 hardens the agent-side retry path; 009 stops the reaper from churning agent sessions in the first place; 010 stabilizes the moderator-side resume path. They are mostly independent of each other but ideally land in the order 009 → 010 → 008 (009 removes the dominant trigger 008 fixes; 010 reuses 009's narrowed reaper semantics).
 
-**Recommended sequencing (by operational impact):**
+**Recommended sequencing (by operational impact, given current state):**
 
-1. **QRM7-004** (cwd fix) — smallest change, highest daily-use improvement, also resolves QRM7-003
-2. **QRM7-001** (session cleanup) — most critical correctness fix, largest implementation surface
-3. **QRM7-002** (schema-first) — code quality, prevents future silent-strip bugs
-4. **QRM7-007** (moderator subscription auth) — small compose change, immediately reduces metered-API spend on moderator turns
-5. **QRM7-006** (unit tests) — CI hardening, can run after any of the above
-6. **QRM7-005** (log adapter) — tooling convenience, no functional urgency
+1. **QRM7-010** (moderator stale session) — ✱ highest user-visible operational tax today; reproduced twice in 48 h (hibernation gap + continuous-uptime idle). Parts 1 + 2 needed together. ✱
+2. **QRM7-009** (scope reaper) — eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
+3. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency once 009 ships but still needed for correctness.
+4. **QRM7-004** (cwd fix) — smallest change, high daily-use improvement, also resolves QRM7-003.
+5. **QRM7-002** (schema-first) — code quality, prevents future silent-strip bugs.
+6. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
+7. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
 
 ## Additional Goals
 
@@ -181,6 +247,16 @@ Items deferred into QRM7 from previous milestones:
 | Moderator cwd misalignment | Observed post-QRM6 | QRM7-004 |
 | Unified moderator log adapter | QRM6-011 | QRM7-005 |
 | Unit test gap-fill for server-side components | QRM6-008 deferred | QRM7-006 |
+
+## Post-QRM7-001 Findings (Surfaced In-Milestone)
+
+Discovered after QRM7-001's deployment, while running the QRM8 design session and during continuous-uptime moderator usage in the same week. Promoted into QRM7 scope rather than punted to QRM8 because they belong to the same MCP-transport stabilization theme and unblock D9/D10 in the QRM8 roadmap:
+
+| Finding | Surfaced By | QRM7 Ticket |
+|---------|-------------|-------------|
+| Agent retry-once path races MCP `initialize` handshake | `logs/sessions/2026-05-06-qrm8-roadmap-run.md` Issue 3 | QRM7-008 |
+| Reaper churns agent sessions despite their stable callback URL | Same run analysis (asymmetry between connection types) | QRM7-009 |
+| Moderator's CC CLI client holds stale session ID after long idle (hibernation + continuous-uptime) | Issue 2 in same log + 2026-05-07 evening reproduction | QRM7-010 |
 
 ## Icebox Items (Not Scheduled)
 
