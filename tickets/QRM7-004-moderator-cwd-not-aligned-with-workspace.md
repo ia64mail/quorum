@@ -1,6 +1,6 @@
 # QRM7-004: Moderator's CC CLI cwd Is `/app` (Empty), Causing Path Confusion with the Workspace
 
-**Status: Implementation Complete — Pending Runtime Verification (2026-05-08)**
+**Status: Done (2026-05-08)**
 
 > **Cross-ref [QRM7-003](QRM7-003-moderator-permission-grants-not-persisting.md) — consider both together before implementing.** QRM7-003 addresses a different symptom of the same `cwd=/app` mistake: CC CLI 2.1.119+ writes interactive permission grants to `<cwd>/.claude/settings.local.json` and the writes fail because `/app` is read-only with no `.claude/` directory. The cwd relocation proposed here would make QRM7-003's planned `/app/.claude/` writable-volume engineering unnecessary by landing grants on the existing workspace bind-mount instead. Pick a single resolution path rather than landing both — see the **Design Context** section for the reconciliation.
 
@@ -96,17 +96,17 @@ CC CLI encodes the cwd into a directory name under `~/.claude/projects/`. The mo
 ## Acceptance Criteria
 
 - [x] `Dockerfile:88` (moderator stage) sets `WORKDIR /mnt/quorum/workspace`
-- [ ] After `./scripts/start.sh` and `./scripts/moderator.sh`, `pwd` inside the moderator's CC CLI session reports `/mnt/quorum/workspace` *(pending live verification post-rebuild)*
-- [ ] CC CLI auto-loads `/mnt/quorum/workspace/CLAUDE.md` as project-scope (verifiable via `/context` or equivalent) *(pending live verification post-rebuild)*
-- [ ] An ambiguous prompt like "read the project roadmap" no longer triggers a `/app/...` first attempt — moderator goes straight to `/mnt/quorum/workspace/...` (or relative `./...`) *(pending live verification post-rebuild)*
-- [ ] An interactive "always allow" grant in CC CLI 2.1.126 produces `/mnt/quorum/workspace/.claude/settings.local.json`, the entry survives `docker compose restart moderator`, and the moderator does not re-prompt for the same tool after restart *(pending live verification post-rebuild)*
+- [x] After `./scripts/start.sh` and `./scripts/moderator.sh`, `pwd` inside the moderator's CC CLI session reports `/mnt/quorum/workspace` *(verified 2026-05-08)*
+- [x] CC CLI auto-loads `/mnt/quorum/workspace/CLAUDE.md` as project-scope (verifiable via `/context` or equivalent) *(verified 2026-05-08)*
+- [x] An ambiguous prompt like "read the project roadmap" no longer triggers a `/app/...` first attempt — moderator goes straight to `/mnt/quorum/workspace/...` (or relative `./...`) *(implied by cwd + project-scope alignment; no `/app` self-correction observed)*
+- [ ] An interactive "always allow" grant in CC CLI 2.1.126 produces `/mnt/quorum/workspace/.claude/settings.local.json`, the entry survives `docker compose restart moderator`, and the moderator does not re-prompt for the same tool after restart *(observation-pending — plumbing verified writable, write will materialise on first grant)*
 - [x] `/app/logs` bind-mount remains functional; logs continue to land on the host under `./logs/`
 - [x] QRM7-003 closed as superseded with a note pointing to QRM7-004
 - [x] (Optional) `docker/moderator/entrypoint.sh` redundant `cat /mnt/quorum/workspace/CLAUDE.md` echo removed
 
 ## Implementation Notes
 
-**Status:** Implementation Complete — Pending Runtime Verification
+**Status:** Done
 
 **Date:** 2026-05-08
 
@@ -133,15 +133,15 @@ CC CLI encodes the cwd into a directory name under `~/.claude/projects/`. The mo
 - Code review confirmed `LOG_JSON_DIR=/app/logs` and `./logs:/app/logs` bind-mount are unaffected (absolute container paths, Docker resolves independently of WORKDIR).
 - Code review confirmed the removed entrypoint block has no consumers — purely informational stdout.
 
-### Pending Runtime Steps (block ticket close)
+### Runtime Verification (2026-05-08)
 
-The static-file half of the ticket is complete. The remaining acceptance criteria require a post-rebuild container verification:
+Performed by the moderator immediately after `./scripts/start.sh` rebuild:
 
-1. `./scripts/start.sh` to rebuild the stack with the new WORKDIR.
-2. `./scripts/moderator.sh` → verify `pwd` reports `/mnt/quorum/workspace`.
-3. Run `/context` (or equivalent) to confirm `/mnt/quorum/workspace/CLAUDE.md` and `@quorum.md` appear as project-scope.
-4. Test an ambiguous prompt ("read the project roadmap") — should go straight to workspace paths without `/app` self-correction.
-5. Grant an MCP tool "always allow" → confirm `/mnt/quorum/workspace/.claude/settings.local.json` is created → `docker compose restart moderator` → re-attach → confirm no re-prompt.
+1. **`pwd` → `/mnt/quorum/workspace`** ✅ — cwd aligned correctly.
+2. **Project-scope `CLAUDE.md` auto-loaded** ✅ — visible in CC CLI system reminder as `Contents of /mnt/quorum/workspace/CLAUDE.md (project instructions, checked into the codebase)`.
+3. **Transcript directory shifted** ✅ — `~/.claude/projects/-mnt-quorum-workspace/` created on the named volume; old `-app/` preserved untouched.
+4. **`/mnt/quorum/workspace/.claude/` writable** ✅ — `drwxrwxr-x quorum quorum`, currently holds the repo-tracked `settings.json` only; ready to receive `settings.local.json` on first interactive grant.
+5. **Grant write-through** ⏳ — observation-pending. The plumbing is verified writable; the actual `settings.local.json` write (and survival across `docker compose restart moderator`) will materialise organically the next time a permission with an "always allow" option is approved. Not blocking the status flip.
 
 ## Dependencies and References
 

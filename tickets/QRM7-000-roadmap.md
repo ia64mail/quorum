@@ -54,7 +54,7 @@ Stale MCP sessions accumulate because `transport.onclose` never fires on contain
 
 ### QRM7-002 — Schema-First InvokeRequest Migration
 
-**Status:** Open (follow-up from QRM6-BUG-014)
+**Status:** Done — implemented and reviewed 2026-05-04
 
 Move `invokeRequestSchema` from `apps/agent/` to `libs/common/` and derive the `InvokeRequest` TypeScript interface via `z.infer`. Eliminates the dual declaration that caused two silent-strip bugs. The bidirectional compile-time guard added in QRM6-BUG-014 is defense; this is the cure.
 
@@ -187,7 +187,7 @@ The user-visible burst-resume bug: after a long idle gap (laptop hibernation OR 
 
 ```
 QRM7-001 (Session Cleanup)         ─── independent (DONE 2026-05-03)
-QRM7-002 (Schema-First Migration)  ─── independent
+QRM7-002 (Schema-First Migration)  ─── independent (DONE 2026-05-04)
 QRM7-003 (Permission Persistence)  ─── SUPERSEDED by QRM7-004 (closed 2026-05-08)
 QRM7-004 (Moderator cwd Fix)       ─── independent (DONE 2026-05-08, closes QRM7-003)
 QRM7-005 (Log Adapter)             ─── independent
@@ -198,7 +198,7 @@ QRM7-009 (Scope Reaper)            ─── after QRM7-001 (deployed)
 QRM7-010 (Moderator Stale Session) ─── after QRM7-001 (deployed); ideally after QRM7-009
 ```
 
-QRM7-001, QRM7-004, and QRM7-007 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-008/009/010 form a coherent post-QRM7-001 cluster: 008 hardens the agent-side retry path; 009 stops the reaper from churning agent sessions in the first place; 010 stabilizes the moderator-side resume path. They are mostly independent of each other but ideally land in the order 009 → 010 → 008 (009 removes the dominant trigger 008 fixes; 010 reuses 009's narrowed reaper semantics).
+QRM7-001, QRM7-002, QRM7-004, and QRM7-007 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-008/009/010 form a coherent post-QRM7-001 cluster: 008 hardens the agent-side retry path; 009 stops the reaper from churning agent sessions in the first place; 010 stabilizes the moderator-side resume path. They are mostly independent of each other but ideally land in the order 009 → 010 → 008 (009 removes the dominant trigger 008 fixes; 010 reuses 009's narrowed reaper semantics).
 
 **Recommended sequencing (by operational impact, given current state):**
 
@@ -206,7 +206,7 @@ QRM7-001, QRM7-004, and QRM7-007 are complete. QRM7-003 is closed (superseded by
 2. **QRM7-009** (scope reaper) — eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
 3. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency once 009 ships but still needed for correctness.
 4. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
-5. **QRM7-002** (schema-first) — code quality, prevents future silent-strip bugs.
+5. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
 6. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
 7. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
 
