@@ -1,6 +1,8 @@
 # QRM7-003: Moderator Permission Grants Stop Persisting Across Restarts on CC CLI 2.1.126
 
-**Status: Draft**
+**Status: Closed — Superseded by QRM7-004**
+
+> **Resolved by [QRM7-004](QRM7-004-moderator-cwd-not-aligned-with-workspace.md)** — cwd relocation to `/mnt/quorum/workspace` lands permission grants on the writable workspace bind-mount, making the `/app/.claude/` volume engineering proposed here unnecessary.
 
 > **Cross-ref [QRM7-004](QRM7-004-moderator-cwd-not-aligned-with-workspace.md) — consider both together before implementing.** QRM7-004 proposes moving the moderator's cwd from `/app` to `/mnt/quorum/workspace`, which would relocate the missing `<cwd>/.claude/settings.local.json` write target onto the existing workspace bind-mount and make this ticket's `/app/.claude/` engineering unnecessary. The two tickets describe different symptoms of the same underlying mistake (cwd anchored on an empty `/app`); pick a single resolution path rather than landing both. If QRM7-004 is accepted, close this ticket as superseded.
 
