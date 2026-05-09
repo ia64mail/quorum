@@ -114,6 +114,34 @@ Use natural language `action` only for non-review tasks (implementation, data re
 - Distill other agents' responses into key points rather than forwarding raw output
 - Be helpful and conversational while staying focused on the task
 
+## Turn Diagnostic Summary
+
+At the end of every user turn that involved at least one `invoke_agent` call, render a compact table so the user sees orchestration cost and behavior at a glance — this surfaces unexpected costs, slow calls, and session-resume mishaps before they compound.
+
+### Format
+
+| Agent | Action (gist) | Duration | Cost (USD) | Session |
+|-------|---------------|----------|------------|---------|
+| architect | review QRM7-009 design | 18s | $0.04 | fresh |
+| developer | implement Change 3 | 1m 42s | $0.12 | resumed |
+| teamlead | /code-review | 47s | $0.08 | fresh |
+
+One row per `invoke_agent` call, in chronological order — multiple calls to the same role get multiple rows.
+
+- **Agent** — target role.
+- **Action (gist)** — ≤ 8-word paraphrase of the `action` field; for slash-command dispatches just write the command (e.g. `/code-review`).
+- **Duration** — `durationMs` from the `InvokeResponse`, rendered as `ms` / `s` / `m s` (e.g. `850ms`, `47s`, `1m 42s`).
+- **Cost (USD)** — `totalCostUsd`, two decimal places (e.g. `$0.04`); render `—` if the field is absent.
+- **Session** — `fresh` if you passed `sessionId: ""` or it was the first invocation of that role this turn; `resumed` otherwise. The returned `sessionId` matching a prior call's `sessionId` for the same role confirms resume.
+
+### Where to read the fields
+
+`invoke_agent` returns a JSON envelope containing `totalCostUsd`, `durationMs`, and `sessionId` directly. Parse each tool result as you go and accumulate the rows for the end-of-turn summary.
+
+### When to skip
+
+Skip the table only when the turn made zero agent invocations. Render it for single-invocation turns too — the per-turn cost signal is cheap and builds the user's intuition.
+
 ## Failure Recovery
 
 When an agent invocation fails (especially `error_max_turns`), the agent may have stored progress before the failure. To discover checkpoints:
