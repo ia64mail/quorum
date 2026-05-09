@@ -171,7 +171,7 @@ Superseded after log evidence from `mcp-server-20260508T134859.jsonl` revealed t
 
 ### QRM7-011 — CC CLI POST-Only Access Pattern Incompatible with Server's SSE-Based Liveness Keepalive
 
-**Status:** Open (2026-05-09). Supersedes QRM7-010.
+**Status:** Open (2026-05-09) — Candidate A landed 2026-05-09; B/C remain. Supersedes QRM7-010.
 
 CC CLI 2.1.126 communicates via POST-only and never opens an SSE `GET /mcp` long-poll. The server's 2-min liveness timeout is calibrated for SSE-bridged clients whose `lastSeenAt` refreshes every 30 s via keepalive ping. Without SSE, any >2 min gap between tool calls reaps the session. Root cause of every observed `Session not found` failure in moderator interactive use — confirmed by 11+ hours of log data (0 GET requests across 1160 POSTs).
 
@@ -179,7 +179,7 @@ CC CLI 2.1.126 communicates via POST-only and never opens an SSE `GET /mcp` long
 
 | Candidate | Description | Scope |
 |-----------|-------------|-------|
-| **A. Cheap mask (hotfix)** | Bump `SESSION_LIVENESS_TIMEOUT_MS` from 120 s → 30 min. One-line change. | Immediate |
+| **A. Cheap mask (hotfix)** | Bump `SESSION_LIVENESS_TIMEOUT_MS` from 120 s → 30 min. One-line change. | ✅ Landed 2026-05-09 |
 | **B. Principled fix** | Detect POST-only sessions (track `hasOpenedSse`); exempt from idle reaping. Memory-bound by same-role eviction. | After A |
 | **C. Investigation** | Why does CC CLI never open SSE? Server bug, client design choice, or environmental? | Parallel |
 

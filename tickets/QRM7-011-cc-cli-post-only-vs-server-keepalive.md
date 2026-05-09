@@ -1,6 +1,6 @@
 # QRM7-011: CC CLI POST-Only Access Pattern Incompatible with Server's SSE-Based Liveness Keepalive
 
-**Status:** Open (2026-05-09)
+**Status:** Open (2026-05-09) — Candidate A (hotfix) landed 2026-05-09; Candidates B (principled fix) and C (investigation) remain.
 
 **Supersedes:** [QRM7-010](QRM7-010-moderator-stale-mcp-session-after-idle.md)
 
@@ -79,6 +79,8 @@ Three fix candidates, ordered by immediacy:
 
 Doesn't fix the architectural mismatch — POST-only sessions still have no background heartbeat and will reap after 30 min of no POST traffic. But 30 min is long enough to cover all normal interactive use patterns (user reads, types, thinks, takes a coffee break). Stops user-facing breakage during realistic moderator sessions.
 
+**Tradeoff (acknowledged):** extends the fail-fast window for `invoke_agent(target=moderator)` routing against a dead moderator from 2 min → 30 min. QRM7-001 picked the tight 2-min timeout specifically so the broker's `livenessCheck` closure (`mcp.service.ts:340`) could fail-fast on a dead moderator. QRM7-010's "Out of scope" section rejected raising the timeout to "very large" (24 h, 7 d) values for exactly this reason. The 30-min middle-ground is bounded enough that agent→moderator escalation against a dead moderator still surfaces within a single sitting, and Candidate B's POST-only exemption keeps the tight timeout for SSE-backed sessions — so the regression is fully reversed once B ships. Agent→moderator escalation is rare in current flows; the tradeoff is acceptable in the interim.
+
 **Recommended as immediate hotfix.** Highest-value, lowest-risk change. Can land in minutes.
 
 ### Candidate B — Principled fix: POST-only session detection and exemption
@@ -136,11 +138,11 @@ None. Independent of QRM7-008 and QRM7-009. Can land immediately.
 
 ## Acceptance Criteria
 
-### Candidate A (hotfix)
+### Candidate A (hotfix) — Landed 2026-05-09
 
-- [ ] `SESSION_LIVENESS_TIMEOUT_MS` is increased to `1_800_000` (30 min).
-- [ ] Existing unit tests updated to reflect the new timeout value.
-- [ ] After deploy, the moderator can sustain a session through normal interactive pauses (up to ~25 min between tool calls) without `Session not found`.
+- [x] `SESSION_LIVENESS_TIMEOUT_MS` is increased to `1_800_000` (30 min). (`apps/mcp-server/src/mcp/mcp.service.ts:33`)
+- [x] Existing unit tests updated to reflect the new timeout value. (Tests reference the constant symbolically — `mcp.service.spec.ts:773` uses `SESSION_LIVENESS_TIMEOUT_MS`, no value updates needed; full suite 700/700 passing.)
+- [ ] After deploy, the moderator can sustain a session through normal interactive pauses (up to ~25 min between tool calls) without `Session not found`. (Pending runtime verification.)
 
 ### Candidate B (principled fix)
 

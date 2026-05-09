@@ -21,8 +21,24 @@ import {
 } from '../registry';
 import { McpServerConfigService } from '../config';
 
-/** How long a session can be idle before isConnected() returns false (QRM7-001). */
-export const SESSION_LIVENESS_TIMEOUT_MS = 120_000; // 2 minutes
+/**
+ * How long a session can be idle before isSessionAlive() returns false (QRM7-001).
+ *
+ * QRM7-011-A: bumped from 120_000 (2 min) to 1_800_000 (30 min) as a hotfix for
+ * CC CLI's POST-only access pattern. CC CLI never opens the SSE GET stream that
+ * the 30 s keepalive depends on, so `lastSeenAt` is only refreshed by POST
+ * traffic; any natural inter-tool-call gap > 2 min reaped the session and
+ * surfaced as `Session not found`. 30 min covers normal interactive pauses.
+ *
+ * Tradeoff: extends the fail-fast window for `invoke_agent(target=moderator)`
+ * routing against a dead moderator from 2 min → 30 min. QRM7-001 picked the
+ * tight 2 min specifically so the broker's `livenessCheck` closure could
+ * fail-fast on a dead moderator; agent→moderator escalation is rare in
+ * current flows so this regression is acceptable until QRM7-011-B lands the
+ * principled POST-only exemption (which keeps the tight timeout for SSE-backed
+ * sessions).
+ */
+export const SESSION_LIVENESS_TIMEOUT_MS = 1_800_000; // 30 minutes
 
 /**
  * Per-session state tracked by the MCP server. Keyed by the per-session
