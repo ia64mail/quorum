@@ -6,7 +6,7 @@
 
 After a long idle gap, the moderator's CC CLI MCP client retries `POST /mcp` with a server-reaped `Mcp-Session-Id`, surfaces `Session not found` / `Server not initialized` to the model, and does not auto-handshake to mint a new session. The user must manually type `/mcp` to force the reconnect, and 1–4 retries are typical before traffic resumes. The bug fires reliably under at least two distinct trigger classes — host hibernation ([the 2026-05-06 → 08 QRM8 design run](../logs/sessions/2026-05-06-qrm8-roadmap-run.md), four post-idle resumes Bursts B–E, all ≥ 10 h hibernation gaps) and **continuous-uptime long idle on an awake host** (observed 2026-05-07 evening, this conversation: the moderator's CC CLI was attached from morning, the laptop ran continuously, and after several hours of low/no user activity the same `Session not found` symptom reproduced). Together they account for every burst-resume failure observed so far.
 
-The two triggers have **different root causes**, both load-bearing for any complete fix:
+Three trigger classes are now identified (the third confirmed 2026-05-09), all sharing the same downstream symptom but with **different root causes** requiring different mitigations:
 
 1. **Hibernation false reap (under our control).** [QRM7-001](QRM7-001-mcp-session-cleanup-not-firing.md)'s reaper compares `Date.now() - state.lastSeenAt` (`apps/mcp-server/src/mcp/mcp.service.ts:123`) — a *wall-clock* delta. During host hibernation, both `Date.now()` and `lastSeenAt` halt, but the SSE keepalive that would have refreshed `lastSeenAt` is paused too. On resume, `Date.now()` jumps forward by the wall-clock elapsed (laptop hibernation duration) while `lastSeenAt` is still pre-hibernation, so the very first reaper tick sees a 10 h diff and evicts the moderator's session — even though the SSE socket and the CC CLI client on the other end woke up in the same instant and are perfectly reachable.
 
@@ -59,6 +59,70 @@ Why the keepalive stopped is not yet pinned down (see Part 3). Plausible candida
 
 Crucially, candidates (a) and (b) and (d) tear down the GET stream cleanly enough that the server *does* eventually reap; the bug only manifests because CC CLI's POST cache never learns. Candidate (c) is the only one where the *server* is wrong (it thinks the client is alive when it isn't); fixing it would be a server-side correctness win independent of CC CLI behavior.
 
+### Observed behavior — `2026-05-09`, single CC CLI session (three-phase evidence chain)
+
+A single moderator CC CLI session on 2026-05-09 surfaced all three failure modes in sequence — hard-fail, silent reinit, and downstream reap — providing the sharpest evidence chain to date and the load-bearing new finding that **silent SDK reinit is partial** (POST restored, SSE not).
+
+**Phase 1 — morning.** After `./scripts/start.sh` (full rebuild, mcp-server included), first MCP call ~2–3 min later surfaced the canonical hard-fail:
+
+```
+Streamable HTTP error: Error POSTing to endpoint: {"error":"Session not found"}
+```
+
+Server-side state wipe (rebuild); CC CLI process kept running; `/mcp` recovery required. This is the server-restart trigger — already covered by Part 2's supervisor (canonical error string matching). Nothing new vs. existing observations.
+
+**Phase 2 — ~10 h idle, no hibernation, no host restart (OS-account switch on host only).** First MCP call on resume (`context_query`, mode=keys) **succeeded silently** — no error surfaced to the model, no `/mcp` needed. However, role binding from morning's `register_agent` was gone (`callerRole is required: not provided and no session identity registered`). The SDK had silently re-initialized at some point during idle, obtaining a new session — but the new session carried no agent-registry identity.
+
+**Phase 3 — within ~2 min of Phase 2 resume.** After re-issuing `register_agent` (succeeded), the next `invoke_agent` failed:
+
+```
+Streamable HTTP error: Error POSTing to endpoint: {"error":"Session not found"}
+```
+
+Server log captured the reap event for the silently-reinit'd session:
+
+```
+mcp-server-1   | [Nest] 1  - 05/09/2026, 12:42:30 AM     LOG [McpService] Session state cleaned up
+mcp-server-1   | [Nest] 1  - 05/09/2026, 12:42:30 AM     LOG [McpController] Session reaped (idle): 551e208f-ed70-4641-8072-501bb3a75aff
+```
+
+The reaped session was ≤2 min old (created by Phase 2's silent reinit). The reaper correctly fired — `lastSeenAt` was only refreshed by actual POST requests (`mcp.controller.ts:140` already calls `touchSession` for existing sessions), and the gap between the last POST (`register_agent`) and the reap exceeded `SESSION_LIVENESS_TIMEOUT_MS` (120 s). Without SSE keepalive providing a background heartbeat every 30 s, any >2 min pause between tool calls kills the session. After the reap, `register_agent` retry also hard-failed; user typed `/mcp` to recover.
+
+### Sharpened trigger model (2026-05-09 refinement)
+
+The 2026-05-09 evidence sharpens the trigger taxonomy. **SSE socket drop is the root cause**, not "idle." Idle is a contributing factor only insofar as it correlates with NAT/firewall TCP-state eviction (5–10 min in many environments). On a running host, the SSE socket survives indefinitely as long as the 30 s keepalive ping holds the TCP connection open — but once something kills that socket, the session is on borrowed time.
+
+| Trigger class | Root cause | Part 1 helps? | Part 2 needed? |
+|---|---|---|---|
+| **Server restart / rebuild** | Server-side state wipe forces socket close + session map clear. CC CLI's next POST carries stale session ID. | No (server state gone) | Yes |
+| **Hibernation false reap** | Wall-clock jump makes `isSessionAlive()` see stale `lastSeenAt` even though the SSE socket is alive and both ends just woke up. | **Yes** (monotonic clock fix) | No |
+| **SSE drop during idle** | SSE long-poll socket is torn down (NAT/firewall eviction, CC CLI idle teardown, TCP keepalive failure). Without SSE keepalive refreshing `lastSeenAt`, the session reaps after 120 s of no POST traffic. CC CLI may silently reinit POST but does NOT re-establish SSE — creating a ≤2 min time-bomb session. | No (monotonic and wall-clock advance together; `lastSeenAt` is genuinely stale; the reaper is correct) | Yes |
+
+**Load-bearing new insight — silent reinit is partial:**
+
+1. POST channel works: Phase 2's `context_query` and `register_agent` both succeeded over POST.
+2. The 30 s SSE keepalive (`mcp.controller.ts:260`) cannot fire if no SSE stream is open — and the silent reinit did not re-open SSE.
+3. POST requests *do* call `touchSession` (`mcp.controller.ts:140`), so `lastSeenAt` is refreshed during active POST traffic. But without SSE keepalive, `lastSeenAt` goes stale during any >120 s gap between tool calls.
+4. The silently-reinit'd session is thus a **2-minute time bomb**: the moderator appears healthy during active POST traffic, then fails on the next tool call after any >2 min pause. This is *worse* than the hard-fail because the operator has no warning.
+
+**Note on Part 1's scope limitation for the SSE-drop class.** Part 1's monotonic-`lastSeenAt` fix does **not** help this trigger class. The un-refreshed `lastSeenAt` is legitimate, not a wall-clock illusion — both monotonic and wall-clock time advance together when the host is awake. The reaper is correct to evict a session whose SSE stream is dead and whose last POST was >2 min ago. The fix for this class is SSE restoration (Part 2), not clock correction (Part 1).
+
+### Asymmetric SDK reinit behavior — open question for Part 2
+
+In the same 2026-05-09 session, the SDK exhibited two different behaviors:
+
+- Phase 2: `context_query` succeeded via **silent** reinit (no error surfaced, no `/mcp` needed)
+- Phase 3 (after reap): `register_agent` **hard-failed** with `Session not found` (error surfaced, `/mcp` required)
+
+This contradicts the existing ticket's framing (and Anthropic's own documentation) that the SDK uniformly treats 404 / not-found as fatal. Possible explanations to investigate before Part 2 lands:
+
+1. **Call-type dependency.** Reinit behavior may differ between notification vs. request, or between specific tool types.
+2. **SDK internal state gating.** Some internal flag may reset after a hard-fail, enabling silent reinit on the next attempt but not on subsequent calls within the same session.
+3. **CC CLI version-specific behavior.** v2.1.126 may have introduced partial silent-reinit logic undocumented in Anthropic's release notes.
+4. **Transport recycler timing.** The silent reinit in Phase 2 may have been triggered by CC CLI's internal transport recycler (~5 min cadence) firing during idle, coinciding with the first post-resume call. This would not be "reinit on 404" but rather "new transport obtained by background rotation."
+
+The distinction matters for Part 2's design: if some failures are silent (no error string to match), the supervisor cannot detect them at the reinit moment. Part 2's supervisor must also detect the *downstream* reap symptom (the `Session not found` error that fires ≤2 min after a silent reinit), and Part 2's acceptance criteria should verify coverage of the silent-reinit-then-reap sequence.
+
 ### Why retry-blasts sometimes appear to "self-resolve"
 
 In Burst D, the user observed: *"last time we did it, you had some issues with connecting MCP which somehow were self-resolved after a few retries."* The mechanism is luck — between the 1st failed retry and the 2nd, CC CLI's internal transport recycler (the ~5-minute cadence above) may rotate to a fresh transport, at which point the next `register_agent` opens a new server session and succeeds. There is no deterministic recovery path on the client side; the user's `/mcp` is the only reliable lever.
@@ -78,6 +142,7 @@ In Burst D, the user observed: *"last time we did it, you had some issues with c
 - **Not [QRM7-008](QRM7-008-agent-retry-races-mcp-initialize.md)** (agent retry races MCP initialize). That fixes the *agent's* retry path. This ticket's bug is the *moderator's* missing retry path entirely.
 - **Not the QRM7-009 narrowing**. [QRM7-009](QRM7-009-scope-reaper-to-elicitation-sessions.md) leaves moderator sessions in scope of the reaper — exactly the path this ticket addresses. The two are complementary: QRM7-009 stops the reaper from churning agent sessions; this ticket stops it from spuriously reaping the moderator on hibernation resume.
 - **Not the Anthropic OAuth-refresh issue** (the 5 forced `/login` cycles in the same session log). That is a separate bug class and will be filed separately.
+- **Not a separate ticket for role-binding loss.** The `callerRole is required` symptom (observed 2026-05-09 Phase 2) is downstream of the same SSE-drop/reap event — when a session is silently reinit'd or reaped, the agent-registry identity is lost along with it. Part 2's supervisor must ensure re-registration after reconnect (see the re-registration requirement note in Part 2). Making role binding durable via a separate mechanism (persisted registry, session-aliased identity) would be over-engineering: the fix at the transport layer (Part 2) naturally covers identity restoration. No separate ticket warranted.
 
 ## Design Context
 
@@ -245,6 +310,7 @@ The viable lever, since CC CLI is third-party and won't be patched: wrap the `cl
   - `No transport found for sessionId`
   - The `Streamable HTTP error: Error POSTing to endpoint` envelope
 - On match: emit a structured marker line (`[moderator-supervisor] auto-recover via /mcp triggered: pattern=…`) to the supervisor's own stderr, then write `/mcp\r` into the CC CLI session's stdin, then read CC CLI's confirmation panel response, then resume normal proxying.
+  - **Re-registration requirement (2026-05-09).** `/mcp` reconnect alone is insufficient — it restores the MCP transport but does not restore the moderator's agent-registry identity. The 2026-05-09 Phase 2 evidence showed role binding is lost when the session is reaped or silently reinit'd (`callerRole is required: not provided and no session identity registered`). After a successful `/mcp` recovery, the supervisor must verify the moderator can make MCP calls; if the first post-recovery call fails with a role-binding error, the supervisor should nudge the model to re-issue `register_agent`. Alternatively, the moderator's system prompt could be hardened to always re-register after any `/mcp` event — this is less fragile than supervisor-driven re-registration because the model owns the `register_agent` tool call.
 - Rate-limit: at most one auto-`/mcp` per 30 s and per-pattern, to avoid loops if the recovery itself fails (since [#21032](https://github.com/anthropics/claude-code/issues/21032) reports `/mcp reconnect` does not always resolve the stale session — sometimes only a full restart works; in that case the supervisor escalates by exiting with a non-zero status so `docker compose exec` returns and the user can re-attach to a fresh `claude` invocation).
 - Log every auto-recovery attempt to a file under `/home/quorum/.claude/supervisor.log` so the operator can post-hoc audit the cadence.
 
@@ -272,6 +338,20 @@ The 2026-05-07 evening incident left us with four plausible candidates (table in
 These three additions are pure logging — no behavior change, no risk. They are blocking acceptance for any decision about retiring Part 2: until we see at least one trigger-(2) reproduction with the new instrumentation, we don't have evidence for which mitigation (tighter SSE keepalive, write-result back-pressure handling, session aliasing, or none of the above) is appropriate.
 
 **Note on telemetry hygiene.** Don't add `Date.now()` deltas in scattered places — make Part 1's monotonic helper public from `mcp.service.ts` and reuse it in the reaper log so the two log lines tell a consistent story.
+
+### Part 1.5 assessment — `touchSession` on POST (rejected: already implemented)
+
+*Assessed 2026-05-09.* The candidate mitigation was: call `touchSession` from POST request handlers so that a session with active POST traffic but no SSE would survive the reaper.
+
+**Verification result: POST already calls `touchSession`.** Grep of `mcp.controller.ts` confirms:
+
+- `mcp.controller.ts:140` — `this.mcpService.touchSession(mcpServer)` fires on every POST for an existing session (inside the `if (sessionId && this.sessions.has(sessionId))` block, added by QRM7-001).
+- `mcp.controller.ts:197` — `touchSession` fires on GET (SSE stream open).
+- `mcp.controller.ts:263` — `touchSession` fires on each successful SSE keepalive write (30 s cadence).
+
+The proposed Part 1.5 is therefore a non-change — the mechanism is already in place. The 2026-05-09 Phase 3 reap is fully explained by the existing behavior: POST `touchSession` refreshes `lastSeenAt` only when a POST actually arrives. Without SSE keepalive providing a background heartbeat, any >120 s gap between POST requests allows the reaper to fire. The silently-reinit'd session's ≤2 min lifetime means `register_agent` (the last successful POST) was >120 s before the reap — consistent with a user pause between tool calls, not a missing `touchSession` call.
+
+**Conclusion: no Part 1.5. The gap is not "POST doesn't touch sessions" but "nothing touches sessions between tool calls when SSE is down."** This is precisely the gap Part 2's supervisor closes by restoring the full MCP connection (including SSE) after detecting the error.
 
 ### Out of scope (alternatives considered)
 
