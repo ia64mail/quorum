@@ -171,7 +171,7 @@ Superseded after log evidence from `mcp-server-20260508T134859.jsonl` revealed t
 
 ### QRM7-011 — CC CLI POST-Only Access Pattern Incompatible with Server's SSE-Based Liveness Keepalive
 
-**Status:** Open (2026-05-09) — Candidate A landed 2026-05-09; B/C remain. Supersedes QRM7-010.
+**Status:** Open (2026-05-09) — Candidates A (hotfix, then reverted) and B (principled fix) landed 2026-05-09. Candidate C (investigation) remains. Supersedes QRM7-010.
 
 CC CLI 2.1.126 communicates via POST-only and never opens an SSE `GET /mcp` long-poll. The server's 2-min liveness timeout is calibrated for SSE-bridged clients whose `lastSeenAt` refreshes every 30 s via keepalive ping. Without SSE, any >2 min gap between tool calls reaps the session. Root cause of every observed `Session not found` failure in moderator interactive use — confirmed by 11+ hours of log data (0 GET requests across 1160 POSTs).
 
@@ -179,9 +179,9 @@ CC CLI 2.1.126 communicates via POST-only and never opens an SSE `GET /mcp` long
 
 | Candidate | Description | Scope |
 |-----------|-------------|-------|
-| **A. Cheap mask (hotfix)** | Bump `SESSION_LIVENESS_TIMEOUT_MS` from 120 s → 30 min. One-line change. | ✅ Landed 2026-05-09 |
-| **B. Principled fix** | Detect POST-only sessions (track `hasOpenedSse`); exempt from idle reaping. Memory-bound by same-role eviction. | After A |
-| **C. Investigation** | Why does CC CLI never open SSE? Server bug, client design choice, or environmental? | Parallel |
+| **A. Cheap mask (hotfix)** | Bump `SESSION_LIVENESS_TIMEOUT_MS` from 120 s → 30 min. One-line change. | ✅ Landed 2026-05-09; reverted to 2 min after B made it unnecessary |
+| **B. Principled fix** | Detect POST-only sessions (track `hasOpenedSse`); exempt moderator-role POST-only from idle reaping. Memory-bound by same-role eviction (from QRM7-009). | ✅ Landed 2026-05-09 |
+| **C. Investigation** | Why does CC CLI never open SSE? Server bug, client design choice, or environmental? | Pending — quorum is fully operational; this is now a research task |
 
 **Touches:** `apps/mcp-server/src/mcp/mcp.service.ts` (timeout const for A; `hasOpenedSse` for B), `apps/mcp-server/src/mcp/mcp.controller.ts` (track GET-opened state for B). Spec files matching.
 
@@ -204,21 +204,22 @@ QRM7-007 (Moderator Subscription)  ─── independent (DONE 2026-05-04)
 QRM7-008 (Agent Retry Race)        ─── independent
 QRM7-009 (Scope Reaper)            ─── after QRM7-001 (DONE 2026-05-09)
 QRM7-010 (Moderator Stale Session) ─── SUPERSEDED by QRM7-011 (closed 2026-05-09)
-QRM7-011 (CC CLI POST-Only Liveness)  ─── independent
+QRM7-011 (CC CLI POST-Only Liveness)  ─── independent (A+B DONE 2026-05-09; C pending investigation)
 ```
 
-QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 is closed (superseded by QRM7-011). QRM7-011 Candidate A is landed; B and C remain. QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
+QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 is closed (superseded by QRM7-011). QRM7-011 Candidates A and B are landed; C is a pending investigation (no longer blocking — quorum is fully operational under POST-only). QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
 
 **Recommended sequencing (by operational impact, given current state):**
 
-1. ~~**QRM7-011** Candidate A (CC CLI POST-only liveness hotfix)~~ — ✅ DONE 2026-05-09. One-line timeout bump; stops all observed `Session not found` breakage.
+1. ~~**QRM7-011** Candidate A (CC CLI POST-only liveness hotfix)~~ — ✅ DONE 2026-05-09. One-line timeout bump; stops all observed `Session not found` breakage. Reverted after B.
 2. ~~**QRM7-009** (scope reaper)~~ — ✅ DONE 2026-05-09. Eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
-3. **QRM7-011** Candidate B (POST-only session detection) — principled fix. After it lands, the QRM7-011-A timeout bump can revert to 2 min for SSE-backed sessions, restoring the original fail-fast behavior.
-4. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency now that 009 ships but still needed for correctness.
-5. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
-6. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
-7. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
-8. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
+3. ~~**QRM7-011** Candidate B (POST-only session detection)~~ — ✅ DONE 2026-05-09. Principled fix: moderator POST-only sessions are exempt at the source; A's timeout bump reverted to 2 min, restoring fail-fast for SSE-backed sessions and tight memory bounding for anonymous transient sessions.
+4. **QRM7-011** Candidate C (SSE investigation) — research task. Determine whether CC CLI's POST-only behavior is server-side advertisement gap, client design choice, or environmental. No longer blocking; useful for understanding whether C can simplify the system further.
+5. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency now that 009 ships but still needed for correctness.
+6. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
+7. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
+8. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
+9. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
 
 ## Additional Goals
 

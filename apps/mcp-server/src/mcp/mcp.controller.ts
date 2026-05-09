@@ -193,8 +193,14 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
 
     const transport = this.sessions.get(sessionId)!;
     // QRM7-001: refresh liveness on GET (SSE stream open)
+    // QRM7-011-B: mark the session as SSE-backed so isSessionAlive() resumes
+    // the lastSeenAt check (POST-only sessions are exempt; once SSE is open,
+    // the keepalive ping is responsible for refreshing lastSeenAt).
     const mcpServer = this.mcpServers.get(sessionId);
-    if (mcpServer) this.mcpService.touchSession(mcpServer);
+    if (mcpServer) {
+      this.mcpService.touchSession(mcpServer);
+      this.mcpService.markSseOpened(mcpServer);
+    }
 
     await transport.handleRequest(req, res);
 

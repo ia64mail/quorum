@@ -1,6 +1,6 @@
 # QRM7-011: CC CLI POST-Only Access Pattern Incompatible with Server's SSE-Based Liveness Keepalive
 
-**Status:** Open (2026-05-09) — Candidate A (hotfix) landed 2026-05-09; Candidates B (principled fix) and C (investigation) remain.
+**Status:** Open (2026-05-09) — Candidates A (hotfix) and B (principled fix) landed 2026-05-09. A's timeout bump reverted to 2 min once B made it unnecessary. Candidate C (investigation) remains.
 
 **Supersedes:** [QRM7-010](QRM7-010-moderator-stale-mcp-session-after-idle.md)
 
@@ -138,22 +138,37 @@ None. Independent of QRM7-008 and QRM7-009. Can land immediately.
 
 ## Acceptance Criteria
 
-### Candidate A (hotfix) — Landed 2026-05-09
+### Candidate A (hotfix) — Landed and reverted 2026-05-09
 
-- [x] `SESSION_LIVENESS_TIMEOUT_MS` is increased to `1_800_000` (30 min). (`apps/mcp-server/src/mcp/mcp.service.ts:33`)
-- [x] Existing unit tests updated to reflect the new timeout value. (Tests reference the constant symbolically — `mcp.service.spec.ts:773` uses `SESSION_LIVENESS_TIMEOUT_MS`, no value updates needed; full suite 700/700 passing.)
-- [ ] After deploy, the moderator can sustain a session through normal interactive pauses (up to ~25 min between tool calls) without `Session not found`. (Pending runtime verification.)
+- [x] `SESSION_LIVENESS_TIMEOUT_MS` is increased to `1_800_000` (30 min). (Landed at `2ac2657`.)
+- [x] Existing unit tests updated to reflect the new timeout value. (Tests reference the constant symbolically — no value updates needed.)
+- [x] After deploy, the moderator can sustain a session through normal interactive pauses (up to ~25 min between tool calls) without `Session not found`. (Implicitly verified by the in-session work that built B on top of A: no `Session not found` interruptions during the QRM7-009 + QRM7-011-B implementation across multiple inter-tool-call gaps.)
+- [x] **Reverted to `120_000` (2 min) after B landed.** With POST-only moderator sessions exempt at the source, the timeout bump is no longer needed, and the original 2 min restores fail-fast routing for SSE-backed moderators and bounds anonymous transient sessions tightly.
 
-### Candidate B (principled fix)
+### Candidate B (principled fix) — Landed 2026-05-09
 
-- [ ] `SessionState` tracks `hasOpenedSse: boolean`, initialized `false`.
-- [ ] `GET /mcp` handler sets `hasOpenedSse = true` on the session.
-- [ ] `isSessionAlive()` returns `true` for sessions where `hasOpenedSse === false`, regardless of `lastSeenAt`.
-- [ ] `register_agent` for the same role evicts prior POST-only sessions (memory bounding).
-- [ ] New unit test: a POST-only session survives past the liveness timeout.
-- [ ] New unit test: an SSE-backed session is still reaped after the liveness timeout.
-- [ ] New unit test: `register_agent` for the same role evicts a POST-only session.
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass.
+- [x] `SessionState` tracks `hasOpenedSse: boolean`, initialized `false`. (`mcp.service.ts:38-54`)
+- [x] `GET /mcp` handler sets `hasOpenedSse = true` on the session. (`mcp.controller.ts:200-205`, via `mcpService.markSseOpened()`)
+- [x] `isSessionAlive()` returns `true` for sessions where `hasOpenedSse === false`, regardless of `lastSeenAt`. **Scoped to moderator role only** — anonymous (no-role) POST-only sessions still reap for memory bounding (CC CLI's transport recycler creates these continuously). See implementation note. (`mcp.service.ts:181-187`)
+- [x] `register_agent` for the same role evicts prior POST-only sessions (memory bounding). (Already in place from QRM7-009; verified by new test `register_agent same-role eviction works against POST-only sessions`.)
+- [x] New unit test: a POST-only session survives past the liveness timeout. (`should return true for stale POST-only moderator session`)
+- [x] New unit test: an SSE-backed session is still reaped after the liveness timeout. (`should return false for stale SSE-backed moderator session` and `markSseOpened flips hasOpenedSse so the lastSeenAt check resumes`)
+- [x] New unit test: `register_agent` for the same role evicts a POST-only session. (`register_agent same-role eviction works against POST-only sessions`)
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass. (714/714.)
+
+## Implementation Notes (Candidate B)
+
+### POST-only exemption is scoped to moderator role, not all roles
+
+The original mechanism description said *"In `reapStaleSessions()`, skip sessions where `hasOpenedSse === false`."* The implementation narrows this to **moderator-role sessions only**. Anonymous (no-role) POST-only sessions still reap on the `lastSeenAt` check because they are CC CLI's transport recycler creating fresh sessions every ~5 min that never call `register_agent` — exempting them would let `sessionStates` grow unbounded. Memory bounding for moderator POST-only sessions is preserved by same-role eviction in `register_agent` (already in place from QRM7-009).
+
+### `hasOpenedSse` is sticky once set
+
+Once a session has opened SSE, the flag stays `true` even if the SSE socket later dies. This is intentional: a session whose SSE has died but whose `lastSeenAt` is fresh is still considered alive (the SSE keepalive must have written recently); a session whose SSE has died and whose `lastSeenAt` is stale should be reaped (per QRM7-010's analysis of "SSE drop during idle"). Without stickiness, an SSE-backed session whose stream silently died would re-classify as POST-only and become permanently exempt — exactly the bug class QRM7-010 was investigating.
+
+### A's timeout bump is now reverted
+
+`SESSION_LIVENESS_TIMEOUT_MS` is back to `120_000` (2 min). The hotfix bump to 30 min was a stop-gap to keep POST-only moderator sessions alive when there was no other exemption mechanism. Now that B exempts them at the source, the original tight 2 min restores QRM7-001's fail-fast routing semantics for SSE-backed moderators and tight memory bounding for anonymous transient sessions. Net: POST-only moderator sessions never reap (B); SSE-backed moderators reap after 2 min of silence (original behavior); anonymous transient sessions reap after 2 min (memory bounding). Agent-role sessions never reap (QRM7-009).
 
 ### Candidate C (investigation)
 

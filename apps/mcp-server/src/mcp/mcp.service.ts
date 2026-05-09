@@ -24,21 +24,18 @@ import { McpServerConfigService } from '../config';
 /**
  * How long a session can be idle before isSessionAlive() returns false (QRM7-001).
  *
- * QRM7-011-A: bumped from 120_000 (2 min) to 1_800_000 (30 min) as a hotfix for
- * CC CLI's POST-only access pattern. CC CLI never opens the SSE GET stream that
- * the 30 s keepalive depends on, so `lastSeenAt` is only refreshed by POST
- * traffic; any natural inter-tool-call gap > 2 min reaped the session and
- * surfaced as `Session not found`. 30 min covers normal interactive pauses.
+ * Applies only to SSE-backed moderator sessions and anonymous transient
+ * sessions. POST-only moderator sessions are exempt at the source by
+ * QRM7-011-B (`hasOpenedSse` flag), and agent-role sessions are exempt by
+ * QRM7-009 (broker reaches them via callbackUrl). The 2 min window is tight
+ * by design — it bounds the `invoke_agent(target=moderator)` fail-fast for a
+ * dead SSE-backed moderator and the memory churn of CC CLI's transport
+ * recycler creating anonymous sessions.
  *
- * Tradeoff: extends the fail-fast window for `invoke_agent(target=moderator)`
- * routing against a dead moderator from 2 min → 30 min. QRM7-001 picked the
- * tight 2 min specifically so the broker's `livenessCheck` closure could
- * fail-fast on a dead moderator; agent→moderator escalation is rare in
- * current flows so this regression is acceptable until QRM7-011-B lands the
- * principled POST-only exemption (which keeps the tight timeout for SSE-backed
- * sessions).
+ * Reverted from 1_800_000 (QRM7-011-A hotfix) back to 120_000 once
+ * QRM7-011-B's POST-only exemption made the bump unnecessary.
  */
-export const SESSION_LIVENESS_TIMEOUT_MS = 1_800_000; // 30 minutes
+export const SESSION_LIVENESS_TIMEOUT_MS = 120_000; // 2 minutes
 
 /**
  * Per-session state tracked by the MCP server. Keyed by the per-session
@@ -59,6 +56,15 @@ export interface McpSessionState {
   agentSessions: Map<AgentRole, string>;
   /** Epoch ms of the last client activity — used for liveness detection (QRM7-001). */
   lastSeenAt: number;
+  /**
+   * Whether this session has ever opened a `GET /mcp` SSE long-poll stream
+   * (QRM7-011-B). Sticky once set: a client that opens SSE then loses it
+   * remains classified as SSE-backed so the reaper can evict the dead session.
+   * Used by `isSessionAlive()` to exempt POST-only moderator sessions from
+   * idle reaping (their `lastSeenAt` is only refreshed by POST traffic since
+   * they have no background keepalive).
+   */
+  hasOpenedSse: boolean;
 }
 
 /**
@@ -110,6 +116,7 @@ export class McpService implements OnModuleInit {
     this.sessionStates.set(session, {
       agentSessions: new Map(),
       lastSeenAt: Date.now(),
+      hasOpenedSse: false,
     });
     this.registerTools(session);
     await session.connect(transport);
@@ -133,29 +140,52 @@ export class McpService implements OnModuleInit {
   }
 
   /**
+   * Mark a session as having opened an SSE long-poll stream (QRM7-011-B).
+   * Called from the controller's `GET /mcp` handler. Sticky: once set, the
+   * session is classified as SSE-backed for the rest of its lifetime, so
+   * `isSessionAlive()` resumes the lastSeenAt check (a session whose SSE
+   * later dies should reap, not linger forever).
+   */
+  markSseOpened(server: McpServer): void {
+    const state = this.sessionStates.get(server);
+    if (state) {
+      state.hasOpenedSse = true;
+    }
+  }
+
+  /**
    * Check whether a session's lastSeenAt is within the liveness grace period (QRM7-001).
    *
-   * QRM7-009: agent-role sessions (architect, teamlead, developer, qa,
-   * productowner) are exempt from idle-based liveness — the broker reaches
-   * agents via `HttpAgentConnection.callbackUrl`, not via the MCP session,
-   * so an idle MCP session has no bearing on whether the agent is reachable.
-   * Without this exemption the periodic reaper churns mid-invocation agent
-   * sessions during long stretches of local SDK work (Edit/Read/Grep/Bash),
-   * forcing reconnects that hit the QRM5-BUG-005 retry race (QRM7-008).
+   * Three exemption layers determine whether the lastSeenAt check applies:
    *
-   * Moderator sessions still need the lastSeenAt check (the broker delivers
-   * elicitations over the same live transport), and anonymous sessions —
-   * those that never called `register_agent`, e.g. transient sessions
-   * created by CC CLI's periodic transport recycling — still need it for
-   * memory bounding.
+   * 1. **QRM7-009 — agent-role sessions are always exempt.** The broker
+   *    reaches agents via `HttpAgentConnection.callbackUrl`, not the MCP
+   *    session, so an idle MCP session has no bearing on reachability.
+   *    Without this exemption the reaper churned mid-invocation agent
+   *    sessions during long stretches of local SDK work, hitting the
+   *    QRM5-BUG-005 retry race (QRM7-008).
    *
-   * Memory bounding for agent sessions is preserved via same-role eviction
-   * in the `register_agent` handler.
+   * 2. **QRM7-011-B — POST-only moderator sessions are exempt.** A session
+   *    that never opened the SSE GET stream has no background heartbeat
+   *    refreshing `lastSeenAt`; the only refresh source is POST traffic,
+   *    and natural inter-tool-call gaps in interactive use exceed the 2 min
+   *    timeout. Once SSE has been opened (`hasOpenedSse === true`), the
+   *    session resumes the lastSeenAt check — the keepalive ping refreshes
+   *    every 30 s, so any 2 min gap means the SSE stream itself is dead.
+   *
+   * 3. **Default — lastSeenAt check applies** to SSE-backed moderator
+   *    sessions and to anonymous (no `register_agent` yet) sessions. The
+   *    anonymous case is CC CLI's transport recycler, which needs reaping
+   *    for memory bounding.
+   *
+   * Memory bounding for the exempted classes is preserved via same-role
+   * eviction in the `register_agent` handler (QRM7-009).
    */
   isSessionAlive(server: McpServer): boolean {
     const state = this.sessionStates.get(server);
     if (!state) return false;
     if (state.role && state.role !== AgentRole.moderator) return true;
+    if (state.role === AgentRole.moderator && !state.hasOpenedSse) return true;
     return Date.now() - state.lastSeenAt < SESSION_LIVENESS_TIMEOUT_MS;
   }
 

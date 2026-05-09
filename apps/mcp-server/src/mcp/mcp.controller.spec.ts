@@ -13,6 +13,7 @@ const mockMcpService = {
   connect: jest.fn().mockResolvedValue(mockMcpServer),
   disconnect: jest.fn(),
   touchSession: jest.fn(),
+  markSseOpened: jest.fn(),
   isSessionAlive: jest.fn().mockReturnValue(true),
 };
 
@@ -421,6 +422,42 @@ describe('McpController', () => {
       await controller.handleGet(reqGet, resGet);
 
       expect(mockMcpService.touchSession).toHaveBeenCalledWith(mockMcpServer);
+    });
+
+    it('should call markSseOpened on GET for valid session (QRM7-011-B)', async () => {
+      // Create session first
+      const reqPost = mockReq({ body: {} });
+      const { res: resPost } = mockRes();
+      await controller.handlePost(reqPost, resPost);
+
+      mockMcpService.markSseOpened.mockClear();
+
+      // GET with session header (opens SSE long-poll)
+      const reqGet = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+      });
+      const { res: resGet } = mockRes();
+      await controller.handleGet(reqGet, resGet);
+
+      expect(mockMcpService.markSseOpened).toHaveBeenCalledWith(mockMcpServer);
+    });
+
+    it('should NOT call markSseOpened on POST', async () => {
+      // POST should never flip the SSE-opened flag — only the GET handler does.
+      const req1 = mockReq({ body: { jsonrpc: '2.0' } });
+      const { res: res1 } = mockRes();
+      await controller.handlePost(req1, res1);
+
+      mockMcpService.markSseOpened.mockClear();
+
+      const req2 = mockReq({
+        headers: { 'mcp-session-id': 'session-abc' },
+        body: { jsonrpc: '2.0', method: 'tools/list' },
+      });
+      const { res: res2 } = mockRes();
+      await controller.handlePost(req2, res2);
+
+      expect(mockMcpService.markSseOpened).not.toHaveBeenCalled();
     });
   });
 

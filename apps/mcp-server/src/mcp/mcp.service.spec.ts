@@ -832,9 +832,12 @@ describe('McpService', () => {
       jest.useRealTimers();
     });
 
-    it('should return false for stale moderator session', async () => {
+    it('should return false for stale SSE-backed moderator session', async () => {
       const server = await service.connect(makeMockTransport() as never);
       await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
+      // QRM7-011-B: moderator must have opened SSE for the lastSeenAt check
+      // to apply — POST-only moderators are exempt.
+      service.markSseOpened(server);
 
       jest.useFakeTimers();
       jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
@@ -849,6 +852,106 @@ describe('McpService', () => {
       jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
       expect(service.isSessionAlive(server)).toBe(false);
       jest.useRealTimers();
+    });
+  });
+
+  describe('isSessionAlive POST-only exemption (QRM7-011-B)', () => {
+    function makeMockTransport(): {
+      onmessage: null;
+      onclose: null;
+      onerror: null;
+      close: jest.Mock;
+      send: jest.Mock;
+      start: jest.Mock;
+      sessionId: string | undefined;
+    } {
+      return {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    }
+
+    function getSessionRegisterHandler(
+      server: Awaited<ReturnType<typeof service.connect>>,
+    ): ToolHandler {
+      const tools = (
+        server as unknown as {
+          _registeredTools: Record<string, { handler: ToolHandler }>;
+        }
+      )._registeredTools;
+      return (args) => tools['register_agent'].handler(args);
+    }
+
+    it('should return true for stale POST-only moderator session', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
+      // No markSseOpened — session remains POST-only.
+
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(true);
+      jest.useRealTimers();
+    });
+
+    it('markSseOpened flips hasOpenedSse so the lastSeenAt check resumes', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
+
+      // POST-only initially → exempt from idle reaping.
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(true);
+      jest.useRealTimers();
+
+      // After SSE opens → lastSeenAt check applies; stale lastSeenAt reaps.
+      service.markSseOpened(server);
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(false);
+      jest.useRealTimers();
+    });
+
+    it('markSseOpened is sticky — stale SSE-backed session still reaps', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
+      service.markSseOpened(server);
+
+      // Even calling markSseOpened again doesn't restore exemption.
+      service.markSseOpened(server);
+
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(false);
+      jest.useRealTimers();
+    });
+
+    it('markSseOpened is a no-op for unknown server', () => {
+      const unknownServer = { _unknown: true } as never;
+      expect(() => service.markSseOpened(unknownServer)).not.toThrow();
+    });
+
+    it('register_agent same-role eviction works against POST-only sessions', async () => {
+      const transportA = makeMockTransport();
+      const transportB = makeMockTransport();
+      const serverA = await service.connect(transportA as never);
+      const serverB = await service.connect(transportB as never);
+
+      await getSessionRegisterHandler(serverA)({ role: AgentRole.moderator });
+      // A is POST-only and exempt from idle reaping; eviction must still
+      // happen via same-role re-register to bound `sessionStates`.
+      expect(service.isSessionAlive(serverA)).toBe(true);
+
+      await getSessionRegisterHandler(serverB)({ role: AgentRole.moderator });
+
+      // serverA's state is gone; isSessionAlive returns false (no state).
+      expect(service.isSessionAlive(serverA)).toBe(false);
+      expect(service.isSessionAlive(serverB)).toBe(true);
+      expect(transportA.close).toHaveBeenCalled();
     });
   });
 
