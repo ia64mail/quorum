@@ -1,6 +1,8 @@
 # QRM7-010: Moderator's MCP Client Holds Stale Session ID Across Long Idle — First 1–4 Tool Calls After Resume Fail With "Session not found"
 
-**Status:** Open
+**Status: Closed — Superseded by QRM7-011 (2026-05-09)**
+
+> **Resolved by [QRM7-011](QRM7-011-cc-cli-post-only-vs-server-keepalive.md)** — log evidence from `mcp-server-20260508T134859.jsonl` (11+ hours, single server lifecycle) revealed that CC CLI 2.1.126 never opens an SSE `GET /mcp` long-poll stream at all — zero GET requests across 1160 POSTs and 279 session create/reap cycles. The prior framing here (SSE socket drops during idle, hibernation wall-clock jumps, partial SDK reinit) was investigating mechanisms that presuppose an SSE stream that never existed. QRM7-011 replaces this ticket with a clean framing and a simpler fix plan (bump the 2-min liveness timeout as hotfix, then detect and exempt POST-only sessions from reaping).
 
 ## Summary
 

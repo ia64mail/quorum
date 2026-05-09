@@ -26,7 +26,7 @@ QRM6's live runs exposed several operational issues that individually degrade th
 |-------|--------|--------|
 | Agent retry-once path races the MCP `initialize` handshake | Every reaper-driven agent reconnect produces 1 failed tool call + 4 WARN log lines; 9 events across 5 bursts in the QRM8 run; work-output preserved by SDK adaptation but operator log signal-to-noise is alarming | Issue 3 in `2026-05-06-qrm8-roadmap-run.md`, promoted to QRM7-008 |
 | Reaper churns agent sessions that don't need liveness tracking | Pure collateral damage: agents are reachable via stable callback URL regardless of MCP session state, but the reaper still evicts them on idle, triggering the QRM7-008 race | Same run analysis, promoted to QRM7-009 |
-| Moderator's CC CLI client holds stale session ID across long idle | First 1–4 tool calls after each post-idle resume fail with `Session not found`; user must manually type `/mcp`; ~1–4 min friction per burst-resume; reproduced in continuous-uptime idle (2026-05-07 evening) as well as hibernation gaps | Issue 2 in `2026-05-06-qrm8-roadmap-run.md` + 2026-05-07 evening observation, promoted to QRM7-010 |
+| Moderator's CC CLI client holds stale session ID across long idle | First 1–4 tool calls after each post-idle resume fail with `Session not found`; user must manually type `/mcp`; ~1–4 min friction per burst-resume; reproduced in continuous-uptime idle (2026-05-07 evening) as well as hibernation gaps | Issue 2 in `2026-05-06-qrm8-roadmap-run.md` + 2026-05-07 evening observation, promoted to ~~QRM7-010~~ → QRM7-011 |
 
 ## Milestone Scope
 
@@ -163,23 +163,31 @@ This is **complementary** to QRM7-008 (not a substitute): QRM7-009 removes the d
 
 ### QRM7-010 — Moderator's MCP Client Holds Stale Session Across Long Idle
 
-**Status:** Open
+**Status:** Closed — Superseded by QRM7-011 (2026-05-09)
 
-The user-visible burst-resume bug: after a long idle gap (laptop hibernation OR continuous-uptime idle on an awake host), the moderator's CC CLI MCP client retries `POST /mcp` with a server-reaped `Mcp-Session-Id`, surfaces `Session not found` to the model, and does not auto-handshake. The user must manually type `/mcp` to recover. CC CLI 2.1.126 — and upstream `@modelcontextprotocol/sdk` `StreamableHTTPClientTransport` — violates MCP Streamable HTTP spec §2.5(4) by refusing to re-initialize on HTTP 404; Anthropic's docs explicitly state this is a deliberate design decision. The bug is unfixed across at least 9 closed CC GitHub issues (2025-09 → 2026-05).
-
-**Fix is layered (three parts, all in scope):**
-
-| Part | Trigger addressed | Code location |
-|------|-------------------|---------------|
-| 1. Monotonic `lastSeenAt` | Hibernation false reap (wall-clock jump on resume) | `apps/mcp-server/src/mcp/mcp.service.ts` |
-| 2. PTY supervisor in moderator container | Continuous-uptime long idle (genuine reap of dead session) | `docker/moderator/` (new `node-pty` proxy wrapping `claude`) |
-| 3. Diagnostic instrumentation | Pin down trigger (2)'s root cause among four candidates | `apps/mcp-server/src/mcp/mcp.controller.ts` (logging only) |
-
-**Touches:** `apps/mcp-server/src/mcp/mcp.service.ts`, `apps/mcp-server/src/mcp/mcp.controller.ts`, `docker/moderator/entrypoint.sh`, new `docker/moderator/supervisor/` directory
-
-**Depends on:** QRM7-001 (this ticket modifies the reaper Q7-001 introduced); ideally lands after QRM7-009 (so the supervisor only intervenes for moderator sessions, not agent sessions that 009 removed from the reaper's path)
+Superseded after log evidence from `mcp-server-20260508T134859.jsonl` revealed that CC CLI never opens SSE — the prior framing (SSE socket drops, hibernation wall-clock jumps, partial SDK reinit) investigated mechanisms that presuppose a stream that never existed. See [QRM7-011](QRM7-011-cc-cli-post-only-vs-server-keepalive.md) for the corrected mechanism and fix plan.
 
 **Full ticket:** [QRM7-010](QRM7-010-moderator-stale-mcp-session-after-idle.md)
+
+### QRM7-011 — CC CLI POST-Only Access Pattern Incompatible with Server's SSE-Based Liveness Keepalive
+
+**Status:** Open (2026-05-09). Supersedes QRM7-010.
+
+CC CLI 2.1.126 communicates via POST-only and never opens an SSE `GET /mcp` long-poll. The server's 2-min liveness timeout is calibrated for SSE-bridged clients whose `lastSeenAt` refreshes every 30 s via keepalive ping. Without SSE, any >2 min gap between tool calls reaps the session. Root cause of every observed `Session not found` failure in moderator interactive use — confirmed by 11+ hours of log data (0 GET requests across 1160 POSTs).
+
+**Fix candidates:**
+
+| Candidate | Description | Scope |
+|-----------|-------------|-------|
+| **A. Cheap mask (hotfix)** | Bump `SESSION_LIVENESS_TIMEOUT_MS` from 120 s → 30 min. One-line change. | Immediate |
+| **B. Principled fix** | Detect POST-only sessions (track `hasOpenedSse`); exempt from idle reaping. Memory-bound by same-role eviction. | After A |
+| **C. Investigation** | Why does CC CLI never open SSE? Server bug, client design choice, or environmental? | Parallel |
+
+**Touches:** `apps/mcp-server/src/mcp/mcp.service.ts` (timeout const for A; `hasOpenedSse` for B), `apps/mcp-server/src/mcp/mcp.controller.ts` (track GET-opened state for B). Spec files matching.
+
+**Depends on:** None. Independent.
+
+**Full ticket:** [QRM7-011](QRM7-011-cc-cli-post-only-vs-server-keepalive.md)
 
 ---
 
@@ -195,14 +203,15 @@ QRM7-006 (Unit Test Gap-Fill)      ─── independent
 QRM7-007 (Moderator Subscription)  ─── independent (DONE 2026-05-04)
 QRM7-008 (Agent Retry Race)        ─── independent
 QRM7-009 (Scope Reaper)            ─── after QRM7-001 (deployed)
-QRM7-010 (Moderator Stale Session) ─── after QRM7-001 (deployed); ideally after QRM7-009
+QRM7-010 (Moderator Stale Session) ─── SUPERSEDED by QRM7-011 (closed 2026-05-09)
+QRM7-011 (CC CLI POST-Only Liveness)  ─── independent
 ```
 
-QRM7-001, QRM7-002, QRM7-004, and QRM7-007 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-008/009/010 form a coherent post-QRM7-001 cluster: 008 hardens the agent-side retry path; 009 stops the reaper from churning agent sessions in the first place; 010 stabilizes the moderator-side resume path. They are mostly independent of each other but ideally land in the order 009 → 010 → 008 (009 removes the dominant trigger 008 fixes; 010 reuses 009's narrowed reaper semantics).
+QRM7-001, QRM7-002, QRM7-004, and QRM7-007 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 is closed (superseded by QRM7-011). QRM7-008/009/011 form a coherent post-QRM7-001 cluster: 008 hardens the agent-side retry path; 009 stops the reaper from churning agent sessions; 011 stops the reaper from killing the moderator's POST-only sessions. They are independent of each other.
 
 **Recommended sequencing (by operational impact, given current state):**
 
-1. **QRM7-010** (moderator stale session) — ✱ highest user-visible operational tax today; reproduced twice in 48 h (hibernation gap + continuous-uptime idle). Parts 1 + 2 needed together. ✱
+1. **QRM7-011** (CC CLI POST-only liveness) — ✱ highest user-visible operational tax today; candidate A is a one-line hotfix that stops all observed breakage. ✱
 2. **QRM7-009** (scope reaper) — eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
 3. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency once 009 ships but still needed for correctness.
 4. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
@@ -256,7 +265,7 @@ Discovered after QRM7-001's deployment, while running the QRM8 design session an
 |---------|-------------|-------------|
 | Agent retry-once path races MCP `initialize` handshake | `logs/sessions/2026-05-06-qrm8-roadmap-run.md` Issue 3 | QRM7-008 |
 | Reaper churns agent sessions despite their stable callback URL | Same run analysis (asymmetry between connection types) | QRM7-009 |
-| Moderator's CC CLI client holds stale session ID after long idle (hibernation + continuous-uptime) | Issue 2 in same log + 2026-05-07 evening reproduction | QRM7-010 |
+| Moderator's CC CLI client holds stale session ID after long idle (hibernation + continuous-uptime) | Issue 2 in same log + 2026-05-07 evening reproduction | ~~QRM7-010~~ → QRM7-011 |
 
 ## Icebox Items (Not Scheduled)
 
