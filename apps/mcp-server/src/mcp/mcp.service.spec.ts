@@ -787,6 +787,182 @@ describe('McpService', () => {
     });
   });
 
+  describe('isSessionAlive role-aware exemption (QRM7-009)', () => {
+    function makeMockTransport(): {
+      onmessage: null;
+      onclose: null;
+      onerror: null;
+      close: jest.Mock;
+      send: jest.Mock;
+      start: jest.Mock;
+      sessionId: string | undefined;
+    } {
+      return {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    }
+
+    function getSessionRegisterHandler(
+      server: Awaited<ReturnType<typeof service.connect>>,
+    ): ToolHandler {
+      const tools = (
+        server as unknown as {
+          _registeredTools: Record<string, { handler: ToolHandler }>;
+        }
+      )._registeredTools;
+      return (args) => tools['register_agent'].handler(args);
+    }
+
+    it('should return true for stale agent-role session', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      await getSessionRegisterHandler(server)({
+        role: AgentRole.architect,
+        callbackUrl: 'http://architect:3002',
+      });
+
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(true);
+      jest.useRealTimers();
+    });
+
+    it('should return false for stale moderator session', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
+
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(false);
+      jest.useRealTimers();
+    });
+
+    it('should return false for stale anonymous session (no role)', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(false);
+      jest.useRealTimers();
+    });
+  });
+
+  describe('register_agent same-role eviction (QRM7-009)', () => {
+    function makeMockTransport(): {
+      onmessage: null;
+      onclose: null;
+      onerror: null;
+      close: jest.Mock;
+      send: jest.Mock;
+      start: jest.Mock;
+      sessionId: string | undefined;
+    } {
+      return {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    }
+
+    function getSessionRegisterHandler(
+      server: Awaited<ReturnType<typeof service.connect>>,
+    ): ToolHandler {
+      const tools = (
+        server as unknown as {
+          _registeredTools: Record<string, { handler: ToolHandler }>;
+        }
+      )._registeredTools;
+      return (args) => tools['register_agent'].handler(args);
+    }
+
+    it('should evict the prior session bound to the same agent role', async () => {
+      const transportA = makeMockTransport();
+      const transportB = makeMockTransport();
+      const serverA = await service.connect(transportA as never);
+      const serverB = await service.connect(transportB as never);
+
+      await getSessionRegisterHandler(serverA)({
+        role: AgentRole.architect,
+        callbackUrl: 'http://architect-1:3002',
+      });
+      expect(service.isSessionAlive(serverA)).toBe(true);
+
+      await getSessionRegisterHandler(serverB)({
+        role: AgentRole.architect,
+        callbackUrl: 'http://architect-2:3002',
+      });
+
+      // serverA's state was evicted (isSessionAlive returns false when state is gone)
+      expect(service.isSessionAlive(serverA)).toBe(false);
+      expect(service.isSessionAlive(serverB)).toBe(true);
+      // McpServer.close() chains down to transport.close()
+      expect(transportA.close).toHaveBeenCalled();
+      expect(transportB.close).not.toHaveBeenCalled();
+    });
+
+    it('should evict the prior moderator session on re-register', async () => {
+      const transportA = makeMockTransport();
+      const transportB = makeMockTransport();
+      const serverA = await service.connect(transportA as never);
+      const serverB = await service.connect(transportB as never);
+
+      await getSessionRegisterHandler(serverA)({ role: AgentRole.moderator });
+      await getSessionRegisterHandler(serverB)({ role: AgentRole.moderator });
+
+      expect(service.isSessionAlive(serverA)).toBe(false);
+      expect(service.isSessionAlive(serverB)).toBe(true);
+      expect(transportA.close).toHaveBeenCalled();
+    });
+
+    it('should NOT evict when the same session re-registers the same role', async () => {
+      const transport = makeMockTransport();
+      const server = await service.connect(transport as never);
+      const handler = getSessionRegisterHandler(server);
+
+      await handler({
+        role: AgentRole.developer,
+        callbackUrl: 'http://dev:3004',
+      });
+      await handler({
+        role: AgentRole.developer,
+        callbackUrl: 'http://dev-new:3004',
+      });
+
+      expect(service.isSessionAlive(server)).toBe(true);
+      expect(transport.close).not.toHaveBeenCalled();
+    });
+
+    it('should NOT evict sessions bound to a different role', async () => {
+      const transportA = makeMockTransport();
+      const transportB = makeMockTransport();
+      const serverA = await service.connect(transportA as never);
+      const serverB = await service.connect(transportB as never);
+
+      await getSessionRegisterHandler(serverA)({
+        role: AgentRole.architect,
+        callbackUrl: 'http://architect:3002',
+      });
+      await getSessionRegisterHandler(serverB)({
+        role: AgentRole.developer,
+        callbackUrl: 'http://dev:3004',
+      });
+
+      expect(service.isSessionAlive(serverA)).toBe(true);
+      expect(service.isSessionAlive(serverB)).toBe(true);
+      expect(transportA.close).not.toHaveBeenCalled();
+      expect(transportB.close).not.toHaveBeenCalled();
+    });
+  });
+
   describe('register_agent moderator with liveness closure (QRM7-001)', () => {
     let mockTransport: {
       onmessage: null;

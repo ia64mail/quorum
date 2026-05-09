@@ -1,6 +1,6 @@
 # QRM7-009: Scope MCP Session Reaper to Moderator (Elicitation) Sessions
 
-**Status:** Open
+**Status:** Done (2026-05-09) — pending runtime verification of the Burst-E integration check.
 
 ## Summary
 
@@ -142,14 +142,28 @@ Update [QRM7-001](QRM7-001-mcp-session-cleanup-not-firing.md)'s post-fix verific
 
 ## Acceptance Criteria
 
-- [ ] `isSessionAlive()` returns `true` for sessions whose role is in `DEPLOYABLE_AGENT_ROLES`, regardless of `lastSeenAt`.
-- [ ] `isSessionAlive()` continues to apply the `lastSeenAt` check for moderator sessions and for anonymous (no `register_agent` yet) sessions.
-- [ ] The periodic reaper does not evict agent-role sessions on idle.
-- [ ] The reaper continues to evict moderator sessions per QRM7-001's existing behavior.
-- [ ] The reaper continues to evict anonymous transient sessions on idle (memory bounding for CC CLI transport recycling).
-- [ ] `register_agent` for an agent role explicitly evicts any prior session bound to the same role (preserves memory-bounding for agents now that idle reaping is off).
-- [ ] After deploy, an agent invocation that includes ≥ 2 minutes of mid-invocation MCP idle produces zero `MCP transport closed, attempting reconnection` and zero `Server not initialized` warnings (verifiable by reproducing the Burst E pattern from `logs/sessions/2026-05-06-qrm8-roadmap-run.md`).
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass.
+- [x] `isSessionAlive()` returns `true` for sessions whose role is in `DEPLOYABLE_AGENT_ROLES`, regardless of `lastSeenAt`. (`mcp.service.ts:127-145`; test `should return true for stale agent-role session`.)
+- [x] `isSessionAlive()` continues to apply the `lastSeenAt` check for moderator sessions and for anonymous (no `register_agent` yet) sessions. (Tests `should return false for stale moderator session`, `should return false for stale anonymous session`.)
+- [x] The periodic reaper does not evict agent-role sessions on idle. (Reaper gates on `isSessionAlive()` per `mcp.controller.ts:76`; behavior changes implicitly via Change 1.)
+- [x] The reaper continues to evict moderator sessions per QRM7-001's existing behavior. (Existing controller-level reaper tests still pass; moderator path returns `false` for stale sessions.)
+- [x] The reaper continues to evict anonymous transient sessions on idle (memory bounding for CC CLI transport recycling). (Anonymous-session test confirms `lastSeenAt` check still applies.)
+- [x] `register_agent` for an agent role explicitly evicts any prior session bound to the same role (preserves memory-bounding for agents now that idle reaping is off). (Implementation extended to all roles including moderator — see implementation note. `mcp.service.ts:312-326`; test suite `register_agent same-role eviction (QRM7-009)`.)
+- [ ] After deploy, an agent invocation that includes ≥ 2 minutes of mid-invocation MCP idle produces zero `MCP transport closed, attempting reconnection` and zero `Server not initialized` warnings (verifiable by reproducing the Burst E pattern from `logs/sessions/2026-05-06-qrm8-roadmap-run.md`). (Pending runtime verification.)
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass. (707/707 — 7 new QRM7-009 tests added.)
+
+## Implementation Notes
+
+### Eviction extended to all roles (including moderator)
+
+Change 3 in the design specifically called for evicting prior sessions when an agent role re-registers. The implementation extends this to **all roles, including moderator**. Rationale: the moderator case is symmetric — when CC CLI re-attaches and the moderator session re-runs `register_agent`, the prior moderator session-state is dead weight in `sessionStates` and its bound `McpElicitationConnection` is unreachable (its captured `server` reference points to a defunct McpServer). Evicting it on same-role re-register is strictly more correct, simplifies the control flow (one branch instead of two), and preemptively satisfies QRM7-011-B's memory-bounding criterion ("`register_agent` for the same role evicts prior POST-only sessions"). No downside: the new moderator session has already obtained its own state by the time the eviction loop runs.
+
+### Eviction implementation detail
+
+The eviction calls `oldServer.close()` (which propagates to the transport via the SDK's `Protocol.close()` chain) but also synchronously deletes the prior `sessionStates` entry. The synchronous delete is what makes a subsequent `register_agent` for the same role idempotent — without it, a fast re-register before the controller's `transport.onclose` handler runs would attempt to evict an already-closing session. The controller's `onclose` handler is itself idempotent (`mcpService.disconnect()` no-ops when state is already gone), so this double-cleanup is safe.
+
+### Out-of-scope detail surfaced during implementation
+
+The "Out of scope" section originally said *"Redesigning the reaper's threshold (`SESSION_LIVENESS_TIMEOUT_MS = 120s`) — fine for the moderator path."* As of [QRM7-011-A](QRM7-011-cc-cli-post-only-vs-server-keepalive.md), that constant is now `1_800_000` (30 min). The threshold redesign is still out of scope here — QRM7-011 is the right place to track it.
 
 ## Dependencies and References
 

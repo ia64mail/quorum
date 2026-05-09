@@ -147,7 +147,7 @@ The agent-side retry-once self-heal added in QRM5-BUG-005 fires `client.callTool
 
 ### QRM7-009 — Scope MCP Session Reaper to Elicitation Sessions
 
-**Status:** Open
+**Status:** Done (2026-05-09) — pending runtime verification of the Burst-E integration check.
 
 QRM7-001's reaper applies uniformly to every MCP session in `sessionStates`, but only the moderator's `McpElicitationConnection` actually depends on session liveness for routing — agents are reached by `HttpAgentConnection` via stable callback URLs that survive any MCP session churn. The result: the reaper evicts agent sessions on idle, forces an unnecessary reconnect via the QRM5-BUG-005 retry path, and exposes the QRM7-008 race. **Pure collateral damage** — 9 spurious failures across the QRM8 run, zero correctness improvements from reaping agents.
 
@@ -202,22 +202,23 @@ QRM7-005 (Log Adapter)             ─── independent
 QRM7-006 (Unit Test Gap-Fill)      ─── independent
 QRM7-007 (Moderator Subscription)  ─── independent (DONE 2026-05-04)
 QRM7-008 (Agent Retry Race)        ─── independent
-QRM7-009 (Scope Reaper)            ─── after QRM7-001 (deployed)
+QRM7-009 (Scope Reaper)            ─── after QRM7-001 (DONE 2026-05-09)
 QRM7-010 (Moderator Stale Session) ─── SUPERSEDED by QRM7-011 (closed 2026-05-09)
 QRM7-011 (CC CLI POST-Only Liveness)  ─── independent
 ```
 
-QRM7-001, QRM7-002, QRM7-004, and QRM7-007 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 is closed (superseded by QRM7-011). QRM7-008/009/011 form a coherent post-QRM7-001 cluster: 008 hardens the agent-side retry path; 009 stops the reaper from churning agent sessions; 011 stops the reaper from killing the moderator's POST-only sessions. They are independent of each other.
+QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 is closed (superseded by QRM7-011). QRM7-011 Candidate A is landed; B and C remain. QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
 
 **Recommended sequencing (by operational impact, given current state):**
 
-1. **QRM7-011** (CC CLI POST-only liveness) — ✱ highest user-visible operational tax today; candidate A is a one-line hotfix that stops all observed breakage. ✱
-2. **QRM7-009** (scope reaper) — eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
-3. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency once 009 ships but still needed for correctness.
-4. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
-5. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
-6. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
-7. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
+1. ~~**QRM7-011** Candidate A (CC CLI POST-only liveness hotfix)~~ — ✅ DONE 2026-05-09. One-line timeout bump; stops all observed `Session not found` breakage.
+2. ~~**QRM7-009** (scope reaper)~~ — ✅ DONE 2026-05-09. Eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
+3. **QRM7-011** Candidate B (POST-only session detection) — principled fix. After it lands, the QRM7-011-A timeout bump can revert to 2 min for SSE-backed sessions, restoring the original fail-fast behavior.
+4. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency now that 009 ships but still needed for correctness.
+5. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
+6. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
+7. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
+8. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
 
 ## Additional Goals
 

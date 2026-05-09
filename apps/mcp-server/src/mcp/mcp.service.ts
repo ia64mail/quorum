@@ -132,10 +132,30 @@ export class McpService implements OnModuleInit {
     }
   }
 
-  /** Check whether a session's lastSeenAt is within the liveness grace period (QRM7-001). */
+  /**
+   * Check whether a session's lastSeenAt is within the liveness grace period (QRM7-001).
+   *
+   * QRM7-009: agent-role sessions (architect, teamlead, developer, qa,
+   * productowner) are exempt from idle-based liveness — the broker reaches
+   * agents via `HttpAgentConnection.callbackUrl`, not via the MCP session,
+   * so an idle MCP session has no bearing on whether the agent is reachable.
+   * Without this exemption the periodic reaper churns mid-invocation agent
+   * sessions during long stretches of local SDK work (Edit/Read/Grep/Bash),
+   * forcing reconnects that hit the QRM5-BUG-005 retry race (QRM7-008).
+   *
+   * Moderator sessions still need the lastSeenAt check (the broker delivers
+   * elicitations over the same live transport), and anonymous sessions —
+   * those that never called `register_agent`, e.g. CC CLI's transport
+   * recycling on the moderator's outbound channel — still need it for memory
+   * bounding.
+   *
+   * Memory bounding for agent sessions is preserved via same-role eviction
+   * in the `register_agent` handler.
+   */
   isSessionAlive(server: McpServer): boolean {
     const state = this.sessionStates.get(server);
     if (!state) return false;
+    if (state.role && state.role !== AgentRole.moderator) return true;
     return Date.now() - state.lastSeenAt < SESSION_LIVENESS_TIMEOUT_MS;
   }
 
@@ -319,6 +339,21 @@ export class McpService implements OnModuleInit {
         // Bind the role to this session's state
         const state = this.sessionStates.get(server);
         if (state) {
+          // QRM7-009: evict any prior session bound to this role. Now that
+          // agent-role sessions are exempt from idle reaping, the same-role
+          // overwrite path is what bounds `sessionStates` against accumulation
+          // on agent restart / transport recycling. The McpServer.close()
+          // call propagates to the transport; the controller's onclose
+          // handler will remove the stale entry from its session maps.
+          for (const [otherServer, otherState] of this.sessionStates) {
+            if (otherServer !== server && otherState.role === role) {
+              this.sessionStates.delete(otherServer);
+              void otherServer.close().catch(() => undefined);
+              this.logger.log(
+                `Evicted prior session bound to role ${role} on re-register`,
+              );
+            }
+          }
           state.role = role;
         }
 
