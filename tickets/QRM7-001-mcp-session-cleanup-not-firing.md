@@ -651,6 +651,8 @@ All layers can be in a single commit since they form one coherent fix.
 
 ## Post-Fix Verification — `mcp-server-20260504T001855.jsonl` (2026-05-03 run)
 
+> **Forward-pointer (2026-05-09):** Reaper scope was narrowed to elicitation-backed sessions in [QRM7-009](QRM7-009-scope-reaper-to-elicitation-sessions.md). The data captured here reflects the broader reaper at fix time — it evicted agent-role sessions on idle as well as moderator/anonymous sessions. Post-QRM7-009, agent-role sessions are exempt from idle reaping (the broker reaches them via stable callback URLs, not the MCP session); memory bounding for agents is preserved by same-role eviction in `register_agent`. The QRM7-001 acceptance criteria for the moderator path continue to hold under the narrower implementation.
+
 First production run with QRM7-001 deployed. Captures the same failure pattern that drove the ticket and shows it being handled correctly.
 
 ### Quantitative comparison

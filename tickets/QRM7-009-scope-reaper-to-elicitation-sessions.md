@@ -161,6 +161,12 @@ Change 3 in the design specifically called for evicting prior sessions when an a
 
 The eviction calls `oldServer.close()` (which propagates to the transport via the SDK's `Protocol.close()` chain) but also synchronously deletes the prior `sessionStates` entry. The synchronous delete is what makes a subsequent `register_agent` for the same role idempotent — without it, a fast re-register before the controller's `transport.onclose` handler runs would attempt to evict an already-closing session. The controller's `onclose` handler is itself idempotent (`mcpService.disconnect()` no-ops when state is already gone), so this double-cleanup is safe.
 
+The eviction log line includes the idle age of the evicted session: `Evicted prior {role} session (idle {N}s) on re-register`. This correlates with the controller's `Session closed: {sessionId}` log (fired when `oldServer.close()` propagates to `transport.onclose`) so post-mortems can identify which session was evicted by which.
+
+### Change 4 — QRM7-001 forward-pointer applied
+
+The "Post-Fix Verification" section of [QRM7-001](QRM7-001-mcp-session-cleanup-not-firing.md) now opens with a forward-pointer noting that reaper scope was narrowed here. The captured evidence in QRM7-001 (13 reaped sessions in 10h) reflects the broader reaper at fix time and remains accurate for the moderator/anonymous paths it covers; agent-role sessions are no longer in that population.
+
 ### Out-of-scope detail surfaced during implementation
 
 The "Out of scope" section originally said *"Redesigning the reaper's threshold (`SESSION_LIVENESS_TIMEOUT_MS = 120s`) — fine for the moderator path."* As of [QRM7-011-A](QRM7-011-cc-cli-post-only-vs-server-keepalive.md), that constant is now `1_800_000` (30 min). The threshold redesign is still out of scope here — QRM7-011 is the right place to track it.

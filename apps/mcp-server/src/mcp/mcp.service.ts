@@ -145,9 +145,9 @@ export class McpService implements OnModuleInit {
    *
    * Moderator sessions still need the lastSeenAt check (the broker delivers
    * elicitations over the same live transport), and anonymous sessions —
-   * those that never called `register_agent`, e.g. CC CLI's transport
-   * recycling on the moderator's outbound channel — still need it for memory
-   * bounding.
+   * those that never called `register_agent`, e.g. transient sessions
+   * created by CC CLI's periodic transport recycling — still need it for
+   * memory bounding.
    *
    * Memory bounding for agent sessions is preserved via same-role eviction
    * in the `register_agent` handler.
@@ -345,12 +345,19 @@ export class McpService implements OnModuleInit {
           // on agent restart / transport recycling. The McpServer.close()
           // call propagates to the transport; the controller's onclose
           // handler will remove the stale entry from its session maps.
+          //
+          // Map iteration safety: ES Map permits deleting the current or any
+          // not-yet-visited key during iteration without skipping or revisiting
+          // remaining entries.
           for (const [otherServer, otherState] of this.sessionStates) {
             if (otherServer !== server && otherState.role === role) {
+              const idleSec = Math.round(
+                (Date.now() - otherState.lastSeenAt) / 1000,
+              );
               this.sessionStates.delete(otherServer);
               void otherServer.close().catch(() => undefined);
               this.logger.log(
-                `Evicted prior session bound to role ${role} on re-register`,
+                `Evicted prior ${role} session (idle ${idleSec}s) on re-register`,
               );
             }
           }
