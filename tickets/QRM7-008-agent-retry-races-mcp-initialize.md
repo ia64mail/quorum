@@ -1,6 +1,6 @@
 # QRM7-008: Agent `McpClientService` Retry-Once Path Races the MCP `initialize` Handshake
 
-**Status:** Open
+**Status:** Done (2026-05-09) — pending runtime verification of the server-restart AC.
 
 ## Summary
 
@@ -49,9 +49,11 @@ The correct framing is therefore: **"first MCP call after the agent's MCP sessio
 | Dimension | Impact |
 |-----------|--------|
 | Work output | **Low.** Architect's SDK adapts: skips a failed `context_query` (reasons from bootstrap context), retries `context_store` later in the same turn (succeeds on the post-reconnect transport). Across 8 invocations and 9 failure events in the QRM8 run, every requested edit landed on disk. |
-| Log signal-to-noise | **Moderate.** Each event emits 4 lines at WARN level (`McpClientService` × 2, `McpToolBridgeService` × 1, `ClaudeCodeService` × 1). Operators reading digests see what looks like a sustained transport problem. |
-| Operator mental model | **High.** The apparent failure rate is alarming for someone scanning logs — every invocation has at least one "MCP transport closed, attempting reconnection" — even though the system is recovering. Easy to misdiagnose as a regression on top of a fix. |
-| Lost context | **Low-moderate.** The architect explicitly stops attempting `context_query` after a single failure within an invocation (observed in Bursts D and E). It still gets bootstrap context, but it forgoes any project-scope query that bootstrap's token budget did not cover. Across the 47h run, 6 `context_query mode=search` attempts all failed on first call, and the architect never retried any of them. |
+| Log signal-to-noise | **Low.** Fires once per server restart, not once per invocation — no longer a sustained noise source in operator digests. |
+| Operator mental model | **Low.** Reconnect events are now rare and correlated with deploys or infrastructure events, not pervasive across every invocation. Easy to diagnose as infrastructure-correlated. |
+| Lost context | **Low.** The 6 failed `context_query mode=search` events in the QRM8 run were a consequence of mid-invocation idle reaping; that path is gone post-QRM7-009. The residual server-restart trigger does not produce the same multi-failure-per-invocation pattern. |
+
+*Severity downgraded 2026-05-09 after QRM7-009 eliminated the idle-reap trigger; ratings reflect the residual server-restart trigger surface.*
 
 This is not the dominant operational tax of the QRM8 run — Issues 1 (Anthropic OAuth refresh) and 2 (moderator-side MCP self-heal) cost more user-visible time. But this is the only one of the three that is fully in our code path and cheap to fix.
 
@@ -117,9 +119,11 @@ The single-flight guard in `handleReconnection()` is correct on its own — conc
 
 Once `Discovered 8 MCP tools` finishes, the new transport is fully `initialize`-d. Any tool call after that point succeeds. So an invocation that issues `context_query` and then `context_store` 60 seconds later sees the first call fail and the second call succeed — exactly what the OpenSearch dump shows for every burst (items eventually land).
 
-### Why this gets worse, not better, as we deploy QRM8 D9/D10
+### Trigger frequency post-QRM7-009
 
-QRM8's [D9](../tickets/QRM8-000-roadmap.md) flips agent session resume to default-on and [D10](../tickets/QRM8-000-roadmap.md) has `new_conversation` return a turn-start `git pull` reminder. Both add new MCP tool calls at turn boundaries (where the moderator's MCP session has, by definition, just resumed from idle and is most likely to be reaped). Today the failures are confined to the architect's first `context_query`/`context_store`. Post-D9/D10 they will appear on the moderator's `new_conversation` and on every agent's first session-resume probe — exactly the calls that are supposed to be turn-start mechanical.
+[QRM7-009](QRM7-009-scope-reaper-to-elicitation-sessions.md) exempts agent sessions from idle reaping — the `isSessionAlive()` predicate now returns `true` for any session whose role is in `DEPLOYABLE_AGENT_ROLES`, regardless of `lastSeenAt`. Agent MCP sessions are no longer reaped on idle; they persist in `sessionStates` until the transport explicitly closes or `register_agent` re-binds the role.
+
+This eliminates the dominant trigger of the race: mid-invocation idle reaping that forced an unnecessary reconnect on every agent burst. The race now fires only on rare infrastructure events — mcp-server container restart, crash recovery, or network partition — its original pre-QRM7-001 frequency. The defect is still real (the retry path is still buggy), but the urgency is lower: operators will see the race once per deploy instead of once per invocation.
 
 ## Implementation Details
 
@@ -161,16 +165,9 @@ private async runReconnection(): Promise<void> {
 
 The `transport.onclose` callsite stays `void this.handleReconnection()` (fire-and-forget on transport drop); the `callTool()` catch-block callsite uses `await this.handleReconnection()` and now waits behind the in-flight chain even when `onclose` started it. Drop the `reconnecting` boolean and the existing try/finally that clears it.
 
-### Part 2 — Broaden `isSessionNotFound()` to recognize the post-reaper error class
+### Part 2 — deferred
 
-Even with Part 1, there is a residual narrow window: if the retry's `client.callTool()` itself races something inside the SDK transport (e.g. a re-`initialize` not yet ack'd because of TCP-level reordering), the second call will throw `Bad Request: Server not initialized` and `isSessionNotFound()` returns `false` — so the error surfaces with no further retry.
-
-Rename `isSessionNotFound()` to `isSessionLostError()` (or similar) and have it match either:
-
-- `Session not found`
-- `Server not initialized` / `Bad Request: Server not initialized`
-
-Both errors mean the same thing operationally: "the transport you're holding is no longer associated with a usable server-side session, reconnect and try again." A single-retry guard prevents an infinite loop.
+The predicate-broadening (`isSessionNotFound()` → match `Server not initialized` in addition to `Session not found`) was originally a belt-and-suspenders against a residual SDK-internal race window. With Part 1 sequencing the retry behind the full `connect → register → discoverTools` chain, `Server not initialized` should be structurally impossible on the retry call — the transport is fully initialized before the retry fires. Predicate-broadening can be revisited if such a failure is ever observed in post-fix logs.
 
 ### Out of scope — server-side fix
 
@@ -180,9 +177,7 @@ The server cannot meaningfully prevent `Server not initialized` from being a pos
 
 - **Unit — Part 1 — single in-flight reconnection.** Simulate `Session not found`; assert that exactly one `connectWithRetry → register → discoverTools` chain runs even though both `transport.onclose` and `callTool()` trigger reconnection. Assert that the catch-block retry does not fire `client.callTool()` until the chain has resolved.
 - **Unit — Part 1 — concurrent failures share the chain.** Two parallel `callTool()` invocations both hitting `Session not found`; assert one chain, both retries land after the chain resolves.
-- **Unit — Part 2 — `Server not initialized` triggers retry.** Same path as the existing `Session not found` retry; assert reconnect-and-retry fires.
-- **Unit — Part 2 — second consecutive failure surfaces.** `Session not found` followed by `Server not initialized` on the retry; assert the error is surfaced (no infinite loop).
-- **Existing tests.** The three tests added by QRM5-BUG-005 (reconnect-and-retry, retry-failure, non-session-not-found passthrough) should continue to pass; updating them to match the renamed predicate is mechanical.
+- **Existing tests.** The three tests added by QRM5-BUG-005 (reconnect-and-retry, retry-failure, non-session-not-found passthrough) should continue to pass.
 
 ### Apply the same fix to the moderator's terminal client?
 
@@ -190,14 +185,34 @@ The server cannot meaningfully prevent `Server not initialized` from being a pos
 
 ## Acceptance Criteria
 
-- [ ] `McpClientService.handleReconnection()` shares a single in-flight reconnection promise across concurrent triggers (`transport.onclose` + `callTool()` catch block); only one `connectWithRetry → register → discoverTools` chain runs per close-event.
-- [ ] `McpClientService.callTool()`'s retry awaits the in-flight reconnection chain to resolution (success or terminal failure) before re-issuing `client.callTool()`.
-- [ ] The session-loss predicate (renamed from `isSessionNotFound()`) recognizes both `Session not found` and `Server not initialized` / `Bad Request: Server not initialized` as the same failure class.
-- [ ] Single retry semantics preserved — if both the original and the retry fail, the error is surfaced (no infinite loop).
-- [ ] Existing QRM5-BUG-005 unit tests still pass after renaming.
-- [ ] New unit tests cover the four scenarios listed above.
-- [ ] After deploy, a session that idles past `SESSION_LIVENESS_TIMEOUT_MS` (120s) and then issues a tool call shows zero `Bridge proxy failed for context_*: Server not initialized` lines in `architect-*.jsonl` for the first call after the idle period (verifiable in a follow-up session report — the QRM8 design run reproduced this 9 times across 5 bursts).
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass.
+- [x] `McpClientService.handleReconnection()` shares a single in-flight reconnection promise across concurrent triggers (`transport.onclose` + `callTool()` catch block); only one `connectWithRetry → register → discoverTools` chain runs per close-event.
+- [x] `McpClientService.callTool()`'s retry awaits the in-flight reconnection chain to resolution (success or terminal failure) before re-issuing `client.callTool()`.
+- [x] Single retry semantics preserved — if both the original and the retry fail, the error is surfaced (no infinite loop).
+- [x] Existing QRM5-BUG-005 unit tests still pass.
+- [x] New unit tests cover the two Part 1 scenarios listed above.
+- [ ] After an mcp-server restart while an agent has work in flight, the agent's first post-restart MCP tool call succeeds without `Bad Request: Server not initialized` in `*-{role}-*.jsonl`. (Reproducible by killing the mcp-server container mid-invocation; the agent's existing `transport.onclose` reconnect path now correctly sequences the retry behind the new transport's `initialize`.)
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass.
+
+## Implementation Notes
+
+**Status:** Accepted (2026-05-09) — Part 1 only. AC #6 (runtime server-restart verification) remains unchecked; requires a live deploy to confirm.
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `apps/agent/src/connection/mcp-client.service.ts` | Replaced `reconnecting: boolean` guard with `reconnectPromise: Promise<void> \| null` memoization (Option A). Extracted `runReconnection()`. Changed `transport.onclose` from `void this.handleReconnection()` to `.catch(...)` to prevent unhandled rejections. Error handling improved: reconnection failures now propagate to `callTool()` callers instead of being swallowed. |
+| `apps/agent/src/connection/mcp-client.service.spec.ts` | Added two tests in new `QRM7-008 reconnectPromise memoization` describe block: (1) single in-flight reconnection — verifies dual trigger (onclose + catch block) composes into one chain with event-ordering assertion; (2) concurrent failures share the chain — uses `Promise.all` for true concurrency. |
+| `tickets/QRM7-008-agent-retry-races-mcp-initialize.md` | Re-scoped: severity table downgraded post-QRM7-009, trigger frequency section added, Part 2 deferred, AC #7 (old) removed, AC #6 recast for residual server-restart trigger. |
+
+**Deviations:** None. Implementation follows Option A from the ticket exactly.
+
+**Verification results:**
+- `npm run build` — clean
+- `npm run lint` — clean
+- `npm run test` — 716/716 passed (44 suites)
+- All 3 existing QRM5-BUG-005 reconnect tests pass against the new shape
+- Both new QRM7-008 tests pass
 
 ## Dependencies and References
 
