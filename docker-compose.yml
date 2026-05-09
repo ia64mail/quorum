@@ -47,6 +47,12 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    init: true
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        ollama serve 2>&1 | grep --line-buffered -Ev '\[GIN\].*"(/|/api/tags)"$'
     depends_on:
       ollama-init:
         condition: service_completed_successfully
