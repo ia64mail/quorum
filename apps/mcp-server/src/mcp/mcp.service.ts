@@ -140,6 +140,16 @@ export class McpService implements OnModuleInit {
   }
 
   /**
+   * QRM7-011 diagnostic: read-only snapshot of a session's state for logging.
+   * Returns `undefined` if the session has no state entry. Temporary — used by
+   * the reaper to surface why isSessionAlive() decided as it did. Remove once
+   * the moderator-reap regression is root-caused.
+   */
+  peekSessionState(server: McpServer): McpSessionState | undefined {
+    return this.sessionStates.get(server);
+  }
+
+  /**
    * Mark a session as having opened an SSE long-poll stream (QRM7-011-B).
    * Called from the controller's `GET /mcp` handler. Sticky: once set, the
    * session is classified as SSE-backed for the rest of its lifetime, so
@@ -149,6 +159,12 @@ export class McpService implements OnModuleInit {
   markSseOpened(server: McpServer): void {
     const state = this.sessionStates.get(server);
     if (state) {
+      // QRM7-011 diagnostic: log every flip so we can see whether SSE was
+      // genuinely opened. Temporary — remove with the reaper diagnostic.
+      this.logger.debug(
+        `markSseOpened: role=${state.role ?? 'none'} ` +
+          `wasOpenedSse=${state.hasOpenedSse}`,
+      );
       state.hasOpenedSse = true;
     }
   }

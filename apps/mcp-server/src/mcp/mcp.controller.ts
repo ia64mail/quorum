@@ -73,7 +73,20 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
     for (const [sessionId, mcpServer] of Array.from(
       this.mcpServers.entries(),
     )) {
-      if (!this.mcpService.isSessionAlive(mcpServer)) {
+      // QRM7-011 diagnostic: log per-session state at decision time so we can
+      // see which branch of isSessionAlive() fired. Temporary — remove once
+      // the moderator-reap regression is root-caused.
+      const snapshot = this.mcpService.peekSessionState(mcpServer);
+      const alive = this.mcpService.isSessionAlive(mcpServer);
+      this.logger.debug(
+        `Reaper check: sessionId=${sessionId} ` +
+          `stateExists=${snapshot !== undefined} ` +
+          `role=${snapshot?.role ?? 'none'} ` +
+          `hasOpenedSse=${snapshot?.hasOpenedSse ?? 'n/a'} ` +
+          `lastSeenAtAge=${snapshot ? Date.now() - snapshot.lastSeenAt : 'n/a'}ms ` +
+          `alive=${alive}`,
+      );
+      if (!alive) {
         this.mcpService.disconnect(mcpServer);
         this.sessions.delete(sessionId);
         this.mcpServers.delete(sessionId);
