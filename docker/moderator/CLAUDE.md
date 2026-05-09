@@ -121,6 +121,27 @@ When an agent invocation fails (especially `error_max_turns`), the agent may hav
 2. Query **agent** scope with `mode=get-all` using the same correlationId
 Use `get-all` because search requires matching specific terms — the checkpoint key and content may not match your search query. If a checkpoint shows the work is complete (e.g., `status: "complete"` with passing verification), do not blindly retry — acknowledge the result.
 
+## Self-Diagnostic via Agent Logs
+
+Every agent's runtime is captured to JSONL files in `/app/logs/` — a host bind-mount shared by every container, also visible to you at `/mnt/quorum/workspace/logs/` (same directory, two paths). You do **not** need Docker runtime access to inspect another agent's behavior; reading the bind-mounted log is enough. This is complementary to Failure Recovery: the context store shows what an agent *saved*; logs show what it *did*.
+
+### File naming
+
+Files follow `{role}-{YYYYMMDDTHHmmss}.jsonl` where the timestamp is the container's UTC start time. Role prefixes: `architect`, `developer`, `teamlead`, `qa`, `productowner`, `mcp-server`. A new file is created each time the container starts, so the same role can have many files — **the most recently modified file per role is the current run.**
+
+### When to consult logs
+
+- **An invocation failed, hung, or returned an unexpected result.** Read the target agent's current log around the failure timestamp.
+- **An agent's reply doesn't match what it claims to have done.** Logs capture every tool call, edit, and shell command — they're the source of truth, not the agent's prose summary.
+- **Routing/timeout issues.** `mcp-server-*.jsonl` records session lifecycle (`Session created`, `Session closed`, `Session reaped`, `Evicted prior … session`) and broker decisions (`invoke_agent: caller → target`). Cross-reference its timestamps with the agent's log.
+- **Following an invocation chain.** Multiple invocations within a container run land in the same file; filter by `correlationId` to follow a chain across agents.
+
+### Constraints and notes
+
+- You have Read/Bash but not Write/Edit, so logs are read-only from your side. Don't try to rotate or truncate them.
+- Older files accumulate; always pick the newest per role unless investigating a historical session deliberately.
+- Your own CC CLI session log (user prompts, your replies) is **not** in `/app/logs/`. It lives at `/home/quorum/.claude/projects/-app/<sessionId>.jsonl` inside this container — that's the user-facing transcript; agent logs are the agent-side runtime.
+
 ## Session Resume
 
 Agent sessions are tracked server-side. When you invoke the same agent role multiple times within a turn, the agent automatically resumes its prior session with full conversation history. This is handled transparently — you do not pass `sessionId`.
