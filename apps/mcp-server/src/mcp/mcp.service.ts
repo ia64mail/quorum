@@ -24,18 +24,27 @@ import { McpServerConfigService } from '../config';
 /**
  * How long a session can be idle before isSessionAlive() returns false (QRM7-001).
  *
- * Applies only to SSE-backed moderator sessions and anonymous transient
- * sessions. POST-only moderator sessions are exempt at the source by
- * QRM7-011-B (`hasOpenedSse` flag), and agent-role sessions are exempt by
- * QRM7-009 (broker reaches them via callbackUrl). The 2 min window is tight
- * by design — it bounds the `invoke_agent(target=moderator)` fail-fast for a
- * dead SSE-backed moderator and the memory churn of CC CLI's transport
- * recycler creating anonymous sessions.
+ * QRM7-012 Candidate A: re-bumped to 30 min after the QRM7-011 reversion
+ * proved load-bearing. Diagnostic logging falsified QRM7-011's "POST-only"
+ * premise — CC CLI 2.1.126 opens GET SSE within ~20 ms of every session
+ * creation, before `register_agent` runs, so QRM7-011-B's `hasOpenedSse`
+ * exemption never fires for moderator sessions (sticky-true before role
+ * binds). The reaper falls through to this `lastSeenAt` check on every
+ * moderator session, and the SDK's 5 min `undici.bodyTimeout`-driven
+ * reconnect cycle (typescript-sdk#1211) plus our 2 min idle window meant
+ * every moderator session was a 2 min time bomb. The 30 min floor is
+ * comfortably above the 5 min reconnect cadence so the recycled session
+ * is created before the previous one reaps. Tradeoff: extends
+ * `invoke_agent(target=moderator)` fail-fast against a dead moderator
+ * from 2 min → 30 min — acceptable in current flows where agent→moderator
+ * escalation is rare.
  *
- * Reverted from 1_800_000 (QRM7-011-A hotfix) back to 120_000 once
- * QRM7-011-B's POST-only exemption made the bump unnecessary.
+ * Companion fix is QRM7-012 Candidate E (immediate SSE comment on GET
+ * open + tightened keepalive cadence) in `mcp.controller.ts`. Principled
+ * follow-up is Candidate B (live-SSE-response signal). Agent-role sessions
+ * remain exempt via QRM7-009 (broker reaches them via callbackUrl).
  */
-export const SESSION_LIVENESS_TIMEOUT_MS = 120_000; // 2 minutes
+export const SESSION_LIVENESS_TIMEOUT_MS = 1_800_000; // 30 minutes
 
 /**
  * Per-session state tracked by the MCP server. Keyed by the per-session

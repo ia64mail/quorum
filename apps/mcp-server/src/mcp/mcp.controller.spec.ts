@@ -15,6 +15,7 @@ const mockMcpService = {
   touchSession: jest.fn(),
   markSseOpened: jest.fn(),
   isSessionAlive: jest.fn().mockReturnValue(true),
+  peekSessionState: jest.fn().mockReturnValue(undefined),
 };
 
 function mockReq(
@@ -254,7 +255,7 @@ describe('McpController', () => {
       jest.useRealTimers();
     });
 
-    it('should emit ping comments at 30s intervals on SSE streams', async () => {
+    it('should emit immediate ready comment then ping at 15s intervals (QRM7-012-E)', async () => {
       // Create a session
       const reqPost = mockReq({ body: {} });
       const { res: resPost } = mockRes();
@@ -267,17 +268,19 @@ describe('McpController', () => {
       const { res: resGet, mock: mockGetRes } = mockRes();
       await controller.handleGet(reqGet, resGet);
 
-      // No ping before 30s
-      expect(mockGetRes.write).not.toHaveBeenCalled();
-
-      // First ping at 30s
-      jest.advanceTimersByTime(30_000);
+      // QRM7-012-E: immediate ': ready\n\n' on stream open so undici sees
+      // a body chunk before any "first byte within N seconds" timer fires.
       expect(mockGetRes.write).toHaveBeenCalledTimes(1);
-      expect(mockGetRes.write).toHaveBeenCalledWith(': ping\n\n');
+      expect(mockGetRes.write).toHaveBeenCalledWith(': ready\n\n');
 
-      // Second ping at 60s
-      jest.advanceTimersByTime(30_000);
+      // First scheduled ping at 15s
+      jest.advanceTimersByTime(15_000);
       expect(mockGetRes.write).toHaveBeenCalledTimes(2);
+      expect(mockGetRes.write).toHaveBeenLastCalledWith(': ping\n\n');
+
+      // Second scheduled ping at 30s
+      jest.advanceTimersByTime(15_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(3);
     });
 
     it('should clean up keepalive interval on connection close', async () => {
@@ -293,9 +296,10 @@ describe('McpController', () => {
       const { res: resGet, mock: mockGetRes } = mockRes();
       await controller.handleGet(reqGet, resGet);
 
-      // Verify keepalive starts
-      jest.advanceTimersByTime(30_000);
-      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+      // Initial ': ready' write fires synchronously on open (QRM7-012-E).
+      // Verify keepalive interval is also active by advancing one tick.
+      jest.advanceTimersByTime(15_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(2);
 
       // Find and trigger the 'close' handler
       const closeCalls = mockGetRes.on.mock.calls as [string, () => void][];
@@ -303,9 +307,9 @@ describe('McpController', () => {
       expect(closeCall).toBeDefined();
       closeCall![1]();
 
-      // No more pings after close
+      // No more pings after close — count stays at 2 (1 ready + 1 ping)
       jest.advanceTimersByTime(90_000);
-      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(2);
     });
 
     it('should stop pinging when response is no longer writable', async () => {
@@ -321,16 +325,16 @@ describe('McpController', () => {
       const { res: resGet, mock: mockGetRes } = mockRes();
       await controller.handleGet(reqGet, resGet);
 
-      // First ping succeeds
-      jest.advanceTimersByTime(30_000);
-      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+      // Initial ': ready' (QRM7-012-E) + first scheduled ping at 15s.
+      jest.advanceTimersByTime(15_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(2);
 
       // Mark response as ended
       mockGetRes.writableEnded = true;
 
-      // Next interval fires but skips write
-      jest.advanceTimersByTime(30_000);
-      expect(mockGetRes.write).toHaveBeenCalledTimes(1);
+      // Next interval fires but skips write — count stays at 2
+      jest.advanceTimersByTime(15_000);
+      expect(mockGetRes.write).toHaveBeenCalledTimes(2);
     });
 
     it('should not start keepalive for 404 responses', async () => {

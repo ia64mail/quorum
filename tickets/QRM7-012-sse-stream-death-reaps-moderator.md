@@ -199,11 +199,11 @@ None. Independent of QRM7-008. The diagnostic logging in `623faca` is a soft pre
 
 ## Acceptance Criteria
 
-### Candidate A (hotfix)
+### Candidate A (hotfix) — Code landed 2026-05-09
 
-- [ ] `SESSION_LIVENESS_TIMEOUT_MS` reset to `1_800_000` (30 min).
-- [ ] Existing unit tests reference the constant symbolically — no value updates needed.
-- [ ] After deploy, moderator survives ≥25 min between tool calls without `Session not found`.
+- [x] `SESSION_LIVENESS_TIMEOUT_MS` reset to `1_800_000` (30 min). (`apps/mcp-server/src/mcp/mcp.service.ts:38` — comment rewritten with QRM7-012 context.)
+- [x] Existing unit tests reference the constant symbolically — no value updates needed. (716/716 pass.)
+- [ ] After deploy, moderator survives ≥25 min between tool calls without `Session not found`. (Pending runtime verification.)
 
 ### Candidate B (principled fix)
 
@@ -222,12 +222,13 @@ None. Independent of QRM7-008. The diagnostic logging in `623faca` is a soft pre
 - (Lifted unchanged from QRM7-010 Part 3 acceptance criteria — see that ticket if D lands.)
 - [ ] Per-session SSE lifetime logged (`markSseOpened` → `res.on('close')` delta in ms) so the next reproduction confirms or rejects the 300 000 ms hypothesis.
 
-### Candidate E (immediate ping + tightened cadence)
+### Candidate E (immediate ping + tightened cadence) — Code landed 2026-05-09
 
-- [ ] `startSseKeepalive` writes a single `: ready\n\n` SSE comment immediately on entry, before scheduling the keepalive interval. Errors on the immediate write bail before scheduling (socket already gone).
-- [ ] `SSE_KEEPALIVE_INTERVAL_MS` is reduced from 30 000 to 15 000.
+- [x] `startSseKeepalive` writes a single `: ready\n\n` SSE comment immediately on entry, before scheduling the keepalive interval. Errors on the immediate write bail before scheduling (socket already gone). (`apps/mcp-server/src/mcp/mcp.controller.ts:271-280`.)
+- [x] `SSE_KEEPALIVE_INTERVAL_MS` is reduced from 30 000 to 15 000. (`apps/mcp-server/src/mcp/mcp.controller.ts:18-25`.)
+- [x] Updated unit tests cover the immediate-ready behavior and the new 15 s cadence. (`mcp.controller.spec.ts:258-335`.)
 - [ ] After deploy, the metronomic 5-min `Session created` cadence is either eliminated (recycle stops) or empirically confirmed to be a separate timer source (Candidate D's SSE-lifetime log shows GET stream surviving past 300 000 ms).
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass.
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass. (716/716.)
 
 ## Dependencies and References
 

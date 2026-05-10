@@ -15,8 +15,15 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { McpService } from './mcp.service';
 
-/** QRM5-BUG-005: interval between SSE keepalive pings (ms). */
-const SSE_KEEPALIVE_INTERVAL_MS = 30_000;
+/**
+ * Interval between SSE keepalive pings (ms).
+ *
+ * QRM5-BUG-005 originally set this to 30 000.
+ * QRM7-012 Candidate E tightened to 15 000 to keep us well under any
+ * 30 s idle-timeout layer and to give undici's `bodyTimeout` (5 min)
+ * four chunks per minute to reset against. See typescript-sdk#1211.
+ */
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
 /** QRM7-001: How often the reaper scans for stale sessions (ms). */
 const REAPER_INTERVAL_MS = 30_000;
@@ -266,6 +273,19 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
     const socket = res.socket;
     if (socket && !socket.destroyed) {
       socket.setKeepAlive(true, TCP_KEEPALIVE_INITIAL_DELAY_MS);
+    }
+
+    // QRM7-012 Candidate E: emit the first SSE comment immediately so
+    // undici/Node sees a body chunk before any "first byte within N
+    // seconds" timer can fire. setInterval below schedules the first
+    // tick at +SSE_KEEPALIVE_INTERVAL_MS — that's too late for whichever
+    // path is killing the GET stream within ~30 s of open. Bail before
+    // scheduling if the immediate write fails (socket already gone).
+    try {
+      res.write(': ready\n\n');
+      if (server) this.mcpService.touchSession(server);
+    } catch {
+      return;
     }
 
     const interval = setInterval(() => {
