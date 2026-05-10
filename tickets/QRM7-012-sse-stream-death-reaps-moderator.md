@@ -100,17 +100,29 @@ Single moderator session `f81dff19` from log `mcp-server-20260510T003819.jsonl`,
 | SDK GET reopens (`markSseOpened` re-fires on the same session) | **Two**, at exactly 00:43:29.283 and 00:48:29.279 — Δ 5:00.996 between them, lining up with `undici.bodyTimeout`. |
 | `lastSeenAtAge` evolution between two reopens (00:43:50 → 00:48:20) | Climbs in clean **30 s reaper-tick increments** with **no intermediate refreshes** — 20 727 → 50 728 → 80 729 → 110 730 → 140 730 → 170 730 → 200 731 → 230 731 → 260 734 → 290 734 ms. `lastSeenAt` is touched once at GET-arrival time and never again until the next reopen. |
 
-### What the 30 s monotonic climb tells us
+### What the 30 s monotonic climb tells us — confirmed
 
-If E's 15 s `setInterval` keepalive ticks were firing successfully, `lastSeenAt` would refresh every 15 s and `lastSeenAtAge` would never exceed ~15 s. It exceeds 290 s. The keepalive **isn't running on the GET response after the immediate `: ready` write** — most likely because `await transport.handleRequest(req, res)` in `handleGet` is blocking (or the response is ending) by the time `startSseKeepalive`'s `setInterval` callback fires its first tick. The immediate-`: ready` write succeeds because it runs synchronously before the SDK can finish; the +15 s tick lands on a `writableEnded=true` response and clears the interval.
+If E's 15 s `setInterval` keepalive ticks were firing successfully, `lastSeenAt` would refresh every 15 s and `lastSeenAtAge` would never exceed ~15 s. It exceeds 290 s. The keepalive **isn't running on the GET response after the immediate `: ready` write**.
 
-A diagnostic log added in commit-after-this-update inside the `setInterval` callback will confirm which of three branches the first tick takes:
+The keepalive-tick diagnostic added in commit `8d4616d` confirmed this on the next restart (`logs/mcp-server-20260510T014240.jsonl`):
 
-- *fired-and-throwing* → `try/catch` engages → `'SSE keepalive tick: write threw, clearing interval'`
-- *fired-into-writableEnded* → `'SSE keepalive tick: skipped (writableEnded=true)'`
-- *firing successfully* → `'SSE keepalive tick: ping written'`
+```
+=== Keepalive-tick branch counts (first 3 min after restart) ===
+  ping written:                  0
+  skipped (writableEnded=true):  1
+  write threw:                   0
+```
 
-The expected outcome is the second; if it's the third, our 30 s climb is unexplained and there's a deeper bug.
+The very first +15 s `setInterval` tick lands on `writableEnded=true` and the interval clears itself before ever firing a ping. So the actual sequence is:
+
+1. GET arrives → `handleGet` calls `touchSession` synchronously (this is the **only** `lastSeenAt` refresh per GET — the climb between reopens is purely the absence of refreshes).
+2. `await transport.handleRequest(req, res)` returns.
+3. `startSseKeepalive` runs → immediate `: ready\n\n` write succeeds.
+4. **Within the next 15 s, the SDK ends the response** (`res.writableEnded = true`). Why isn't visible from outside the SDK; the practical observation is that the GET response lifecycle is short-lived, not long-poll.
+5. `setInterval` fires at +15 s, sees `writableEnded`, logs the `skipped (writableEnded=true)` branch, clears itself. Permanently.
+6. ~5 min later CC CLI's SDK reissues a GET via undici's reconnect. Step 1 fires again.
+
+Net: the entire `setInterval` keepalive block in `startSseKeepalive` is **structurally dead** for GETs from CC CLI 2.1.126 — it never refreshes anything. The QRM5-BUG-005 keepalive design assumed a long-lived SSE response that this SDK simply doesn't produce. The QRM7-012-E immediate `: ready` write is what's load-bearing — it conditions the SDK into reusing the session id on subsequent reconnects (without it, the SDK was issuing fresh `initialize` and creating new sessions every 5 min).
 
 ### Why A + E still works in practice
 
@@ -172,11 +184,11 @@ The flag QRM7-011-B introduced expressed the wrong condition. The actual signal 
 2. `isSessionAlive` exempts moderator sessions where the active SSE response is alive *or* `lastSeenAt` is within the timeout. Session reaps only when both signals are stale.
 3. Same-role eviction (QRM7-009) continues to bound memory.
 
-**Pro:** Expresses the actual condition. Idempotent against the GET-before-`register_agent` ordering. Survives SSE death without false-reaping the moderator until POSTs also stop. **Promoted in priority (2026-05-10):** validation revealed E's keepalive ticks aren't actually refreshing `lastSeenAt` between GET reopens — only the synchronous `touchSession` at GET arrival does, and only every 5 min. A live-SSE-response signal would express the right invariant without depending on per-tick refreshes that aren't reliably firing.
+**Pro:** Expresses the actual condition. Idempotent against the GET-before-`register_agent` ordering. Survives SSE death without false-reaping the moderator until POSTs also stop. **Promoted in priority (2026-05-10):** D's keepalive-tick diagnostic confirmed E's 15 s ticks never fire a ping (the response is ended within 15 s of GET arrival, every time) — so the entire `setInterval` keepalive block is dead code for CC CLI 2.1.126. A live-SSE-response signal expresses the right invariant without depending on a `setInterval` that doesn't run, and would let us simplify `startSseKeepalive` significantly while we're at it.
 
 **Con:** Couples the session state to the controller's response lifecycle. More moving parts than A.
 
-**Recommend as principled follow-up. Land after A + E + D once D's diagnostic confirms the keepalive-tick mechanism.**
+**Recommend as principled follow-up. Daily-use bug is gone with A + E; B is cleanup + correctness, no urgency. When B lands, also remove the dead `setInterval` ping loop from `startSseKeepalive` — keep only the immediate `: ready` write, since that's what's actually load-bearing.**
 
 ### Candidate C — Anthropic-side recovery (PTY supervisor, from QRM7-010 Part 2)
 
@@ -266,7 +278,7 @@ None. Independent of QRM7-008. The diagnostic logging in `623faca` is a soft pre
 
 - (Lifted unchanged from QRM7-010 Part 3 acceptance criteria — see that ticket if D lands.)
 - [ ] Per-session SSE lifetime logged (`markSseOpened` → `res.on('close')` delta in ms) so the next reproduction confirms or rejects the 300 000 ms hypothesis.
-- [x] Keepalive-tick branch logging added inside `startSseKeepalive`'s `setInterval` callback (`'ping written'` / `'skipped (writableEnded=true)'` / `'write threw'`). After deploy, will confirm whether the 30 s `lastSeenAt` climb between GET reopens is the `writableEnded` branch (most likely) or silent throws.
+- [x] Keepalive-tick branch logging added inside `startSseKeepalive`'s `setInterval` callback (`'ping written'` / `'skipped (writableEnded=true)'` / `'write threw'`). **Confirmed 2026-05-10** (`logs/mcp-server-20260510T014240.jsonl`): first +15 s tick after every GET hits `skipped (writableEnded=true)` and clears the interval; `ping written` count is 0. The `setInterval` block is structurally dead for CC CLI 2.1.126 — the SDK ends the response within 15 s of GET arrival. Candidate B should remove the dead block as part of the cleanup.
 
 ### Candidate E (immediate ping + tightened cadence) — Code landed 2026-05-09
 
@@ -275,7 +287,7 @@ None. Independent of QRM7-008. The diagnostic logging in `623faca` is a soft pre
 - [x] Updated unit tests cover the immediate-ready behavior and the new 15 s cadence. (`mcp.controller.spec.ts:258-335`.)
 - [x] After deploy, the metronomic 5-min `Session created` cadence is **eliminated** — verified 2026-05-10. New sessions don't fire on the 5-min undici recycle; the SDK reuses the cached session id and reopens the GET on the same session. See Validation Results.
 - [x] `npm run build`, `npm run lint`, `npm run test` all pass. (716/716.)
-- [ ] Caveat surfaced by validation: keepalive `setInterval` ticks aren't actually refreshing `lastSeenAt` between GET reopens — only the GET-arrival `touchSession` does. Candidate D's keepalive-tick diagnostic log (added in commit-after-this-update) will confirm the mechanism. Acceptable for daily use because A's 30 min floor backstops the 5 min reopen cadence.
+- [x] Caveat surfaced by validation: keepalive `setInterval` ticks aren't actually refreshing `lastSeenAt` between GET reopens — only the GET-arrival `touchSession` does. **Mechanism confirmed 2026-05-10** by Candidate D's keepalive-tick diagnostic — first +15 s tick lands on `writableEnded=true` every time, clearing the interval; `ping written` count is 0. Acceptable for daily use because A's 30 min floor backstops the 5 min reopen cadence. Candidate B removes the dead `setInterval` block as cleanup.
 
 ## Dependencies and References
 
@@ -306,3 +318,4 @@ None. Independent of QRM7-008. The diagnostic logging in `623faca` is a soft pre
 | `apps/mcp-server/src/mcp/mcp.controller.ts` | GET handler, reaper diagnostic, response-lifecycle hooks (B) |
 | `logs/mcp-server-20260509T191135.jsonl` | Smoking-gun log; first capture of GET-before-register and the dead exemption |
 | `logs/mcp-server-20260510T003819.jsonl` | A+E validation log; captures session-id-reuse-on-reopen and the 30 s `lastSeenAt` climb that surfaces the keepalive-tick puzzle |
+| `logs/mcp-server-20260510T014240.jsonl` | Keepalive-tick diagnostic confirmation log; first restart with the per-tick branch logging from `8d4616d`. `ping written: 0`, `skipped (writableEnded=true): 1` settles the puzzle |
