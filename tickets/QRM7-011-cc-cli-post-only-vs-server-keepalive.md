@@ -1,6 +1,14 @@
 # QRM7-011: CC CLI POST-Only Access Pattern Incompatible with Server's SSE-Based Liveness Keepalive
 
-**Status:** Open (2026-05-09) — Candidates A (hotfix) and B (principled fix) landed 2026-05-09. A's timeout bump reverted to 2 min once B made it unnecessary. Candidate C (investigation) remains.
+**Status: Closed — Superseded by [QRM7-012](QRM7-012-sse-stream-death-reaps-moderator.md) (2026-05-09)**
+
+> **Falsified by runtime instrumentation 2026-05-09 evening.** The "POST-only" premise is wrong. The diagnostic logging added in commit `623faca` (per-tick reaper snapshot + `markSseOpened` flip log) shows CC CLI 2.1.126 opens a `GET /mcp` SSE stream within ~20 ms of every session creation, **before** `register_agent` arrives. That makes Candidate B's `hasOpenedSse` exemption a no-op for every moderator session: by the time `state.role = moderator` is set, `state.hasOpenedSse` is already sticky-true, so the exemption branch never fires. Candidate A's timeout bump (since reverted) was the only mitigation actually working. See [QRM7-012](QRM7-012-sse-stream-death-reaps-moderator.md) for the corrected mechanism, the lesson on why this and QRM7-010 both got it wrong, and the next fix plan.
+>
+> **Code state at supersession:**
+> - Candidate A (`SESSION_LIVENESS_TIMEOUT_MS` 120 000 → 1 800 000) — landed at `2ac2657`, reverted at `447f953`. Currently 120 000 (2 min).
+> - Candidate B (`hasOpenedSse` exemption) — landed at `447f953`. **Dead code in the running bundle.** No revert pre-QRM7-012; QRM7-012 Candidate B replaces it with a live-SSE-response signal.
+> - Candidate C (investigation) — superseded; QRM7-012 Candidate D refocuses the question from "why doesn't CC CLI open SSE" to "why does the SSE stream die mid-session," carrying forward the QRM7-010 Part 3 instrumentation draft.
+> - Diagnostic logging from `623faca` (reaper snapshot, `markSseOpened` flip log) — **kept**, per QRM7-012's recommendation. Cost is negligible; value is preventing iteration 4 of this ticket on a different wrong premise.
 
 **Supersedes:** [QRM7-010](QRM7-010-moderator-stale-mcp-session-after-idle.md)
 

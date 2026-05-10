@@ -26,7 +26,7 @@ QRM6's live runs exposed several operational issues that individually degrade th
 |-------|--------|--------|
 | Agent retry-once path races the MCP `initialize` handshake | Every reaper-driven agent reconnect produces 1 failed tool call + 4 WARN log lines; 9 events across 5 bursts in the QRM8 run; work-output preserved by SDK adaptation but operator log signal-to-noise is alarming | Issue 3 in `2026-05-06-qrm8-roadmap-run.md`, promoted to QRM7-008 |
 | Reaper churns agent sessions that don't need liveness tracking | Pure collateral damage: agents are reachable via stable callback URL regardless of MCP session state, but the reaper still evicts them on idle, triggering the QRM7-008 race | Same run analysis, promoted to QRM7-009 |
-| Moderator's CC CLI client holds stale session ID across long idle | First 1–4 tool calls after each post-idle resume fail with `Session not found`; user must manually type `/mcp`; ~1–4 min friction per burst-resume; reproduced in continuous-uptime idle (2026-05-07 evening) as well as hibernation gaps | Issue 2 in `2026-05-06-qrm8-roadmap-run.md` + 2026-05-07 evening observation, promoted to ~~QRM7-010~~ → QRM7-011 |
+| Moderator's CC CLI client holds stale session ID across long idle | First 1–4 tool calls after each post-idle resume fail with `Session not found`; user must manually type `/mcp`; ~1–4 min friction per burst-resume; reproduced in continuous-uptime idle (2026-05-07 evening) as well as hibernation gaps | Issue 2 in `2026-05-06-qrm8-roadmap-run.md` + 2026-05-07 evening observation, promoted to ~~QRM7-010~~ → ~~QRM7-011~~ → QRM7-012 |
 
 ## Milestone Scope
 
@@ -171,23 +171,35 @@ Superseded after log evidence from `mcp-server-20260508T134859.jsonl` revealed t
 
 ### QRM7-011 — CC CLI POST-Only Access Pattern Incompatible with Server's SSE-Based Liveness Keepalive
 
-**Status:** Open (2026-05-09) — Candidates A (hotfix, then reverted) and B (principled fix) landed 2026-05-09. Candidate C (investigation) remains. Supersedes QRM7-010.
+**Status:** Closed — Superseded by QRM7-012 (2026-05-09)
 
-CC CLI 2.1.126 communicates via POST-only and never opens an SSE `GET /mcp` long-poll. The server's 2-min liveness timeout is calibrated for SSE-bridged clients whose `lastSeenAt` refreshes every 30 s via keepalive ping. Without SSE, any >2 min gap between tool calls reaps the session. Root cause of every observed `Session not found` failure in moderator interactive use — confirmed by 11+ hours of log data (0 GET requests across 1160 POSTs).
+Premise falsified by runtime instrumentation: CC CLI 2.1.126 **does** open SSE GET, within ~20 ms of session creation and before `register_agent` arrives. The "0 GETs in 11h" evidence base came from grepping for log lines our controller never emitted. Candidate B's `hasOpenedSse` exemption is dead code in the running bundle (sticky-true before role binds); Candidate A's timeout bump was the only mitigation actually working and is now reverted. See [QRM7-012](QRM7-012-sse-stream-death-reaps-moderator.md) for the corrected mechanism.
+
+**Full ticket:** [QRM7-011](QRM7-011-cc-cli-post-only-vs-server-keepalive.md)
+
+### QRM7-012 — Moderator Session Reaped After SSE GET Stream Dies
+
+**Status:** Open (2026-05-09) — third iteration. Supersedes QRM7-011, which superseded QRM7-010.
+
+CC CLI opens GET on every session within ~20 ms of creation, before `register_agent` runs. `markSseOpened` flips `hasOpenedSse=true` while role is still `undefined`; QRM7-011-B's exemption branch (`role===moderator && !hasOpenedSse`) never fires. The reaper falls through to the bare `lastSeenAt` check. When the SSE stream dies (NAT/conntrack idle, OS TCP teardown, CC CLI internal recycle, transient blip) the keepalive stops refreshing `lastSeenAt`, and 2 min later the moderator session reaps. Same downstream symptom as QRM7-010 and QRM7-011; both prior framings were misdiagnoses caused by inferring transport behavior from logs that didn't capture the relevant signal.
+
+**Upstream cause (high confidence):** SDK bug [modelcontextprotocol/typescript-sdk#1211](https://github.com/modelcontextprotocol/typescript-sdk/issues/1211) — the GET SSE has no client-side heartbeat, undici's default `bodyTimeout = 300_000` ms aborts the response body, the SDK fires `onerror('SSE stream disconnected: …')` and reconnects. The metronomic 5-min `Session created` cadence in our logs matches `undici.bodyTimeout` exactly. Not fixable on the client side; CC CLI bundles its own SDK version and the SDK fix is unmerged. Mitigation is server-side.
 
 **Fix candidates:**
 
 | Candidate | Description | Scope |
 |-----------|-------------|-------|
-| **A. Cheap mask (hotfix)** | Bump `SESSION_LIVENESS_TIMEOUT_MS` from 120 s → 30 min. One-line change. | ✅ Landed 2026-05-09; reverted to 2 min after B made it unnecessary |
-| **B. Principled fix** | Detect POST-only sessions (track `hasOpenedSse`); exempt moderator-role POST-only from idle reaping. Memory-bound by same-role eviction (from QRM7-009). | ✅ Landed 2026-05-09 |
-| **C. Investigation** | Why does CC CLI never open SSE? Server bug, client design choice, or environmental? | Pending — quorum is fully operational; this is now a research task |
+| **A. Restore A's timeout bump** | Re-revert `SESSION_LIVENESS_TIMEOUT_MS` to 1 800 000 (30 min). The only mitigation that ever worked. | Immediate hotfix |
+| **E. Immediate SSE ping + tightened cadence** | Write `: ready\n\n` immediately on GET open (kicks off the response body before any timer fires); reduce keepalive interval 30 s → 15 s. Cheapest principled lever; addresses the SDK bug at the only layer we control. | Land alongside A |
+| **B. Live-SSE-response exemption** | Replace `hasOpenedSse` flag with active-response tracking; exempt moderator while SSE response is alive *or* `lastSeenAt` is fresh. | Principled follow-up |
+| **C. PTY supervisor (from QRM7-010 Part 2)** | Wrap `claude` in supervisor that types `/mcp` on canonical errors. | Defer |
+| **D. Instrument SSE-stream lifetime** | Capture `markSseOpened → res.on('close')` delta per session to confirm or reject the 300 000 ms hypothesis; carries forward QRM7-010 Part 3 instrumentation draft. | Parallel investigation |
 
-**Touches:** `apps/mcp-server/src/mcp/mcp.service.ts` (timeout const for A; `hasOpenedSse` for B), `apps/mcp-server/src/mcp/mcp.controller.ts` (track GET-opened state for B). Spec files matching.
+**Touches:** `apps/mcp-server/src/mcp/mcp.service.ts`, `apps/mcp-server/src/mcp/mcp.controller.ts`, spec files. Diagnostic logging from `623faca` already in place.
 
 **Depends on:** None. Independent.
 
-**Full ticket:** [QRM7-011](QRM7-011-cc-cli-post-only-vs-server-keepalive.md)
+**Full ticket:** [QRM7-012](QRM7-012-sse-stream-death-reaps-moderator.md)
 
 ---
 
@@ -204,17 +216,18 @@ QRM7-007 (Moderator Subscription)  ─── independent (DONE 2026-05-04)
 QRM7-008 (Agent Retry Race)        ─── independent
 QRM7-009 (Scope Reaper)            ─── after QRM7-001 (DONE 2026-05-09)
 QRM7-010 (Moderator Stale Session) ─── SUPERSEDED by QRM7-011 (closed 2026-05-09)
-QRM7-011 (CC CLI POST-Only Liveness)  ─── independent (A+B DONE 2026-05-09; C pending investigation)
+QRM7-011 (CC CLI POST-Only Liveness)  ─── SUPERSEDED by QRM7-012 (closed 2026-05-09 — premise falsified)
+QRM7-012 (SSE-Stream-Death Reaping)   ─── independent (open 2026-05-09; A reverts 011-B's effective regression)
 ```
 
-QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 is closed (superseded by QRM7-011). QRM7-011 Candidates A and B are landed; C is a pending investigation (no longer blocking — quorum is fully operational under POST-only). QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
+QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 and QRM7-011 are both closed via supersession on the same operational bug — the moderator-reap regression. QRM7-012 carries the bug forward with the corrected mechanism: CC CLI opens SSE on init, QRM7-011-B's exemption is dead code, and `Session not found` reproduces on any SSE-stream death plus 2 min of POST silence. QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
 
 **Recommended sequencing (by operational impact, given current state):**
 
-1. ~~**QRM7-011** Candidate A (CC CLI POST-only liveness hotfix)~~ — ✅ DONE 2026-05-09. One-line timeout bump; stops all observed `Session not found` breakage. Reverted after B.
+1. ~~**QRM7-011** Candidate A (timeout bump)~~ — ✅ DONE then reverted 2026-05-09 under the false belief that B subsumed it. **QRM7-012 Candidate A re-applies it as the immediate hotfix** — the only mitigation that ever actually worked.
 2. ~~**QRM7-009** (scope reaper)~~ — ✅ DONE 2026-05-09. Eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
-3. ~~**QRM7-011** Candidate B (POST-only session detection)~~ — ✅ DONE 2026-05-09. Principled fix: moderator POST-only sessions are exempt at the source; A's timeout bump reverted to 2 min, restoring fail-fast for SSE-backed sessions and tight memory bounding for anonymous transient sessions.
-4. **QRM7-011** Candidate C (SSE investigation) — research task. Determine whether CC CLI's POST-only behavior is server-side advertisement gap, client design choice, or environmental. No longer blocking; useful for understanding whether C can simplify the system further.
+3. ~~**QRM7-011** Candidate B (POST-only exemption)~~ — ✅ Code landed 2026-05-09 but is dead in the running bundle (sticky-true `hasOpenedSse` flips before role binds). **Replaced by QRM7-012 Candidate B** (live-SSE-response signal).
+4. **QRM7-012** Candidate D (SSE-stream-death investigation) — research task. Refocused QRM7-011-C: not "why does CC CLI never open SSE" (it does) but "why does the SSE stream die mid-session." Carries forward QRM7-010 Part 3 instrumentation draft.
 5. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency now that 009 ships but still needed for correctness.
 6. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
 7. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
