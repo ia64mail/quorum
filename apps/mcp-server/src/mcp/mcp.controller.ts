@@ -15,21 +15,14 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { McpService } from './mcp.service';
 
-/**
- * Interval between SSE keepalive pings (ms).
- *
- * QRM5-BUG-005 originally set this to 30 000.
- * QRM7-012 Candidate E tightened to 15 000 to keep us well under any
- * 30 s idle-timeout layer and to give undici's `bodyTimeout` (5 min)
- * four chunks per minute to reset against. See typescript-sdk#1211.
- */
-const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
-
 /** QRM7-001: How often the reaper scans for stale sessions (ms). */
 const REAPER_INTERVAL_MS = 30_000;
 
 /** QRM7-001: TCP keepalive initial idle delay before first kernel probe (ms). */
 const TCP_KEEPALIVE_INITIAL_DELAY_MS = 15_000;
+
+/** QRM5-BUG-005 / QRM6-BUG-011: SSE keepalive heartbeat interval (ms). */
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
 /**
  * Streamable HTTP transport endpoint for MCP protocol communication.
@@ -89,7 +82,7 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
         `Reaper check: sessionId=${sessionId} ` +
           `stateExists=${snapshot !== undefined} ` +
           `role=${snapshot?.role ?? 'none'} ` +
-          `hasOpenedSse=${snapshot?.hasOpenedSse ?? 'n/a'} ` +
+          `activeSseToken=${snapshot?.activeSseToken !== null} ` +
           `lastSeenAtAge=${snapshot ? Date.now() - snapshot.lastSeenAt : 'n/a'}ms ` +
           `alive=${alive}`,
       );
@@ -212,22 +205,25 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
     }
 
     const transport = this.sessions.get(sessionId)!;
-    // QRM7-001: refresh liveness on GET (SSE stream open)
-    // QRM7-011-B: mark the session as SSE-backed so isSessionAlive() resumes
-    // the lastSeenAt check (POST-only sessions are exempt; once SSE is open,
-    // the keepalive ping is responsible for refreshing lastSeenAt).
+    // QRM7-001: refresh liveness on GET (SSE stream open).
+    // QRM7-014 Refinement 5: mark the SSE stream as alive on session state
+    // so isSessionAlive() can exempt moderator sessions with a live SSE
+    // channel from idle reaping. The close handler (Refinement 1) clears
+    // the token when the response ends.
     const mcpServer = this.mcpServers.get(sessionId);
     if (mcpServer) {
       this.mcpService.touchSession(mcpServer);
-      this.mcpService.markSseOpened(mcpServer);
+      const sseToken = this.mcpService.markSseAlive(mcpServer);
+      // QRM7-014 Refinement 1: identity-guarded close handler. The === token
+      // check inside markSseDead ensures a stale close handler from GET₁
+      // never clears a newer token stored by GET₂.
+      res.on('close', () => {
+        this.mcpService.markSseDead(mcpServer, sseToken);
+      });
     }
 
     await transport.handleRequest(req, res);
 
-    // QRM5-BUG-005: SSE keepalive — emit a comment ping every 30s so the
-    // client's SSE stream errors out promptly when the server process restarts,
-    // triggering the existing onclose → handleReconnection path.
-    // QRM7-001: pass mcpServer so keepalive writes also refresh lastSeenAt.
     this.startSseKeepalive(res, mcpServer);
   }
 
@@ -257,14 +253,27 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
   // ---------------------------------------------------------------------------
 
   /**
-   * Emit `: ping\n\n` SSE comments at a fixed interval to keep the stream
-   * alive and ensure the client detects a dead connection when the server
-   * process restarts (QRM5-BUG-005).
+   * SSE keepalive setup for both POST and GET response paths
+   * (QRM5-BUG-005, QRM7-001, QRM7-012, QRM7-014).
+   *
+   * Performs TCP keepalive setup, writes an immediate `: ready\n\n` SSE
+   * comment, and schedules a 15 s `setInterval` heartbeat that writes
+   * `: ping\n\n` frames.
+   *
+   * **Dual-path behavior:**
+   * - **Long-lived POST responses** (e.g. `invoke_agent` SSE streams) —
+   *   ticks fire continuously every 15 s, refreshing `lastSeenAt` and
+   *   resetting undici's `bodyTimeout` so the client never times out.
+   * - **Short-lived GET responses** (CC CLI 2.1.126 ends within ~15 s) —
+   *   the first tick sees `writableEnded=true` and self-clears the
+   *   interval. No `: ping` is written.
+   *
+   * The `writableEnded` check makes this safe for both paths without
+   * caller-side branching.
    *
    * @param res    - The SSE response stream.
-   * @param server - Optional per-session McpServer. When provided, successful
-   *                 writes refresh `lastSeenAt` so the session stays alive
-   *                 during long-running invoke_agent calls (QRM7-001).
+   * @param server - Optional per-session McpServer. When provided, a
+   *                 successful write refreshes `lastSeenAt` (QRM7-001).
    */
   private startSseKeepalive(res: Response, server?: McpServer): void {
     // QRM7-001 Layer 2: TCP keepalive for faster dead-peer detection.
@@ -277,10 +286,8 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
 
     // QRM7-012 Candidate E: emit the first SSE comment immediately so
     // undici/Node sees a body chunk before any "first byte within N
-    // seconds" timer can fire. setInterval below schedules the first
-    // tick at +SSE_KEEPALIVE_INTERVAL_MS — that's too late for whichever
-    // path is killing the GET stream within ~30 s of open. Bail before
-    // scheduling if the immediate write fails (socket already gone).
+    // seconds" timer can fire. Bail if the immediate write fails (socket
+    // already gone).
     try {
       res.write(': ready\n\n');
       if (server) this.mcpService.touchSession(server);
@@ -288,29 +295,19 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // 15 s heartbeat. On long-lived POST-path SSE responses (invoke_agent),
+    // ticks fire continuously, refreshing lastSeenAt and resetting undici's
+    // bodyTimeout. On short-lived GET-path responses (CC CLI 2.1.126 ends
+    // within ~15 s), the first tick sees writableEnded=true and self-clears.
     const interval = setInterval(() => {
       if (res.writableEnded) {
-        // QRM7-012 diagnostic: 2026-05-10 validation showed lastSeenAt only
-        // refreshes at GET-arrival time, not at every 15 s tick — suggesting
-        // the response is already ended by the first tick. Confirm here.
-        // Temporary; remove with the rest of the QRM7-012 instrumentation.
-        this.logger.debug('SSE keepalive tick: skipped (writableEnded=true)');
         clearInterval(interval);
         return;
       }
-      // QRM6-BUG-011: try/catch guards against destroyed sockets where
-      // writableEnded is false but the underlying socket is already gone.
       try {
         res.write(': ping\n\n');
-        // QRM7-001: successful write proves the TCP socket is alive —
-        // refresh lastSeenAt so the session survives long-running calls.
         if (server) this.mcpService.touchSession(server);
-        // QRM7-012 diagnostic: confirm tick actually refreshed lastSeenAt.
-        this.logger.debug('SSE keepalive tick: ping written');
       } catch {
-        // QRM7-012 diagnostic: distinguish silent-throw from writableEnded
-        // path so we know whether the socket vanished out from under us.
-        this.logger.debug('SSE keepalive tick: write threw, clearing interval');
         clearInterval(interval);
       }
     }, SSE_KEEPALIVE_INTERVAL_MS);

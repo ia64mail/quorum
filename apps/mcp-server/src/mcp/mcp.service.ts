@@ -25,24 +25,21 @@ import { McpServerConfigService } from '../config';
  * How long a session can be idle before isSessionAlive() returns false (QRM7-001).
  *
  * QRM7-012 Candidate A: re-bumped to 30 min after the QRM7-011 reversion
- * proved load-bearing. Diagnostic logging falsified QRM7-011's "POST-only"
- * premise — CC CLI 2.1.126 opens GET SSE within ~20 ms of every session
- * creation, before `register_agent` runs, so QRM7-011-B's `hasOpenedSse`
- * exemption never fires for moderator sessions (sticky-true before role
- * binds). The reaper falls through to this `lastSeenAt` check on every
- * moderator session, and the SDK's 5 min `undici.bodyTimeout`-driven
- * reconnect cycle (typescript-sdk#1211) plus our 2 min idle window meant
- * every moderator session was a 2 min time bomb. The 30 min floor is
- * comfortably above the 5 min reconnect cadence so the recycled session
- * is created before the previous one reaps. Tradeoff: extends
- * `invoke_agent(target=moderator)` fail-fast against a dead moderator
- * from 2 min → 30 min — acceptable in current flows where agent→moderator
- * escalation is rare.
+ * proved load-bearing. CC CLI 2.1.126 opens GET SSE within ~20 ms of
+ * every session creation, before `register_agent` runs. The SDK's 5 min
+ * `undici.bodyTimeout`-driven reconnect cycle (typescript-sdk#1211)
+ * refreshes `lastSeenAt` once per GET. The 30 min floor is comfortably
+ * above the 5 min reconnect cadence so the session never reaps during
+ * normal use. Tradeoff: extends `invoke_agent(target=moderator)`
+ * fail-fast against a dead moderator from 2 min → 30 min — acceptable
+ * in current flows where agent→moderator escalation is rare.
  *
- * Companion fix is QRM7-012 Candidate E (immediate SSE comment on GET
- * open + tightened keepalive cadence) in `mcp.controller.ts`. Principled
- * follow-up is Candidate B (live-SSE-response signal). Agent-role sessions
- * remain exempt via QRM7-009 (broker reaches them via callbackUrl).
+ * QRM7-014 Candidate B′ adds a live-SSE token signal
+ * (`activeSseToken`) that exempts moderator sessions with an active
+ * SSE channel from this timeout entirely. This timeout remains the
+ * backstop for moderator sessions between GET reconnects (~5 min gap)
+ * and for anonymous sessions. Agent-role sessions remain exempt via
+ * QRM7-009 (broker reaches them via callbackUrl).
  */
 export const SESSION_LIVENESS_TIMEOUT_MS = 1_800_000; // 30 minutes
 
@@ -66,14 +63,23 @@ export interface McpSessionState {
   /** Epoch ms of the last client activity — used for liveness detection (QRM7-001). */
   lastSeenAt: number;
   /**
-   * Whether this session has ever opened a `GET /mcp` SSE long-poll stream
-   * (QRM7-011-B). Sticky once set: a client that opens SSE then loses it
-   * remains classified as SSE-backed so the reaper can evict the dead session.
-   * Used by `isSessionAlive()` to exempt POST-only moderator sessions from
-   * idle reaping (their `lastSeenAt` is only refreshed by POST traffic since
-   * they have no background keepalive).
+   * Opaque identity token for the currently active SSE `GET /mcp` stream,
+   * if any (QRM7-014 Candidate B′). Set by `markSseAlive()` when a GET
+   * opens the SSE stream; cleared by `markSseDead()` when the response's
+   * `close` event fires (identity-guarded via `===` token comparison to
+   * prevent a stale close handler from clearing a newer token on GET
+   * reopen).
+   *
+   * The token is an opaque `object` — callers must not inspect or
+   * serialize it. It exists solely for identity comparison.
+   *
+   * Used by `isSessionAlive()` to exempt moderator sessions with a live
+   * SSE channel from idle reaping, regardless of `lastSeenAt`. Anonymous
+   * sessions with an active token are NOT exempt — they fall through
+   * to the `lastSeenAt` check to prevent immortal pre-`register_agent`
+   * sessions.
    */
-  hasOpenedSse: boolean;
+  activeSseToken: object | null;
 }
 
 /**
@@ -125,7 +131,7 @@ export class McpService implements OnModuleInit {
     this.sessionStates.set(session, {
       agentSessions: new Map(),
       lastSeenAt: Date.now(),
-      hasOpenedSse: false,
+      activeSseToken: null,
     });
     this.registerTools(session);
     await session.connect(transport);
@@ -159,22 +165,36 @@ export class McpService implements OnModuleInit {
   }
 
   /**
-   * Mark a session as having opened an SSE long-poll stream (QRM7-011-B).
-   * Called from the controller's `GET /mcp` handler. Sticky: once set, the
-   * session is classified as SSE-backed for the rest of its lifetime, so
-   * `isSessionAlive()` resumes the lastSeenAt check (a session whose SSE
-   * later dies should reap, not linger forever).
+   * Mark the SSE stream as alive for this session (QRM7-014 Candidate B′,
+   * Refinement 5). Called from the controller's `GET /mcp` handler. Returns
+   * an opaque identity token that the caller must pass back to
+   * {@link markSseDead} when the response closes (identity guard,
+   * Refinement 1). Overwrites any prior token (latest GET wins).
    */
-  markSseOpened(server: McpServer): void {
+  markSseAlive(server: McpServer): object {
+    const token = {};
     const state = this.sessionStates.get(server);
     if (state) {
-      // QRM7-011 diagnostic: log every flip so we can see whether SSE was
-      // genuinely opened. Temporary — remove with the reaper diagnostic.
       this.logger.debug(
-        `markSseOpened: role=${state.role ?? 'none'} ` +
-          `wasOpenedSse=${state.hasOpenedSse}`,
+        `markSseAlive: role=${state.role ?? 'none'} ` +
+          `hadPriorToken=${state.activeSseToken !== null}`,
       );
-      state.hasOpenedSse = true;
+      state.activeSseToken = token;
+    }
+    return token;
+  }
+
+  /**
+   * Mark the SSE stream as dead for this session, but only if the provided
+   * token matches the currently stored token (QRM7-014 Candidate B′,
+   * Refinement 1 — identity-guarded close handler). This prevents a stale
+   * `res.on('close')` handler from GET₁ clearing a newer token stored
+   * by GET₂ during the SDK's ~5 min reconnect cycle.
+   */
+  markSseDead(server: McpServer, token: object): void {
+    const state = this.sessionStates.get(server);
+    if (state && state.activeSseToken === token) {
+      state.activeSseToken = null;
     }
   }
 
@@ -190,16 +210,18 @@ export class McpService implements OnModuleInit {
    *    sessions during long stretches of local SDK work, hitting the
    *    QRM5-BUG-005 retry race (QRM7-008).
    *
-   * 2. **QRM7-011-B — POST-only moderator sessions are exempt.** A session
-   *    that never opened the SSE GET stream has no background heartbeat
-   *    refreshing `lastSeenAt`; the only refresh source is POST traffic,
-   *    and natural inter-tool-call gaps in interactive use exceed the 2 min
-   *    timeout. Once SSE has been opened (`hasOpenedSse === true`), the
-   *    session resumes the lastSeenAt check — the keepalive ping refreshes
-   *    every 30 s, so any 2 min gap means the SSE stream itself is dead.
+   * 2. **QRM7-014 Candidate B′ — moderator sessions with a live SSE
+   *    token are exempt.** While a `GET /mcp` SSE stream is actively
+   *    connected (tracked via `activeSseToken`), the moderator is
+   *    provably alive regardless of `lastSeenAt`. Once the response's
+   *    `close` event fires and `markSseDead()` clears the token, the
+   *    session falls through to the `lastSeenAt` check. Anonymous
+   *    sessions (pre-`register_agent`) with an active SSE token are
+   *    NOT exempt — they fall through to the `lastSeenAt` check to
+   *    prevent immortal anonymous sessions.
    *
-   * 3. **Default — lastSeenAt check applies** to SSE-backed moderator
-   *    sessions and to anonymous (no `register_agent` yet) sessions. The
+   * 3. **Default — lastSeenAt check applies** to moderator sessions
+   *    without a live SSE response and to anonymous sessions. The
    *    anonymous case is CC CLI's transport recycler, which needs reaping
    *    for memory bounding.
    *
@@ -210,7 +232,8 @@ export class McpService implements OnModuleInit {
     const state = this.sessionStates.get(server);
     if (!state) return false;
     if (state.role && state.role !== AgentRole.moderator) return true;
-    if (state.role === AgentRole.moderator && !state.hasOpenedSse) return true;
+    if (state.role === AgentRole.moderator && state.activeSseToken !== null)
+      return true;
     return Date.now() - state.lastSeenAt < SESSION_LIVENESS_TIMEOUT_MS;
   }
 

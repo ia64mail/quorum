@@ -832,12 +832,11 @@ describe('McpService', () => {
       jest.useRealTimers();
     });
 
-    it('should return false for stale SSE-backed moderator session', async () => {
+    it('should return false for stale moderator session without active SSE', async () => {
       const server = await service.connect(makeMockTransport() as never);
       await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
-      // QRM7-011-B: moderator must have opened SSE for the lastSeenAt check
-      // to apply — POST-only moderators are exempt.
-      service.markSseOpened(server);
+      // QRM7-014 B′: moderator without activeSseToken falls through
+      // to the lastSeenAt check.
 
       jest.useFakeTimers();
       jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
@@ -855,7 +854,11 @@ describe('McpService', () => {
     });
   });
 
-  describe('isSessionAlive POST-only exemption (QRM7-011-B)', () => {
+  // -------------------------------------------------------------------------
+  // QRM7-014 Candidate B′: activeSseToken signal
+  // -------------------------------------------------------------------------
+
+  describe('markSseAlive / markSseDead (QRM7-014)', () => {
     function makeMockTransport(): {
       onmessage: null;
       onclose: null;
@@ -887,71 +890,199 @@ describe('McpService', () => {
       return (args) => tools['register_agent'].handler(args);
     }
 
-    it('should return true for stale POST-only moderator session', async () => {
+    it('markSseAlive stores a token and returns it', async () => {
       const server = await service.connect(makeMockTransport() as never);
-      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
-      // No markSseOpened — session remains POST-only.
-
-      jest.useFakeTimers();
-      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
-      expect(service.isSessionAlive(server)).toBe(true);
-      jest.useRealTimers();
+      const token = service.markSseAlive(server);
+      expect(typeof token).toBe('object');
+      const state = service.peekSessionState(server);
+      expect(state?.activeSseToken).toBe(token);
     });
 
-    it('markSseOpened flips hasOpenedSse so the lastSeenAt check resumes', async () => {
+    it('markSseAlive overwrites prior token (latest GET wins)', async () => {
       const server = await service.connect(makeMockTransport() as never);
-      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
-
-      // POST-only initially → exempt from idle reaping.
-      jest.useFakeTimers();
-      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
-      expect(service.isSessionAlive(server)).toBe(true);
-      jest.useRealTimers();
-
-      // After SSE opens → lastSeenAt check applies; stale lastSeenAt reaps.
-      service.markSseOpened(server);
-      jest.useFakeTimers();
-      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
-      expect(service.isSessionAlive(server)).toBe(false);
-      jest.useRealTimers();
+      const token1 = service.markSseAlive(server);
+      const token2 = service.markSseAlive(server);
+      expect(token1).not.toBe(token2);
+      const state = service.peekSessionState(server);
+      expect(state?.activeSseToken).toBe(token2);
     });
 
-    it('markSseOpened is sticky — stale SSE-backed session still reaps', async () => {
-      const server = await service.connect(makeMockTransport() as never);
-      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
-      service.markSseOpened(server);
-
-      // Even calling markSseOpened again doesn't restore exemption.
-      service.markSseOpened(server);
-
-      jest.useFakeTimers();
-      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
-      expect(service.isSessionAlive(server)).toBe(false);
-      jest.useRealTimers();
-    });
-
-    it('markSseOpened is a no-op for unknown server', () => {
+    it('markSseAlive returns a fresh identity for unknown server', () => {
       const unknownServer = { _unknown: true } as never;
-      expect(() => service.markSseOpened(unknownServer)).not.toThrow();
+      expect(() => service.markSseAlive(unknownServer)).not.toThrow();
     });
 
-    it('register_agent same-role eviction works against POST-only sessions', async () => {
+    it('markSseDead clears when token matches (identity guard)', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      const token = service.markSseAlive(server);
+      service.markSseDead(server, token);
+      const state = service.peekSessionState(server);
+      expect(state?.activeSseToken).toBeNull();
+    });
+
+    it('markSseDead does NOT clear when token does not match', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      const token1 = service.markSseAlive(server);
+      const token2 = service.markSseAlive(server);
+      // Stale close handler from token1 fires — must not clear token2
+      service.markSseDead(server, token1);
+      const state = service.peekSessionState(server);
+      expect(state?.activeSseToken).toBe(token2);
+    });
+
+    it('markSseDead is a no-op for unknown server', () => {
+      const unknownServer = { _unknown: true } as never;
+      expect(() => service.markSseDead(unknownServer, {})).not.toThrow();
+    });
+
+    // Test Plan #2: GET reopen identity guard (end-to-end)
+    it('GET reopen identity guard — stale close handler from GET₁ does not clear GET₂', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+
+      // GET₁ opens
+      const token1 = service.markSseAlive(server);
+      // GET₂ opens (SDK reconnect)
+      const token2 = service.markSseAlive(server);
+
+      // GET₁ close handler fires — must NOT clear token2
+      service.markSseDead(server, token1);
+      expect(service.peekSessionState(server)?.activeSseToken).toBe(token2);
+
+      // GET₂ close handler fires — clears to null
+      service.markSseDead(server, token2);
+      expect(service.peekSessionState(server)?.activeSseToken).toBeNull();
+    });
+
+    // Test Plan #5: Same-role eviction with active SSE
+    it('same-role eviction releases activeSseToken (no leak)', async () => {
       const transportA = makeMockTransport();
       const transportB = makeMockTransport();
       const serverA = await service.connect(transportA as never);
       const serverB = await service.connect(transportB as never);
 
       await getSessionRegisterHandler(serverA)({ role: AgentRole.moderator });
-      // A is POST-only and exempt from idle reaping; eviction must still
-      // happen via same-role re-register to bound `sessionStates`.
+      service.markSseAlive(serverA);
       expect(service.isSessionAlive(serverA)).toBe(true);
 
+      // New moderator registers on a different session → prior evicted
       await getSessionRegisterHandler(serverB)({ role: AgentRole.moderator });
 
-      // serverA's state is gone; isSessionAlive returns false (no state).
+      // serverA's state is gone — no lingering activeSseToken
       expect(service.isSessionAlive(serverA)).toBe(false);
+      expect(service.peekSessionState(serverA)).toBeUndefined();
       expect(service.isSessionAlive(serverB)).toBe(true);
       expect(transportA.close).toHaveBeenCalled();
+    });
+  });
+
+  describe('isSessionAlive activeSseToken exemption (QRM7-014 B′)', () => {
+    function makeMockTransport(): {
+      onmessage: null;
+      onclose: null;
+      onerror: null;
+      close: jest.Mock;
+      send: jest.Mock;
+      start: jest.Mock;
+      sessionId: string | undefined;
+    } {
+      return {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    }
+
+    function getSessionRegisterHandler(
+      server: Awaited<ReturnType<typeof service.connect>>,
+    ): ToolHandler {
+      const tools = (
+        server as unknown as {
+          _registeredTools: Record<string, { handler: ToolHandler }>;
+        }
+      )._registeredTools;
+      return (args) => tools['register_agent'].handler(args);
+    }
+
+    // Test Plan #1: SSE-opened-before-register_agent moderator exemption
+    it('moderator exempted while SSE is active, reaps after close + timeout (Test Plan #1)', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+
+      // SSE opens before register_agent (matches real CC CLI behavior)
+      const token1 = service.markSseAlive(server);
+
+      // register_agent(moderator) arrives ~30 s later
+      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
+
+      // With active SSE → alive regardless of lastSeenAt
+      expect(service.isSessionAlive(server)).toBe(true);
+
+      // SSE response closes
+      service.markSseDead(server, token1);
+
+      // Still alive — lastSeenAt is fresh
+      expect(service.isSessionAlive(server)).toBe(true);
+
+      // Advance past 30 min timeout → reaps
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(false);
+      jest.useRealTimers();
+    });
+
+    // Test Plan #3: Active SSE overrides stale lastSeenAt
+    it('active SSE keeps moderator alive even with stale lastSeenAt (Test Plan #3)', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
+      const token = service.markSseAlive(server);
+
+      // Set lastSeenAt to 31 minutes ago
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 60_000);
+
+      // Active SSE → still alive despite stale lastSeenAt
+      expect(service.isSessionAlive(server)).toBe(true);
+
+      // Clear SSE → now falls through to stale lastSeenAt check → dead
+      service.markSseDead(server, token);
+      expect(service.isSessionAlive(server)).toBe(false);
+
+      jest.useRealTimers();
+    });
+
+    // Test Plan #7: Anonymous session not immortalized by SSE
+    it('anonymous session with active SSE is NOT exempt — falls through to lastSeenAt (Test Plan #7)', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+
+      // Session opens GET (has activeSseToken) but never calls register_agent
+      service.markSseAlive(server);
+
+      // While lastSeenAt is fresh → alive (via default check, not SSE exemption)
+      expect(service.isSessionAlive(server)).toBe(true);
+
+      // Advance past timeout → reaps despite having active SSE
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(false);
+      jest.useRealTimers();
+    });
+
+    it('moderator without activeSseToken falls through to lastSeenAt check', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      await getSessionRegisterHandler(server)({ role: AgentRole.moderator });
+      // No SSE active — depends on lastSeenAt
+
+      // Fresh lastSeenAt → alive
+      expect(service.isSessionAlive(server)).toBe(true);
+
+      // Stale lastSeenAt → dead
+      jest.useFakeTimers();
+      jest.setSystemTime(Date.now() + SESSION_LIVENESS_TIMEOUT_MS + 1);
+      expect(service.isSessionAlive(server)).toBe(false);
+      jest.useRealTimers();
     });
   });
 
