@@ -56,6 +56,7 @@ Tickets complement `docs/` — documentation describes the current system; ticke
 |----------|---------|
 | [docs/system-design.md](docs/system-design.md) | Overall architecture, containers, deployment |
 | [docs/agent-messaging.md](docs/agent-messaging.md) | Bidirectional MCP concepts, communication patterns |
+| [docs/mcp-connectivity.md](docs/mcp-connectivity.md) | MCP session lifecycle for agents (HTTP) and moderator (elicitation) — establish, maintain, recycle, register, reap |
 | [docs/message-broker.md](docs/message-broker.md) | Message Broker implementation details, safeguards |
 | [docs/context-management.md](docs/context-management.md) | Context sharing concepts, MCP resources/tools API |
 | [docs/context-store.md](docs/context-store.md) | Context Store implementation, InMemoryStore, file persistence |
