@@ -171,6 +171,7 @@ services:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
       - moderator-claude-data:/home/quorum/.claude
+      - ./logs/moderator-sessions:/home/quorum/.claude/projects
     networks:
       - quorum-net
 
