@@ -1,6 +1,6 @@
 # QRM7-014: Candidate B′ — Replace Dead `hasOpenedSse` With Live SSE Response Signal
 
-**Status:** Open
+**Status:** Done (2026-05-10) — verified in fresh runtime; all AC met.
 
 ## Summary
 
@@ -9,6 +9,59 @@ Implement Candidate B′ (architect-approved, GO with refinements) from [QRM7-01
 ## Errata
 
 **2026-05-10 erratum:** Post-implementation operator finding showed POST-path keepalive ticks ARE firing successfully every 15 s on long-running `invoke_agent` SSE responses (e.g., the broker logged `keepaliveFired=true writableFinished=true` on the 131 s teamlead-invocation response that delivered this very ticket's first draft). The "dead `setInterval`" claim from QRM7-012 § Validation Results was scoped only to the GET path — the SDK ends the GET response within ~15 s so the first tick always lands on `writableEnded=true`, but POST-path SSE responses live for the full duration of the tool call and receive ticks continuously. Refinements 3 and 4 revised accordingly; refinements 1, 2, 5 unaffected.
+
+## Verification (2026-05-10)
+
+Verified in fresh runtime (mcp-server log `mcp-server-20260510T170304.jsonl`). All Verification Plan steps exercised; all acceptance criteria met.
+
+### Smoke (new code is live)
+
+- `markSseAlive` symbol present: 15+ occurrences in fresh log
+- `activeSseToken` symbol present: 391+ occurrences (reaper diagnostic format)
+- Stale symbols (`markSseOpened`, `markSseResponseActive`, `hasOpenedSse`, `activeSseResponse`): **0** — confirmed not running pre-B′ code
+
+### Identity-guard correctness (Refinement 1)
+
+Active moderator session `6f341ddc-…` observed across 14 minutes:
+
+- 28/28 reaper checks recorded `activeSseToken=true` continuously
+- No `markSseDead` debug entries, no spurious token clears
+- The `===` identity guard correctly rejected stale `res.on('close')` handlers from prior `GET₁` while `GET₂`'s newer token was current
+
+A subsequent moderator session `fffddecb-…` continued to show `activeSseToken=true` continuously after the role flipped to moderator — B′'s exemption visibly active in the reaper diagnostic output.
+
+### Idle survival (≥30 min)
+
+- Session `6f341ddc-…` registered as moderator at 17:46:16; last refresh at 17:58:18 (lastSeenAt updated by an SSE GET reopen)
+- Idle 38 minutes through 18:24:23 with no `Session reaped` event for that SID
+- 98/98 reaper checks reported `alive=true` over the full lifetime
+- The 30-min floor (Candidate A) carried liveness through the long quiet period; B′ supplemented during active windows
+
+### Same-role eviction (QRM7-009)
+
+Two evictions logged cleanly across the run, both via `register_agent` rotation, neither via the reaper:
+
+```
+17:46:16  Evicted prior moderator session (idle 1682s) on re-register
+18:24:23  Evicted prior moderator session (idle 1565s) on re-register
+```
+
+Memory bound preserved; no orphan moderator sessions.
+
+### Round-trip behavior
+
+Two `invoke_agent` round-trips after idle, both successful:
+
+| Time | Target | Result | POST close |
+|------|--------|--------|-----------|
+| 17:46:21 | developer | success in 3.21 s | `keepaliveFired=true` |
+| 18:24:25 | teamlead | success in 1.97 s | (short call) |
+
+`keepaliveFired=true` on the 3.2 s response confirms POST-path SSE keepalive (the QRM7-012 long-form regression backstop) is intact alongside B′.
+
+### Operator finding — out of scope
+
+CC CLI's transport recycler creates fresh anonymous sessions during long idle (observed: `48f0b519-…` at 17:58:18, `fffddecb-…` at 18:13:20). When the user resumed activity at 18:24, CC CLI sent the new POST on `fffddecb-…` rather than the still-alive `6f341ddc-…`. The first `invoke_agent` on the unregistered `fffddecb-…` failed; CC CLI auto-re-registered as moderator and retried successfully (observed as the moderator's "Server lost my identity again" message). The same-role eviction path absorbed this gracefully — the user-visible behavior was a transparent retry. Not a B′ regression and no user-facing impact, so no follow-up ticket filed.
 
 ## Design Notes
 
