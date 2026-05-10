@@ -290,6 +290,11 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
 
     const interval = setInterval(() => {
       if (res.writableEnded) {
+        // QRM7-012 diagnostic: 2026-05-10 validation showed lastSeenAt only
+        // refreshes at GET-arrival time, not at every 15 s tick — suggesting
+        // the response is already ended by the first tick. Confirm here.
+        // Temporary; remove with the rest of the QRM7-012 instrumentation.
+        this.logger.debug('SSE keepalive tick: skipped (writableEnded=true)');
         clearInterval(interval);
         return;
       }
@@ -300,7 +305,12 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
         // QRM7-001: successful write proves the TCP socket is alive —
         // refresh lastSeenAt so the session survives long-running calls.
         if (server) this.mcpService.touchSession(server);
+        // QRM7-012 diagnostic: confirm tick actually refreshed lastSeenAt.
+        this.logger.debug('SSE keepalive tick: ping written');
       } catch {
+        // QRM7-012 diagnostic: distinguish silent-throw from writableEnded
+        // path so we know whether the socket vanished out from under us.
+        this.logger.debug('SSE keepalive tick: write threw, clearing interval');
         clearInterval(interval);
       }
     }, SSE_KEEPALIVE_INTERVAL_MS);
