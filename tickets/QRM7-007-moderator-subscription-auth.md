@@ -1,6 +1,6 @@
 # QRM7-007: Shift Moderator from API Key to Claude Subscription (OAuth) Auth
 
-**Status: Implementation Complete — Pending Runtime Verification (2026-05-04)**
+**Status: Implemented (2026-05-04) — partially superseded by [QRM7-013](QRM7-013-moderator-oauth-refresh-on-idle.md) (2026-05-09) for long-idle token-refresh behavior**
 
 ## Summary
 
@@ -102,7 +102,9 @@ Inside the moderator's CC CLI session run `/status` (or equivalent). Expected: s
 
 ### Token refresh
 
-OAuth tokens carry a refresh token; CC CLI handles renewal transparently as long as the container has outbound network access (it does — it already talks to claude.ai via the same network path used by agents reaching the Anthropic API). No cron, no manual refresh.
+**Note (added 2026-05-09):** the original assumption — that CC CLI would refresh subscription OAuth transparently as long as the container had outbound network access — was speculative and was not validated by any acceptance criterion below. The QRM8 design run (`logs/sessions/2026-05-06-qrm8-roadmap-run.md` § Issue 1) falsified it: the moderator surfaces `401 authentication_error` and forces a fresh `/login` after every laptop-hibernation gap of ≥ ~10h, despite the refresh token being present on the volume. This is a known unfixed upstream bug class on `anthropics/claude-code`. No cron-based keepalive helps (the failure correlates with hibernation resume, not with elapsed wall-clock between calls). The documented headless mitigation is `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`, which authenticates against the same subscription seat. See [QRM7-013](QRM7-013-moderator-oauth-refresh-on-idle.md) for the corrected guidance.
+
+*Original (incorrect) text retained for the record:* "OAuth tokens carry a refresh token; CC CLI handles renewal transparently as long as the container has outbound network access. No cron, no manual refresh."
 
 ### Reverting
 
@@ -119,7 +121,7 @@ The OAuth credentials remain on the volume; the precedence resolver will simply 
 - [x] `docker compose config` confirms the moderator's resolved environment contains only `MCP_SERVER_URL` + `GIT_*` (no `ANTHROPIC_API_KEY`, no `LOG_*`, no `ANTHROPIC_MODEL/MAX_TOKENS`), and that `architect`, `teamlead`, `developer` continue to receive the full `*shared-env` set including `ANTHROPIC_API_KEY` and `GIT_*`
 - [x] (Recommended) `docker/moderator/settings.json` contains `"forceLoginMethod": "claudeai"`; the merged `~/.claude/settings.json` inside the running container reflects it (baked merge verified statically; runtime merge depends on container start)
 - [ ] After one-time `/login` inside the container, `claude /status` reports Claude.ai subscription auth (not API key)
-- [ ] OAuth credentials survive `docker compose restart moderator` — no re-login required
+- [ ] OAuth credentials survive `docker compose restart moderator` — no re-login required (verified for short restarts in the QRM8 design run on 2026-05-06; long-idle re-login behavior tracked separately under [QRM7-013](QRM7-013-moderator-oauth-refresh-on-idle.md))
 - [ ] Agent containers continue to invoke the Anthropic API successfully via `ANTHROPIC_API_KEY` (smoke-test by triggering any `invoke_agent` call against architect/teamlead/developer)
 - [ ] Moderator's `quorum:` MCP server registration still passes the entrypoint self-check (`claude mcp list` shows it)
 - [x] No new volumes added; `moderator-claude-data` continues to back `~/.claude/`
@@ -136,6 +138,7 @@ The OAuth credentials remain on the volume; the precedence resolver will simply 
 ### Relationship to other QRM7 work
 - **Independent of QRM7-004** (cwd relocation) — auth source and cwd are orthogonal concerns. Either can land first.
 - **Independent of QRM7-003** — permission grant persistence is a settings-file location problem; auth source does not affect it.
+- **Partially superseded by [QRM7-013](QRM7-013-moderator-oauth-refresh-on-idle.md)** for long-idle token-refresh behavior. The auth-shift from API key to subscription is correct and stays; only the assumption that CC CLI auto-refreshes the subscription token transparently was wrong. QRM7-013 swaps interactive `/login` for `setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`, which preserves QRM7-007's flat-rate subscription-seat billing.
 
 ### References
 - `docker-compose.yml:1-13` — shared env anchors (`x-git-identity`, `x-shared-env` which merges `*git-identity`)
@@ -149,9 +152,9 @@ The OAuth credentials remain on the volume; the precedence resolver will simply 
 
 ## Implementation Notes
 
-**Status:** Implementation Complete — Pending Runtime Verification
+**Status:** Implemented; partially superseded by [QRM7-013](QRM7-013-moderator-oauth-refresh-on-idle.md) (2026-05-09) for long-idle token-refresh behavior
 
-**Date:** 2026-05-04
+**Date:** 2026-05-04 (initial implementation); 2026-05-09 (status update + cross-references to QRM7-013)
 
 ### Files Created/Modified
 
@@ -182,3 +185,9 @@ The static-file half of the ticket is complete. The remaining acceptance criteri
 6. Confirm `claude mcp list` inside the moderator still reports the `quorum:` registration (entrypoint self-check at `docker/moderator/entrypoint.sh:82-89` enforces this on start).
 
 If `/status` reports the `forceLoginMethod` setting is unrecognized for CC CLI 2.1.126, fall back per the ticket's design: remove the key from `docker/moderator/settings.json` — env-removal alone is functionally sufficient.
+
+### Runtime verification status (updated 2026-05-09)
+
+The QRM8 design run (`logs/sessions/2026-05-06-qrm8-roadmap-run.md`, 2026-05-06 → 08, 47h) effectively exercised steps 2, 3, 5, and 6 above: `/login` succeeded (line 55), the moderator ran on subscription auth throughout, agents kept invoking the Anthropic API via `ANTHROPIC_API_KEY`, and the `quorum:` MCP registration held. The remaining unchecked acceptance criteria are de facto satisfied for the cases they cover — the auth-split itself works.
+
+What that same run also surfaced is that the **"Token refresh" assumption above is wrong**: 5 forced `/login` cycles, mechanically aligned with hibernation gaps ≥ ~10h. The static-file change-set delivered by QRM7-007 is correct; only the lifetime / refresh narrative was speculative. Long-idle behavior is now tracked in [QRM7-013](QRM7-013-moderator-oauth-refresh-on-idle.md), which proposes `setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` as the mitigation while preserving subscription-seat billing.
