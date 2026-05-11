@@ -55,38 +55,67 @@ Research ticket investigating response-delivery mechanisms for moderator-origina
 
 When `invoke_agent`'s POST response dies, the broker still holds the `InvokeResponse`. The idea: deliver it via the moderator's persistent GET SSE channel, which is reliably alive (reopened every ~5 min, identity-guarded tokens, `activeSseToken` tracking).
 
-**Three sub-variants for the push primitive:**
+**Available SDK server→client primitives** (from `@modelcontextprotocol/sdk` type analysis):
+
+| Primitive | Server API | Spec status | Payload shape |
+|-----------|-----------|-------------|---------------|
+| `notifications/progress` | `protocol.notification()` | Stable | `{ progressToken, progress, total, message? }` |
+| `notifications/resources/updated` | `server.sendResourceUpdated()` | Stable | `{ uri }` |
+| Logging (`notifications/message`) | `server.sendLoggingMessage()` | Stable | `{ level, logger?, data }` |
+| `notifications/tasks/status` | `server.experimental.tasks` | **Experimental** | `{ taskId, status, statusMessage? }` |
+| `elicitation/create` | `server.elicitInput()` | Stable | `{ message, requestedSchema }` — **request**, not notification |
+| Custom notification | `protocol.notification()` | Non-standard | Arbitrary JSON-RPC notification |
+
+**Five sub-variants for the push primitive:**
 
 **2a. Custom notification (`notifications/invocation_result`):**
 - Server constructs a JSON-RPC notification: `{ jsonrpc: "2.0", method: "notifications/invocation_result", params: { invocationId, response: InvokeResponse } }`
 - Written to the moderator's GET SSE response via the per-session `McpServer`'s transport.
-- **Spec deviation:** `notifications/invocation_result` is not a defined MCP notification. The SDK may drop it, surface it, or error — behavior is unknown without a prototype.
+- **Spec deviation:** `notifications/invocation_result` is not a defined MCP notification. The SDK `Client` class registers handlers for known methods and drops unknown ones per standard JSON-RPC behavior for notifications. **Predicted behavior: silently discarded.**
 
-**2b. Repurpose `elicitation/create`:**
+**2b. `sendLoggingMessage()` (logging notification):**
+- Server pushes `{ level: 'info', data: { invocationId, result } }` at any time via `server.server.sendLoggingMessage()`.
+- The SDK client receives it. CC CLI uses MCP server logging for debug output and MCP inspector panels.
+- **Key question: does CC CLI surface logging notifications to the LLM?** No evidence it injects logging messages into the LLM's conversation context. The LLM would never see the result. **Predicted behavior: silently consumed by CC CLI's debug layer, not surfaced to the model.**
+
+**2c. Repurpose `elicitation/create`:**
 - Server calls `server.server.elicitInput({ message: "Invocation result for <id>: <JSON>" })` on the moderator's session.
 - CC CLI would see this as a normal elicitation prompt and present it to the LLM.
 - **Fatal flaw:** The LLM receives this as a *question* to answer, not a *result* to consume. It would attempt to respond to the elicitation rather than incorporating the result into its tool-call flow. The result would be stored as an elicitation answer, not as the `invoke_agent` tool result. This fundamentally mismatches the expected data flow.
 
-**2c. `notifications/progress`:**
+**2d. `notifications/progress`:**
 - MCP spec defines `notifications/progress` for reporting progress on in-flight requests: `{ method: "notifications/progress", params: { progressToken, progress, total, data } }`.
 - The `progressToken` must match a token provided in the original request's `_meta`. CC CLI would need to have passed a `progressToken` in the `invoke_agent` request.
-- **Problem:** Even if the server forges a progress notification, there's no prior `progressToken` to reference. And progress notifications are informational — the SDK treats them as updates, not as replacement results for failed tool calls.
+- **Problem:** Even if the server forges a progress notification, there's no prior `progressToken` to reference — the originating POST is dead and the request is no longer in the SDK's pending-requests map. And progress notifications are informational — the SDK treats them as updates, not as replacement results for failed tool calls. **Predicted behavior: dropped by SDK client — no matching request context.**
+
+**2e. Experimental `notifications/tasks/status`:**
+- The MCP SDK has an experimental tasks API (`server.experimental.tasks`) with `notifications/tasks/status` that can push `{ taskId, status: 'completed', statusMessage }` to clients. Semantically the closest match — "your task completed, here's the result."
+- **Problems:** (1) The API is experimental and may change without notice. (2) CC CLI's client would need to have declared `tasks` capability during `initialize` — no evidence it does. (3) Even if supported, the notification reaches the SDK client layer, not the LLM context. (4) `TaskStatus` values (`working | input_required | completed | failed | cancelled`) are lifecycle signals, not data carriers — `statusMessage` is a string, not a structured result payload.
+
+**2f. `sendResourceUpdated()` + resource read:**
+- Server pushes `sendResourceUpdated({ uri: 'context://invocation/<id>' })`. If CC CLI has subscribed to resource updates, it would re-read the resource.
+- **Problems:** (1) CC CLI would need to have subscribed to resource updates — no evidence it subscribes automatically. (2) Even if it did, the re-read result would go to the SDK's resource cache, not into the LLM's conversation context. (3) Resource subscriptions are client-initiated; would need CLAUDE.md to instruct the LLM to subscribe, which is fragile and unprecedented in our flows.
 
 ### CC CLI Behavior Under Unsolicited Messages
 
 **What we know empirically:**
 - CC CLI handles `elicitation/create` over SSE correctly (QRM6-001 spike, verified end-to-end).
-- CC CLI has never received a custom notification or `notifications/progress` from Quorum — no precedent exists in any captured session log.
-- The MCP SDK's `Client` class typically registers handlers for known methods and drops unknown ones silently (standard JSON-RPC behavior for notifications). This means variant 2a's custom notification would almost certainly be silently discarded.
+- CC CLI has never received a custom notification, `notifications/progress`, `sendLoggingMessage`, or `notifications/tasks/status` from Quorum — no precedent exists in any captured session log.
+- The MCP SDK's `Client` class registers handlers for known methods and drops unknown ones silently (standard JSON-RPC behavior for notifications). This means variant 2a's custom notification would almost certainly be silently discarded.
+- The `logs/moderator-sessions/` directory contains only `.gitkeep` — the bind-mount is wired (QRM7-005) but no CC CLI JSONL captures have been collected yet. Empirical inspection of CC CLI's handling of server-initiated messages from captured session data is **not currently possible**.
 
 **What we cannot verify without a prototype:**
+- Whether CC CLI surfaces `sendLoggingMessage` content to the LLM (unlikely — logging is debug infrastructure, not a data channel).
 - Whether CC CLI's SDK would surface an unknown notification to the LLM's context (unlikely — the SDK processes protocol-level messages and only surfaces tool results, elicitations, and resource updates through defined channels).
-- Whether a `notifications/progress` with fabricated `progressToken` would reach the LLM (unlikely — no matching request context).
+- Whether a `notifications/progress` with fabricated `progressToken` would reach the LLM (unlikely — no matching request context, dead request).
+- Whether CC CLI supports the experimental tasks API and would surface `notifications/tasks/status` (likely no — CC CLI is conservative on experimental features).
+- Whether an unsolicited `elicitation/create` (one not triggered by a tool call in progress) is surfaced to the LLM or rejected by the SDK client.
 
 **Empirical verification proposal — minimum-viable spike:**
-1. Add a test endpoint on the MCP server that pushes a custom notification down the moderator's GET SSE stream.
-2. Observe CC CLI's behavior: does the notification appear in the session JSONL? Does the LLM see it? Does it error?
-3. Time box: 2–4 hours, similar shape to QRM6-001 elicitation spike.
+1. Stand up a minimal MCP server (QRM6-001 pattern) that sends each candidate message type at 10-second intervals: `sendLoggingMessage`, custom notification, `notifications/progress` (with synthetic token), and `elicitation/create`.
+2. Connect CC CLI. Observe: which messages surface in the terminal? Which reach the LLM? Which are silently dropped? Which cause errors?
+3. If `logs/moderator-sessions/` bind-mount is active, inspect the CC CLI JSONL for evidence of message receipt.
+4. Time box: 1 day (same scale as QRM6-001 spike).
 
 ### Server-Side Implementation Sketch (Variant 2a)
 
@@ -113,8 +142,9 @@ When `invoke_agent`'s POST response dies, the broker still holds the `InvokeResp
 | GET SSE mid-recycle when result ready | Notification lost — no open stream to write to | Buffer in anchor; retry on next GET open (register a `drain` hook on `markSseAlive`) |
 | Moderator disconnected entirely | Anchor holds result indefinitely | TTL on pending results (10 min); after expiry, log and drop |
 | Multiple results queue up | All delivered sequentially on next GET | Anchor is a Map; drain in FIFO order on `markSseAlive` |
-| CC CLI silently drops the notification | Result lost with no error signal | This is the *critical risk* — no way to detect silent drop server-side. Requires the spike to verify. |
+| CC CLI silently drops the notification | Result lost with no error signal | This is the *critical risk* — no way to detect silent drop server-side. Applies to all candidates 2a-2f. Requires the spike to verify. |
 | Moderator LLM doesn't understand the notification | LLM ignores the result even if surfaced | Would need CLAUDE.md guidance: "when you receive a `notifications/invocation_result`, treat it as the tool result for the corresponding `invoke_agent` call" |
+| Elicitation (2c) misinterpreted as question | LLM "answers" the result instead of consuming it | Fundamental semantic mismatch — not fixable via CLAUDE.md guidance alone |
 
 ### Moderator UX Impact
 
@@ -126,9 +156,14 @@ When `invoke_agent`'s POST response dies, the broker still holds the `InvokeResp
 
 ### Spec-Compliance / Future-Proofing
 
-- **Custom notification:** Non-standard. A web UI or third-party MCP client would need custom handler code. Not portable.
+- **Custom notification (2a):** Non-standard. A web UI or third-party MCP client would need custom handler code. Not portable.
+- **Logging (2b):** Standard primitive, but repurposed beyond its intent (debug output, not data transport). A web UI would likely display it in a debug panel, not in the conversation.
+- **Elicitation (2c):** Standard primitive, but semantic misuse. A web UI would render a form dialog asking the user to "respond to" a result payload. The worst spec divergence.
+- **Progress (2d):** Standard primitive, but requires a valid `progressToken` from a live request. Fabricating tokens violates the spec contract.
+- **Tasks (2e):** Experimental API. May change or be removed. Not portable to non-experimental clients.
+- **Resource update (2f):** Standard primitive, but requires client-side subscription. Passive clients would never see the update.
 - **If MCP adds `Last-Event-ID` resumption:** Option 2 becomes unnecessary. We'd be maintaining custom infrastructure that the protocol intends to solve natively.
-- **Verdict:** Poor spec alignment. Works only for CC CLI (if at all), not generalizable.
+- **Verdict:** Poor spec alignment across all candidates. Each repurposes a primitive beyond its intended semantics. Works only for CC CLI (if at all), not generalizable.
 
 ### Complexity Estimate
 
