@@ -27,6 +27,9 @@ QRM6's live runs exposed several operational issues that individually degrade th
 | Agent retry-once path races the MCP `initialize` handshake | Every reaper-driven agent reconnect produces 1 failed tool call + 4 WARN log lines; 9 events across 5 bursts in the QRM8 run; work-output preserved by SDK adaptation but operator log signal-to-noise is alarming | Issue 3 in `2026-05-06-qrm8-roadmap-run.md`, promoted to QRM7-008 |
 | Reaper churns agent sessions that don't need liveness tracking | Pure collateral damage: agents are reachable via stable callback URL regardless of MCP session state, but the reaper still evicts them on idle, triggering the QRM7-008 race | Same run analysis, promoted to QRM7-009 |
 | Moderator's CC CLI client holds stale session ID across long idle | First 1–4 tool calls after each post-idle resume fail with `Session not found`; user must manually type `/mcp`; ~1–4 min friction per burst-resume; reproduced in continuous-uptime idle (2026-05-07 evening) as well as hibernation gaps | Issue 2 in `2026-05-06-qrm8-roadmap-run.md` + 2026-05-07 evening observation, promoted to ~~QRM7-010~~ → ~~QRM7-011~~ → QRM7-012 |
+| Moderator OAuth access token not auto-refreshed across long idle | 5 `401 authentication_error` events across one 47h session, each forcing manual `/login` after a hibernation gap ≥ ~10h; falsifies QRM7-007's assumption that CC CLI handles renewal transparently | Issue 1 in `2026-05-06-qrm8-roadmap-run.md`, promoted to QRM7-013 |
+| `invoke_agent` response lost when target work exceeds CC CLI's 5-min `undici.bodyTimeout` | Moderator sees `transport dropped mid-call; response for tool invoke_agent was lost`; agent work is committed but response envelope vanishes; triggers duplicate-invocation recovery path | Recurring across QRM5-BUG-003 → QRM7-014 follow-up; research ticket QRM7-015 |
+| No visibility into `context_query mode=search` quality | Main MCP debug line records only scope + query string + hit count; result keys, scores, snippets, and hybrid-vs-BM25 engine choice are dropped before logging, so silent embedding-service fallback and bad relevance go unnoticed | Surfaced 2026-05-12 during context-store iteration; promoted to QRM7-016 |
 
 ## Milestone Scope
 
@@ -201,6 +204,56 @@ CC CLI opens GET on every session within ~20 ms of creation, before `register_ag
 
 **Full ticket:** [QRM7-012](QRM7-012-sse-stream-death-reaps-moderator.md)
 
+### QRM7-013 — Moderator OAuth Access Token Not Auto-Refreshed Across Long Idle
+
+**Status:** Open (filed 2026-05-09)
+
+After QRM7-007 shifted the moderator from `ANTHROPIC_API_KEY` to interactive `/login` subscription OAuth, the moderator surfaces `401 authentication_error` after every laptop-hibernation gap ≥ ~10 h, despite a valid refresh token sitting on the persistent volume. QRM7-007's "Token refresh" claim that CC CLI handles renewal transparently is falsified by field evidence (5 401s across a single 47-hour session). Mitigate by switching to a long-lived token via `claude setup-token`, exposed to the container as `CLAUDE_CODE_OAUTH_TOKEN` — preserves QRM7-007's flat-rate subscription-seat billing and is the documented headless path.
+
+**Touches:** `docker-compose.yml`, `docker/moderator/entrypoint.sh`; one-time interactive `claude setup-token` flow
+
+**Depends on:** QRM7-007 (done)
+
+**Full ticket:** [QRM7-013](QRM7-013-moderator-oauth-refresh-on-idle.md)
+
+### QRM7-014 — Replace Dead `hasOpenedSse` With Live SSE Response Signal (Candidate B′)
+
+**Status:** Done (2026-05-10) — verified in fresh runtime; all AC met.
+
+Implements Candidate B′ from QRM7-012's candidate matrix. Replaces the sticky `hasOpenedSse` boolean — which never engages for moderator sessions due to GET-before-`register_agent` ordering — with `activeSseToken: object | null` identity-guarded tracking on `McpSessionState`. Candidates A + E remain the operational floor; B′ is correctness cleanup that expresses the right invariant ("does this session currently have a live SSE channel?") and removes confirmed-dead code. **2026-05-10 erratum:** POST-path SSE keepalive ticks DO fire continuously on long-running `invoke_agent` responses — the "dead `setInterval`" claim from QRM7-012 § Validation was scoped only to the GET path; this nuance unlocks the empirical baseline that QRM7-015 builds on.
+
+**Touches:** `apps/mcp-server/src/mcp/mcp.service.ts`, `apps/mcp-server/src/mcp/mcp.controller.ts`, spec files
+
+**Depends on:** QRM7-012 (Candidates A + E landed)
+
+**Full ticket:** [QRM7-014](QRM7-014-candidate-b-prime-live-sse-response-signal.md)
+
+### QRM7-015 — Long-Call Response Delivery (Research)
+
+**Status:** Open — Research (rewritten 2026-05-12)
+
+Research ticket recommending a **long-poll continuation** pattern for delivering `invoke_agent` responses that exceed CC CLI's 5-minute `undici.bodyTimeout`. The server holds the POST response up to a 4 min 30 s ceiling and returns `{ status: "pending", invocationId }` cleanly before the timeout fires; the moderator follows a one-paragraph CLAUDE.md rule to call `wait_invocation(invocationId)` to continue waiting. Sub-5-min calls have zero protocol overhead (sync-shaped from the LLM's perspective); a 20-min task costs ~$0.40 in continuations with sub-second completion latency. Selected over server-push (CC CLI MCP client confirmed not to surface notifications), fire-and-forget Bash-sleep polling (~$2.40 + 60–180 s latency), and singleton-anchor designs after empirical evidence from 48 successful long-hold POST responses post-QRM7-014.
+
+**Implementation ticket:** to be filed after research acceptance — single ticket covering `InvocationResultStore`, `wait_invocation` MCP tool, `invoke_agent` long-poll racing, caller-aware policy, `callerRole` auto-bind sidecar, CLAUDE.md rule.
+
+**Touches:** `tickets/QRM7-015-long-call-response-delivery-research.md` (research deliverable only)
+
+**Depends on:** QRM7-012 (mitigated), QRM7-014 (done — keepalive infrastructure)
+
+**Full ticket:** [QRM7-015](QRM7-015-long-call-response-delivery-research.md)
+
+### QRM7-016 — Context Store Search Observability
+
+**Status:** Open (filed 2026-05-12)
+
+Add a dedicated `/app/logs/context-search-{startupTimestamp}.jsonl` stream that captures every `context_query mode=search` invocation in full detail — verbatim query, scope/id filters, hybrid vs BM25-only engine choice, top hits with scores and snippets, token-budget truncation flag, round-trip duration, error surface. The existing one-line debug entry in the main MCP log becomes a breadcrumb carrying a `queryId` UUID linking back to the detailed record. Capture seam: optional `onTrace` callback on `ContextStore.search()` keeps the public API `ContextItem[]` unchanged. Purpose: make context-search quality auditable offline (silent BM25 fallback, bad relevance, budget-driven truncation) and enable feeding the stream directly into a future relevance-eval script.
+
+**Touches:** `libs/common/src/context-store/context-store.abstract.ts`, `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts`, `apps/mcp-server/src/context-store/in-memory-store.ts`, new `apps/mcp-server/src/observability/context-search-trace-logger.service.ts`, `apps/mcp-server/src/mcp/mcp.service.ts`, spec files, `docs/context-store.md`, `tools/session-report/SESSION-REPORT.md`
+
+**Depends on:** —
+
+**Full ticket:** [QRM7-016](QRM7-016-context-search-observability.md)
+
 ---
 
 ## Dependency Graph
@@ -218,6 +271,10 @@ QRM7-009 (Scope Reaper)            ─── after QRM7-001 (DONE 2026-05-09)
 QRM7-010 (Moderator Stale Session) ─── SUPERSEDED by QRM7-011 (closed 2026-05-09)
 QRM7-011 (CC CLI POST-Only Liveness)  ─── SUPERSEDED by QRM7-012 (closed 2026-05-09 — premise falsified)
 QRM7-012 (SSE-Stream-Death Reaping)   ─── independent (open 2026-05-09; A reverts 011-B's effective regression)
+QRM7-013 (Moderator OAuth Refresh)    ─── after QRM7-007 (DONE) — open
+QRM7-014 (Live SSE Response Signal)   ─── after QRM7-012 (DONE 2026-05-10)
+QRM7-015 (Long-Call Delivery Research)─── after QRM7-014 (research, open) — implementation ticket TBD
+QRM7-016 (Context Search Observability) ─── independent (open 2026-05-12)
 ```
 
 QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 and QRM7-011 are both closed via supersession on the same operational bug — the moderator-reap regression. QRM7-012 carries the bug forward with the corrected mechanism: CC CLI opens SSE on init, QRM7-011-B's exemption is dead code, and `Session not found` reproduces on any SSE-stream death plus 2 min of POST silence. QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
@@ -227,12 +284,16 @@ QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is c
 1. ~~**QRM7-011** Candidate A (timeout bump)~~ — ✅ DONE then reverted 2026-05-09 under the false belief that B subsumed it. **QRM7-012 Candidate A re-applies it as the immediate hotfix** — the only mitigation that ever actually worked.
 2. ~~**QRM7-009** (scope reaper)~~ — ✅ DONE 2026-05-09. Eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
 3. ~~**QRM7-011** Candidate B (POST-only exemption)~~ — ✅ Code landed 2026-05-09 but is dead in the running bundle (sticky-true `hasOpenedSse` flips before role binds). **Replaced by QRM7-012 Candidate B** (live-SSE-response signal).
-4. **QRM7-012** Candidate D (SSE-stream-death investigation) — research task. Refocused QRM7-011-C: not "why does CC CLI never open SSE" (it does) but "why does the SSE stream die mid-session." Carries forward QRM7-010 Part 3 instrumentation draft.
-5. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency now that 009 ships but still needed for correctness.
-6. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
-7. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
-8. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
-9. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
+4. ~~**QRM7-012** Candidate B′~~ — ✅ DONE 2026-05-10 as [QRM7-014](QRM7-014-candidate-b-prime-live-sse-response-signal.md). Replaces dead `hasOpenedSse` with `activeSseToken` identity-guarded tracking; correctness cleanup on top of Candidates A + E.
+5. **QRM7-013** (moderator OAuth refresh) — high daily-use friction (5 user-visible 401s per ~47h session). Hotfix via `claude setup-token` long-lived token. Blocks any "always-on" QRM8 scenario; one-time setup + compose/entrypoint edits.
+6. **QRM7-012** Candidate D (SSE-stream-death investigation) — research task. Refocused QRM7-011-C: not "why does CC CLI never open SSE" (it does) but "why does the SSE stream die mid-session." Carries forward QRM7-010 Part 3 instrumentation draft.
+7. **QRM7-015** (long-call delivery — research) — accept the long-poll continuation design, then file the implementation ticket. Unblocks reliable >5-min `invoke_agent` calls (developer/architect/qa long work) without duplicate-invocation recovery thrash.
+8. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency now that 009 ships but still needed for correctness.
+9. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
+10. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
+11. **QRM7-016** (context search observability) — observability/tooling. No functional urgency, but high payoff while iterating on OpenSearch tuning and embedding choice. Land alongside or after QRM7-006.
+12. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
+13. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
 
 ## Additional Goals
 
@@ -280,7 +341,10 @@ Discovered after QRM7-001's deployment, while running the QRM8 design session an
 |---------|-------------|-------------|
 | Agent retry-once path races MCP `initialize` handshake | `logs/sessions/2026-05-06-qrm8-roadmap-run.md` Issue 3 | QRM7-008 |
 | Reaper churns agent sessions despite their stable callback URL | Same run analysis (asymmetry between connection types) | QRM7-009 |
-| Moderator's CC CLI client holds stale session ID after long idle (hibernation + continuous-uptime) | Issue 2 in same log + 2026-05-07 evening reproduction | ~~QRM7-010~~ → QRM7-011 |
+| Moderator's CC CLI client holds stale session ID after long idle (hibernation + continuous-uptime) | Issue 2 in same log + 2026-05-07 evening reproduction | ~~QRM7-010~~ → ~~QRM7-011~~ → QRM7-012 / QRM7-014 |
+| Moderator OAuth access token not auto-refreshed across long idle | Issue 1 in same log (5 401s across 47h session) | QRM7-013 |
+| `invoke_agent` response lost when target work exceeds CC CLI's 5-min `undici.bodyTimeout` | Recurring QRM5-BUG-003 → QRM7-014 follow-up empirical baseline | QRM7-015 (research) |
+| No structured visibility into `context_query mode=search` quality | Context-store iteration, 2026-05-12 | QRM7-016 |
 
 ## Icebox Items (Not Scheduled)
 
