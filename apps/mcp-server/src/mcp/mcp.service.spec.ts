@@ -2,10 +2,14 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AgentRole, ContextScope, ContextStore } from '@app/common';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { MessageBroker } from '../messaging';
+import { InvocationResultStore, MessageBroker } from '../messaging';
 import { AgentRegistry, McpElicitationConnection } from '../registry';
 import { McpServerConfigService } from '../config';
-import { McpService, SESSION_LIVENESS_TIMEOUT_MS } from './mcp.service';
+import {
+  McpService,
+  SESSION_LIVENESS_TIMEOUT_MS,
+  LONG_POLL_CEILING_MS,
+} from './mcp.service';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -113,6 +117,12 @@ const mockConfig = {
   context: { defaultMaxTokens: 2000, tokenCharRatio: 4 },
 };
 
+const mockInvocationResultStore = {
+  store: jest.fn(),
+  get: jest.fn(),
+  reapStaleInvocations: jest.fn(),
+};
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -130,6 +140,10 @@ describe('McpService', () => {
         { provide: ContextStore, useValue: mockContextStore },
         { provide: AgentRegistry, useValue: mockRegistry },
         { provide: McpServerConfigService, useValue: mockConfig },
+        {
+          provide: InvocationResultStore,
+          useValue: mockInvocationResultStore,
+        },
       ],
     }).compile();
 
@@ -1256,6 +1270,437 @@ describe('McpService', () => {
       // After disconnect → isConnected() should be false
       service.disconnect(server);
       expect(connection.isConnected()).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // QRM7-017: invoke_agent racing logic + caller-aware policy
+  // -------------------------------------------------------------------------
+
+  describe('invoke_agent long-poll racing (QRM7-017)', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('should return inline when broker resolves before 4m30s ceiling (sync path)', async () => {
+      const brokerResponse: InvokeResponse = {
+        success: true,
+        result: 'done',
+        sessionId: 'sess-1',
+      };
+      mockBroker.invoke.mockResolvedValue(brokerResponse);
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      const resultPromise = handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer, // 30 min timeout > 270s threshold
+        action: 'implement feature',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-lp-sync',
+      });
+
+      // Resolve microtasks so the broker promise settles
+      await jest.advanceTimersByTimeAsync(0);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.success).toBe(true);
+      expect(parsed.result).toBe('done');
+      // Should NOT have stored in the invocation result store
+      expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
+    });
+
+    it('should return pending when broker does not resolve before 4m30s ceiling', async () => {
+      // Broker never resolves within the timeout
+      let resolveDelivery!: (value: InvokeResponse) => void;
+      mockBroker.invoke.mockReturnValue(
+        new Promise<InvokeResponse>((resolve) => {
+          resolveDelivery = resolve;
+        }),
+      );
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      const resultPromise = handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        action: 'long task',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-lp-pending',
+      });
+
+      // Advance past the long-poll ceiling
+      await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.status).toBe('pending');
+      expect(parsed.invocationId).toBeDefined();
+      expect(parsed.next).toBe('call wait_invocation(invocationId)');
+      expect(mockInvocationResultStore.store).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callerRole: AgentRole.moderator,
+          target: AgentRole.developer,
+          status: 'pending',
+        }),
+      );
+
+      // Clean up: resolve the dangling promise
+      resolveDelivery({ success: true, result: 'late' });
+    });
+
+    it('should update record status when broker resolves after server timer', async () => {
+      let resolveDelivery!: (value: InvokeResponse) => void;
+      mockBroker.invoke.mockReturnValue(
+        new Promise<InvokeResponse>((resolve) => {
+          resolveDelivery = resolve;
+        }),
+      );
+
+      // Use the real InvocationResultStore for this test
+      const realStore = new InvocationResultStore();
+      // Temporarily wire the mock to delegate to the real store
+      mockInvocationResultStore.store.mockImplementation(
+        (record: unknown) => realStore.store(record as never),
+      );
+      mockInvocationResultStore.get.mockImplementation(
+        (id: string) => realStore.get(id),
+      );
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      const resultPromise = handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        action: 'long task',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-lp-update',
+      });
+
+      // Advance past the ceiling so we get a pending response
+      await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      const invocationId = parsed.invocationId as string;
+
+      // Now the broker resolves after the timer
+      resolveDelivery({ success: true, result: 'late result' });
+      // Flush microtasks for the .then() handler
+      await jest.advanceTimersByTimeAsync(0);
+
+      // Record should now be completed
+      const record = realStore.get(invocationId);
+      expect(record).toBeDefined();
+      expect(record!.status).toBe('completed');
+      expect(record!.response).toEqual({
+        success: true,
+        result: 'late result',
+      });
+
+      // Restore mocks
+      mockInvocationResultStore.store.mockReset();
+      mockInvocationResultStore.get.mockReset();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // QRM7-017: Caller-aware policy
+  // -------------------------------------------------------------------------
+
+  describe('invoke_agent caller-aware policy (QRM7-017)', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('moderator + target timeout > 270s → enters long-poll path', async () => {
+      // Broker never resolves so we can check if store was used
+      mockBroker.invoke.mockReturnValue(new Promise<InvokeResponse>(() => {}));
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      const resultPromise = handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer, // 30 min > 270s
+        action: 'implement',
+        wait: true,
+        depth: 0,
+        correlationId: 'caller-aware-1',
+      });
+
+      await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.status).toBe('pending');
+    });
+
+    it('moderator + target timeout <= 270s (productowner) → sync path', async () => {
+      mockBroker.invoke.mockResolvedValue({
+        success: true,
+        result: 'quick answer',
+      });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      const resultPromise = handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.productowner, // 2 min ≤ 270s
+        action: 'clarify requirement',
+        wait: true,
+        depth: 0,
+        correlationId: 'caller-aware-2',
+      });
+
+      await jest.advanceTimersByTimeAsync(0);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.success).toBe(true);
+      expect(parsed.result).toBe('quick answer');
+      expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
+    });
+
+    it('moderator + moderator target (5 min, elicitation) → sync path', async () => {
+      mockBroker.invoke.mockResolvedValue({
+        success: true,
+        result: 'user says yes',
+      });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      const resultPromise = handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.moderator, // 5 min ≤ 270s
+        action: 'ask user',
+        wait: true,
+        depth: 0,
+        correlationId: 'caller-aware-3',
+      });
+
+      await jest.advanceTimersByTimeAsync(0);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.success).toBe(true);
+      expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
+    });
+
+    it('non-moderator caller (agent-to-agent) → sync path regardless of target timeout', async () => {
+      mockBroker.invoke.mockResolvedValue({
+        success: true,
+        result: 'design done',
+      });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      const resultPromise = handler({
+        callerRole: AgentRole.teamlead,
+        target: AgentRole.developer, // 30 min, but caller != moderator
+        action: 'implement',
+        wait: true,
+        depth: 0,
+        correlationId: 'caller-aware-4',
+      });
+
+      await jest.advanceTimersByTimeAsync(0);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.success).toBe(true);
+      expect(parsed.result).toBe('design done');
+      expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // QRM7-017: wait_invocation tool
+  // -------------------------------------------------------------------------
+
+  describe('wait_invocation (QRM7-017)', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('should be registered as a tool', () => {
+      // Will throw if not registered
+      expect(() => getToolHandler(service, 'wait_invocation')).not.toThrow();
+    });
+
+    it('should return failed for unknown invocationId', async () => {
+      mockInvocationResultStore.get.mockReturnValue(undefined);
+
+      const handler = getToolHandler(service, 'wait_invocation');
+      const result = await handler({ invocationId: 'nonexistent' });
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.status).toBe('failed');
+      expect(parsed.error).toBe('Unknown invocationId');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should return completed record immediately', async () => {
+      const response: InvokeResponse = { success: true, result: 'all done' };
+      mockInvocationResultStore.get.mockReturnValue({
+        invocationId: 'inv-done',
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        status: 'completed',
+        response,
+        deliveryPromise: Promise.resolve(response),
+        createdAt: Date.now(),
+      });
+
+      const handler = getToolHandler(service, 'wait_invocation');
+      const result = await handler({ invocationId: 'inv-done' });
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.status).toBe('completed');
+      expect(parsed.response).toEqual(response);
+    });
+
+    it('should return result when delivery resolves within 4m30s', async () => {
+      let resolveDelivery!: (value: InvokeResponse) => void;
+      const deliveryPromise = new Promise<InvokeResponse>((resolve) => {
+        resolveDelivery = resolve;
+      });
+
+      mockInvocationResultStore.get.mockReturnValue({
+        invocationId: 'inv-wait',
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        status: 'pending',
+        deliveryPromise,
+        createdAt: Date.now(),
+      });
+
+      const handler = getToolHandler(service, 'wait_invocation');
+      const resultPromise = handler({ invocationId: 'inv-wait' });
+
+      // Resolve after some time but before ceiling
+      resolveDelivery({ success: true, result: 'done after wait' });
+      await jest.advanceTimersByTimeAsync(0);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.status).toBe('completed');
+      expect(parsed.response).toEqual({
+        success: true,
+        result: 'done after wait',
+      });
+    });
+
+    it('should return pending when delivery does not resolve within 4m30s', async () => {
+      const deliveryPromise = new Promise<InvokeResponse>(() => {});
+
+      mockInvocationResultStore.get.mockReturnValue({
+        invocationId: 'inv-still-pending',
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        status: 'pending',
+        deliveryPromise,
+        createdAt: Date.now(),
+      });
+
+      const handler = getToolHandler(service, 'wait_invocation');
+      const resultPromise = handler({
+        invocationId: 'inv-still-pending',
+      });
+
+      await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
+      const result = await resultPromise;
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.status).toBe('pending');
+      expect(parsed.invocationId).toBe('inv-still-pending');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // QRM7-017: callerRole auto-bind sidecar
+  // -------------------------------------------------------------------------
+
+  describe('wait_invocation callerRole auto-bind (QRM7-017)', () => {
+    function makeMockTransport(): {
+      onmessage: null;
+      onclose: null;
+      onerror: null;
+      close: jest.Mock;
+      send: jest.Mock;
+      start: jest.Mock;
+      sessionId: string | undefined;
+    } {
+      return {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    }
+
+    function getSessionToolHandler(
+      server: Awaited<ReturnType<typeof service.connect>>,
+      toolName: string,
+    ): ToolHandler {
+      const tools = (
+        server as unknown as {
+          _registeredTools: Record<string, { handler: ToolHandler }>;
+        }
+      )._registeredTools;
+      return (args) => tools[toolName].handler(args);
+    }
+
+    it('should auto-bind callerRole from record when session has no role', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      // Session has no role bound (moderator recycled, no register_agent yet)
+      const state = service.peekSessionState(server);
+      expect(state?.role).toBeUndefined();
+
+      const response: InvokeResponse = { success: true, result: 'done' };
+      mockInvocationResultStore.get.mockReturnValue({
+        invocationId: 'inv-autobind',
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        status: 'completed',
+        response,
+        deliveryPromise: Promise.resolve(response),
+        createdAt: Date.now(),
+      });
+
+      const handler = getSessionToolHandler(server, 'wait_invocation');
+      const result = await handler({ invocationId: 'inv-autobind' });
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.status).toBe('completed');
+      expect(parsed.response).toEqual(response);
+
+      // Verify role was auto-bound
+      expect(state?.role).toBe(AgentRole.moderator);
+    });
+
+    it('should reject cleanly when no session role and no matching record', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      mockInvocationResultStore.get.mockReturnValue(undefined);
+
+      const handler = getSessionToolHandler(server, 'wait_invocation');
+      const result = await handler({ invocationId: 'nonexistent' });
+
+      const parsed = JSON.parse(textContent(result));
+      expect(parsed.status).toBe('failed');
+      expect(parsed.error).toBe('Unknown invocationId');
+      expect(result.isError).toBe(true);
     });
   });
 });
