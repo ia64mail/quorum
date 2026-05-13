@@ -87,6 +87,17 @@ function textContent(result: CallToolResult): string {
   return item.text;
 }
 
+/** Shape for long-poll pending / completed / failed responses. */
+interface LongPollResult {
+  status?: string;
+  invocationId?: string;
+  next?: string;
+  response?: InvokeResponse;
+  error?: string;
+  success?: boolean;
+  result?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
@@ -1308,7 +1319,7 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(0);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.success).toBe(true);
       expect(parsed.result).toBe('done');
       // Should NOT have stored in the invocation result store
@@ -1338,7 +1349,7 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('pending');
       expect(parsed.invocationId).toBeDefined();
       expect(parsed.next).toBe('call wait_invocation(invocationId)');
@@ -1365,11 +1376,11 @@ describe('McpService', () => {
       // Use the real InvocationResultStore for this test
       const realStore = new InvocationResultStore();
       // Temporarily wire the mock to delegate to the real store
-      mockInvocationResultStore.store.mockImplementation(
-        (record: unknown) => realStore.store(record as never),
+      mockInvocationResultStore.store.mockImplementation((record: unknown) =>
+        realStore.store(record as never),
       );
-      mockInvocationResultStore.get.mockImplementation(
-        (id: string) => realStore.get(id),
+      mockInvocationResultStore.get.mockImplementation((id: string) =>
+        realStore.get(id),
       );
 
       const handler = getToolHandler(service, 'invoke_agent');
@@ -1386,8 +1397,8 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
-      const invocationId = parsed.invocationId as string;
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
+      const invocationId = parsed.invocationId!;
 
       // Now the broker resolves after the timer
       resolveDelivery({ success: true, result: 'late result' });
@@ -1439,7 +1450,7 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('pending');
     });
 
@@ -1462,7 +1473,7 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(0);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.success).toBe(true);
       expect(parsed.result).toBe('quick answer');
       expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
@@ -1487,7 +1498,7 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(0);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.success).toBe(true);
       expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
     });
@@ -1511,7 +1522,7 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(0);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.success).toBe(true);
       expect(parsed.result).toBe('design done');
       expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
@@ -1542,7 +1553,7 @@ describe('McpService', () => {
       const handler = getToolHandler(service, 'wait_invocation');
       const result = await handler({ invocationId: 'nonexistent' });
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('failed');
       expect(parsed.error).toBe('Unknown invocationId');
       expect(result.isError).toBe(true);
@@ -1563,7 +1574,7 @@ describe('McpService', () => {
       const handler = getToolHandler(service, 'wait_invocation');
       const result = await handler({ invocationId: 'inv-done' });
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('completed');
       expect(parsed.response).toEqual(response);
     });
@@ -1591,7 +1602,7 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(0);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('completed');
       expect(parsed.response).toEqual({
         success: true,
@@ -1619,7 +1630,7 @@ describe('McpService', () => {
       await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
       const result = await resultPromise;
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('pending');
       expect(parsed.invocationId).toBe('inv-still-pending');
     });
@@ -1682,7 +1693,7 @@ describe('McpService', () => {
       const handler = getSessionToolHandler(server, 'wait_invocation');
       const result = await handler({ invocationId: 'inv-autobind' });
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('completed');
       expect(parsed.response).toEqual(response);
 
@@ -1697,7 +1708,7 @@ describe('McpService', () => {
       const handler = getSessionToolHandler(server, 'wait_invocation');
       const result = await handler({ invocationId: 'nonexistent' });
 
-      const parsed = JSON.parse(textContent(result));
+      const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('failed');
       expect(parsed.error).toBe('Unknown invocationId');
       expect(result.isError).toBe(true);

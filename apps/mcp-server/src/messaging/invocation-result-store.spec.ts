@@ -59,7 +59,7 @@ describe('InvocationResultStore', () => {
       store.store(record);
 
       // Wire the .then() to update status (like invoke_agent does)
-      deliveryPromise.then((response) => {
+      void deliveryPromise.then((response) => {
         record.status = response.success ? 'completed' : 'failed';
         record.response = response;
       });
