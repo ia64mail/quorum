@@ -247,7 +247,7 @@ A proposed spike to validate whether `MCP_TIMEOUT` env var or manual undici disp
 
 The team lead will file these after this research ticket is accepted. Sketched here for scoping; not filed.
 
-1. **QRM7-016 (or next)** — `InvocationResultStore` + `wait_invocation` MCP tool + `invoke_agent` long-poll racing logic + caller-aware policy + `callerRole` auto-bind sidecar (~10 lines) + CLAUDE.md rule. Single implementation ticket.
+1. **[QRM7-017](QRM7-017-long-poll-continuation-implementation.md)** — `InvocationResultStore` + `wait_invocation` MCP tool + `invoke_agent` long-poll racing logic + caller-aware policy + `callerRole` auto-bind sidecar (~10 lines) + CLAUDE.md rule. Single implementation ticket.
 
 2. **(Optional, deferred)** — `/loop` + `/bg` operational mode for detached moderator. CLAUDE.md additions + `scripts/moderator.sh` changes to attach/detach the daemon. Out of scope for QRM7-015's research deliverable but worth a forward-pointer.
 
