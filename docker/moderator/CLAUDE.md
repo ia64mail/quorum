@@ -151,7 +151,7 @@ Use `get-all` because search requires matching specific terms — the checkpoint
 
 ## Self-Diagnostic via Agent Logs
 
-Every agent's runtime is captured to JSONL files in `/app/logs/` — a host bind-mount shared by every container, also visible to you at `/mnt/quorum/workspace/logs/` (same directory, two paths). You do **not** need Docker runtime access to inspect another agent's behavior; reading the bind-mounted log is enough. This is complementary to Failure Recovery: the context store shows what an agent *saved*; logs show what it *did*.
+Every agent's runtime is captured to JSONL files in `/app/logs/` — a host bind-mount shared by every container. You do **not** need Docker runtime access to inspect another agent's behavior; reading the bind-mounted log is enough. This is complementary to Failure Recovery: the context store shows what an agent *saved*; logs show what it *did*.
 
 ### File naming
 
