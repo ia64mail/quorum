@@ -1,6 +1,6 @@
 # QRM7-017: Long-Poll Continuation Implementation
 
-**Status:** Open
+**Status:** Complete
 
 ## Summary
 
@@ -111,37 +111,37 @@ No polling-cadence boilerplate, no backoff, no max-iteration cap. The loop is na
 ## Acceptance Criteria
 
 ### InvocationResultStore
-- [ ] Unit tests: record lifecycle — create, read, update status on delivery resolve, read after completion
-- [ ] Unit tests: TTL reaping — records past TTL are cleaned on reap cycle; records within TTL survive
-- [ ] Unit tests: immediate-return path — `wait_invocation` on an already-completed record returns instantly without racing
+- [x] Unit tests: record lifecycle — create, read, update status on delivery resolve, read after completion
+- [x] Unit tests: TTL reaping — records past TTL are cleaned on reap cycle; records within TTL survive
+- [x] Unit tests: immediate-return path — `wait_invocation` on an already-completed record returns instantly without racing
 
 ### invoke_agent Racing Logic
-- [ ] Unit tests: racing semantics — broker resolves before 4m30s → returns inline result (sync path)
-- [ ] Unit tests: racing semantics — broker does not resolve before 4m30s → returns `{ status: "pending", invocationId }` and stores record
-- [ ] Unit tests: deliveryPromise `.then()` on the record fires and updates status when broker resolves after the server timer
+- [x] Unit tests: racing semantics — broker resolves before 4m30s → returns inline result (sync path)
+- [x] Unit tests: racing semantics — broker does not resolve before 4m30s → returns `{ status: "pending", invocationId }` and stores record
+- [x] Unit tests: deliveryPromise `.then()` on the record fires and updates status when broker resolves after the server timer
 
 ### wait_invocation Tool
-- [ ] Tool registered with correct input schema (`invocationId: string`)
-- [ ] Unit tests: unknown invocationId → returns `{ status: "failed", error }`
-- [ ] Unit tests: pending record, delivery resolves within 4m30s → returns `{ status: "completed", response }`
-- [ ] Unit tests: pending record, delivery does not resolve within 4m30s → returns `{ status: "pending", invocationId }`
-- [ ] Unit tests: completed record → returns stored result immediately
+- [x] Tool registered with correct input schema (`invocationId: string`)
+- [x] Unit tests: unknown invocationId → returns `{ status: "failed", error }`
+- [x] Unit tests: pending record, delivery resolves within 4m30s → returns `{ status: "completed", response }`
+- [x] Unit tests: pending record, delivery does not resolve within 4m30s → returns `{ status: "pending", invocationId }`
+- [x] Unit tests: completed record → returns stored result immediately
 
 ### Caller-Aware Policy
-- [ ] Unit tests: `callerRole === 'moderator'` + `ROLE_TIMEOUTS[target] > 270_000` → enters long-poll path
-- [ ] Unit tests: `callerRole === 'moderator'` + `ROLE_TIMEOUTS[target] <= 270_000` (productowner, moderator) → sync path
-- [ ] Unit tests: `callerRole !== 'moderator'` (any agent-to-agent) → sync path regardless of target timeout
+- [x] Unit tests: `callerRole === 'moderator'` + `ROLE_TIMEOUTS[target] > 270_000` → enters long-poll path
+- [x] Unit tests: `callerRole === 'moderator'` + `ROLE_TIMEOUTS[target] <= 270_000` (productowner, moderator) → sync path
+- [x] Unit tests: `callerRole !== 'moderator'` (any agent-to-agent) → sync path regardless of target timeout
 
 ### Auto-Bind Sidecar
-- [ ] Unit tests: `wait_invocation` with no session `callerRole` but valid record → resolves callerRole from store, succeeds
-- [ ] Unit tests: `wait_invocation` with no session `callerRole` and no matching record → rejects cleanly
+- [x] Unit tests: `wait_invocation` with no session `callerRole` but valid record → resolves callerRole from store, succeeds
+- [x] Unit tests: `wait_invocation` with no session `callerRole` and no matching record → rejects cleanly
 
 ### Integration
-- [ ] CLAUDE.md rule added (one paragraph, no polling boilerplate)
-- [ ] `npm run build` — compiles successfully
-- [ ] `npm run lint` — 0 errors, 0 warnings
-- [ ] `npm run test` — all existing tests pass, new tests added
-- [ ] Implementation Notes appended to this ticket post-implementation
+- [x] CLAUDE.md rule added (one paragraph, no polling boilerplate)
+- [x] `npm run build` — compiles successfully
+- [x] `npm run lint` — 0 errors, 0 warnings
+- [x] `npm run test` — all existing tests pass, new tests added
+- [x] Implementation Notes appended to this ticket post-implementation
 
 ## Dependencies and References
 
@@ -171,3 +171,44 @@ No polling-cadence boilerplate, no backoff, no max-iteration cap. The loop is na
 ### External References
 - [SEP-1686](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686) — MCP Tasks spec (validates result-store pattern as canonical)
 - CC CLI async gaps — [#470](https://github.com/anthropics/claude-code/issues/470), [#1478](https://github.com/anthropics/claude-code/issues/1478), [#1759](https://github.com/anthropics/claude-code/issues/1759), [#31427](https://github.com/anthropics/claude-code/issues/31427), [#47076](https://github.com/anthropics/claude-code/issues/47076)
+
+## Implementation Notes
+
+**Status:** Complete
+**Date:** 2026-05-13
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `apps/mcp-server/src/messaging/invocation-result-store.ts` | `InvocationResultStore` — injectable NestJS service, in-memory Map keyed by invocationId with TTL reaping |
+| `apps/mcp-server/src/messaging/invocation-result-store.spec.ts` | Unit tests for record lifecycle, TTL reaping, and immediate-return paths (8 tests) |
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/mcp/mcp.service.ts` | Added `LONG_POLL_CEILING_MS` export, injected `InvocationResultStore`, added caller-aware racing logic in `invoke_agent` handler, added `registerWaitInvocationTool()` method with callerRole auto-bind sidecar |
+| `apps/mcp-server/src/mcp/mcp.service.spec.ts` | Added 16 new tests covering racing logic, caller-aware policy, wait_invocation tool, and auto-bind sidecar. Added `LongPollResult` type and `InvocationResultStore` mock. |
+| `apps/mcp-server/src/mcp/mcp.controller.ts` | Injected `InvocationResultStore`, added `reapStaleInvocations()` call to existing 30s reaper interval |
+| `apps/mcp-server/src/mcp/mcp.controller.spec.ts` | Added `InvocationResultStore` mock provider to fix dependency injection |
+| `apps/mcp-server/src/messaging/messaging.module.ts` | Added `InvocationResultStore` to providers and exports |
+| `apps/mcp-server/src/messaging/index.ts` | Added `InvocationResultStore` and `InvocationRecord` exports |
+| `CLAUDE.md` | Added "Long-Poll Continuation" subsection under Architecture Concept |
+
+### Deviations from Ticket Spec
+
+None. All five code units were implemented as specified:
+1. **InvocationResultStore** — standalone injectable service with Map, TTL reaping on existing 30s interval
+2. **invoke_agent racing** — caller-aware policy (moderator + ROLE_TIMEOUTS[target] > 270_000), races broker vs 4m30s timer, wires `.then()` to update record
+3. **wait_invocation tool** — stateless long-poll on stored deliveryPromise, handles completed/failed/pending states
+4. **callerRole auto-bind** — guard clause at top of wait_invocation handler resolving callerRole from record
+5. **CLAUDE.md rule** — one paragraph under new "Long-Poll Continuation" subsection
+
+### Verification
+
+```
+npm run build  — 3 apps compiled successfully
+npm run lint   — 0 errors, 0 warnings
+npm run test   — 748 tests passed (24 new), 45 test suites
+```
