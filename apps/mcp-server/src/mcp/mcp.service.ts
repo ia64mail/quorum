@@ -393,29 +393,12 @@ export class McpService implements OnModuleInit {
           const invocationId = randomUUID();
           const deliveryPromise = this.messageBroker.invoke(request);
 
-          const winner = await Promise.race([
-            deliveryPromise.then(
-              (r) => ({ type: 'result' as const, response: r }),
-            ),
-            new Promise<{ type: 'timeout' }>((resolve) => {
-              const timer = setTimeout(
-                () => resolve({ type: 'timeout' }),
-                LONG_POLL_CEILING_MS,
-              );
-              timer.unref();
-            }),
-          ]);
+          const winner = await this.raceAgainstCeiling(deliveryPromise);
 
           if (winner.type === 'result') {
             // Broker resolved within the ceiling — sync path
             const response = winner.response;
-            if (
-              state &&
-              typeof response.sessionId === 'string' &&
-              response.sessionId
-            ) {
-              state.agentSessions.set(target, response.sessionId);
-            }
+            this.updateSessionCache(state, target, response);
             this.logger.debug(
               `invoke_agent returning (long-poll sync): correlationId=${correlationId} ` +
                 `target=${args.target} success=${response.success} ` +
@@ -444,13 +427,7 @@ export class McpService implements OnModuleInit {
             (response) => {
               record.status = response.success ? 'completed' : 'failed';
               record.response = response;
-              if (
-                state &&
-                typeof response.sessionId === 'string' &&
-                response.sessionId
-              ) {
-                state.agentSessions.set(target, response.sessionId);
-              }
+              this.updateSessionCache(state, target, response);
               this.logger.log(
                 `Invocation landed (async): id=${invocationId} ` +
                   `target=${target} success=${response.success}`,
@@ -490,15 +467,7 @@ export class McpService implements OnModuleInit {
 
         // Default sync path — all non-moderator callers and short-timeout targets
         const response = await this.messageBroker.invoke(request);
-
-        // Update session cache with returned sessionId
-        if (
-          state &&
-          typeof response.sessionId === 'string' &&
-          response.sessionId
-        ) {
-          state.agentSessions.set(target, response.sessionId);
-        }
+        this.updateSessionCache(state, target, response);
 
         // QRM5-BUG-003 Phase 1 instrumentation: SDK write boundary.
         // Logged after broker resolution, immediately before the SDK serializes
@@ -535,9 +504,7 @@ export class McpService implements OnModuleInit {
         inputSchema: {
           invocationId: z
             .string()
-            .describe(
-              'The invocationId from a pending invoke_agent response',
-            ),
+            .describe('The invocationId from a pending invoke_agent response'),
         },
       },
       async (args) => {
@@ -556,23 +523,6 @@ export class McpService implements OnModuleInit {
             `wait_invocation: auto-bound callerRole=${record.callerRole} ` +
               `from invocation record ${args.invocationId}`,
           );
-        }
-
-        // Resolve callerRole: session state > record fallback
-        const callerRole = state?.role;
-        if (!callerRole && !record) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  status: 'failed',
-                  error: 'Unknown invocationId',
-                }),
-              },
-            ],
-            isError: true,
-          };
         }
 
         if (!record) {
@@ -610,21 +560,7 @@ export class McpService implements OnModuleInit {
         }
 
         // Pending — race deliveryPromise against a fresh 4m30s timer
-        const winner = await Promise.race([
-          record.deliveryPromise.then(
-            (response: InvokeResponse) => ({
-              type: 'result' as const,
-              response,
-            }),
-          ),
-          new Promise<{ type: 'timeout' }>((resolve) => {
-            const timer = setTimeout(
-              () => resolve({ type: 'timeout' }),
-              LONG_POLL_CEILING_MS,
-            );
-            timer.unref();
-          }),
-        ]);
+        const winner = await this.raceAgainstCeiling(record.deliveryPromise);
 
         if (winner.type === 'result') {
           this.logger.debug(
@@ -635,7 +571,7 @@ export class McpService implements OnModuleInit {
               {
                 type: 'text' as const,
                 text: JSON.stringify({
-                  status: record.status === 'pending' ? (winner.response.success ? 'completed' : 'failed') : record.status,
+                  status: winner.response.success ? 'completed' : 'failed',
                   response: winner.response,
                 }),
               },
@@ -1157,6 +1093,45 @@ export class McpService implements OnModuleInit {
         };
       },
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Race a delivery promise against the long-poll ceiling timer (QRM7-017).
+   * Returns a discriminated union so callers can branch on `type`.
+   */
+  private raceAgainstCeiling(
+    promise: Promise<InvokeResponse>,
+  ): Promise<
+    { type: 'result'; response: InvokeResponse } | { type: 'timeout' }
+  > {
+    return Promise.race([
+      promise.then((response) => ({
+        type: 'result' as const,
+        response,
+      })),
+      new Promise<{ type: 'timeout' }>((resolve) => {
+        const timer = setTimeout(
+          () => resolve({ type: 'timeout' }),
+          LONG_POLL_CEILING_MS,
+        );
+        timer.unref();
+      }),
+    ]);
+  }
+
+  /** Cache the target's sessionId from an invoke response (idempotent no-op guard). */
+  private updateSessionCache(
+    state: McpSessionState | undefined,
+    target: AgentRole,
+    response: InvokeResponse,
+  ): void {
+    if (state && typeof response.sessionId === 'string' && response.sessionId) {
+      state.agentSessions.set(target, response.sessionId);
+    }
   }
 
   // ---------------------------------------------------------------------------

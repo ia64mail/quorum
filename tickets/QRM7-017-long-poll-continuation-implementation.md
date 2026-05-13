@@ -212,3 +212,14 @@ npm run build  — 3 apps compiled successfully
 npm run lint   — 0 errors, 0 warnings
 npm run test   — 748 tests passed (24 new), 45 test suites
 ```
+
+### Simplify Pass
+
+Four changes in `mcp.service.ts`:
+
+1. **Extracted `raceAgainstCeiling()` private helper** — the `Promise.race` + `setTimeout` + `.unref()` pattern was duplicated in both `invoke_agent` and `wait_invocation`. Now a single 12-line method called from both.
+2. **Extracted `updateSessionCache()` private helper** — the 6-line session-cache guard (`if (state && typeof response.sessionId === 'string' && response.sessionId)`) appeared 3 times across the long-poll sync path, async `.then()` handler, and default sync path. Now a single method called from all three.
+3. **Removed redundant error-response block in `wait_invocation`** — the `!callerRole && !record` guard was fully subsumed by the `!record` guard below it. Eliminated 15 lines of unreachable code.
+4. **Simplified nested ternary** — `record.status === 'pending' ? (winner.response.success ? 'completed' : 'failed') : record.status` reduced to `winner.response.success ? 'completed' : 'failed'` since the pending guard above guarantees `record.status === 'pending'` at that point.
+
+Also folded in lingering prettier reflows (format-only, no behavior change).
