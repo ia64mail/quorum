@@ -99,13 +99,15 @@ The communication backbone connecting all agents.
 | **Messaging** | Message broker for agent-to-agent invocation |
 | **Workspace** | Read-write mount at `/mnt/quorum/workspace` (context file persistence) |
 
-**MCP Tools (7):**
+**MCP Tools (9):**
 
 | Tool | Purpose |
 |------|---------|
 | `invoke_agent` | Route inter-agent messages via Message Broker |
+| `wait_invocation` | Continue waiting on a pending invocation from `invoke_agent` (long-poll continuation, moderator-only — see [mcp-connectivity.md §3.6](mcp-connectivity.md#36-long-poll-continuation-moderator-only)) |
 | `register_agent` | Register an agent's role and callback URL |
 | `unregister_agent` | Remove an agent from the registry |
+| `new_conversation` | Mint a per-turn correlation ID and clear session cache |
 | `context_store` | Write context items (scoped by project/conversation/agent) |
 | `context_query` | Read context with mode selection (`keys`, `search`, `get-all`) |
 | `context_summarize` | Compress conversation context (POC: truncation-based) |

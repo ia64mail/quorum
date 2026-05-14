@@ -254,6 +254,20 @@ Add a dedicated `/app/logs/context-search-{startupTimestamp}.jsonl` stream that 
 
 **Full ticket:** [QRM7-016](QRM7-016-context-search-observability.md)
 
+### QRM7-017 — Long-Poll Continuation Implementation
+
+**Status:** Open (filed 2026-05-13)
+
+Implements the long-poll continuation pattern designed in QRM7-015 (research, accepted). When the moderator calls `invoke_agent` targeting a role whose `ROLE_TIMEOUTS` exceeds 270 s, the server races the broker's delivery against a 4 min 30 s server timer. If the timer wins, the server stores the in-flight invocation in a new `InvocationResultStore` and returns `{ status: "pending", invocationId }`. The moderator calls `wait_invocation(invocationId)` — a new MCP tool — to continue waiting, repeating until the result lands. Sub-5-min calls have zero overhead. Agent-to-agent calls are unaffected.
+
+Single ticket covering: `InvocationResultStore`, `invoke_agent` racing logic, `wait_invocation` MCP tool, caller-aware policy (moderator-only), `callerRole` auto-bind sidecar (~10 lines), CLAUDE.md rule.
+
+**Touches:** `apps/mcp-server/src/mcp/mcp.service.ts`, `apps/mcp-server/src/mcp/mcp.controller.ts`, new `apps/mcp-server/src/messaging/invocation-result-store.ts`, `apps/mcp-server/src/messaging/role-timeouts.ts` (read-only ref), `CLAUDE.md`, spec files
+
+**Depends on:** QRM7-015 (research, accepted), QRM7-014 (done — keepalive infrastructure)
+
+**Full ticket:** [QRM7-017](QRM7-017-long-poll-continuation-implementation.md)
+
 ---
 
 ## Dependency Graph
@@ -275,6 +289,7 @@ QRM7-013 (Moderator OAuth Refresh)    ─── after QRM7-007 (DONE) — open
 QRM7-014 (Live SSE Response Signal)   ─── after QRM7-012 (DONE 2026-05-10)
 QRM7-015 (Long-Call Delivery Research)─── after QRM7-014 (research, open) — implementation ticket TBD
 QRM7-016 (Context Search Observability) ─── independent (open 2026-05-12)
+QRM7-017 (Long-Poll Continuation)      ─── after QRM7-015 + QRM7-014 (open 2026-05-13)
 ```
 
 QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 and QRM7-011 are both closed via supersession on the same operational bug — the moderator-reap regression. QRM7-012 carries the bug forward with the corrected mechanism: CC CLI opens SSE on init, QRM7-011-B's exemption is dead code, and `Session not found` reproduces on any SSE-stream death plus 2 min of POST silence. QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.

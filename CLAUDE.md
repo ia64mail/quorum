@@ -109,3 +109,7 @@ The system enables high-level task decomposition through agent collaboration. Ex
 8. Moderator invokes QA for testing
 
 All inter-agent communication flows through `invoke_agent` on the MCP server. Agents use a pull-based context model — they receive minimal bootstrap context and query the Context Store for what they need.
+
+### Long-Poll Continuation
+
+When any MCP tool response carries `status: "pending"` with an `invocationId`, the work is still running server-side. Immediately call `wait_invocation(invocationId)` to continue waiting. Repeat if `wait_invocation` also returns pending. Stop only when status is "completed" or "failed".

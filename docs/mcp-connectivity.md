@@ -270,6 +270,8 @@ sequenceDiagram
     Server-->>Caller: InvokeResponse
 ```
 
+> **Long-poll note:** The diagram above shows the synchronous request/response path, which applies to all agent-to-agent calls and moderator calls targeting short-timeout roles (productowner, moderator). For moderator → long-timeout-role calls (teamlead, architect, qa, developer), the response may be split across multiple POSTs via the long-poll continuation protocol — see §3.6.
+
 ### 3.4 Reconnection
 
 The agent's transport carries an `onclose` handler. If it fires while `shuttingDown=false`, the agent runs `handleReconnection()`:
@@ -308,6 +310,83 @@ sequenceDiagram
 
 1. `unregister()` → `unregister_agent` tool call (best-effort).
 2. `closeTransport()` → SDK translates to `DELETE /mcp`, which the controller's `handleDelete` processes by closing the transport, which fires `transport.onclose` → maps cleared, state disposed.
+
+### 3.6 Long-poll continuation (moderator-only)
+
+When the moderator calls `invoke_agent` targeting a role whose `ROLE_TIMEOUTS` exceeds 270 s (teamlead, architect, qa, developer), the server races the broker's delivery against a 4 min 30 s server-side ceiling (`LONG_POLL_CEILING_MS`). If the broker resolves first, the result returns inline — identical to the synchronous path in §3.3, zero overhead. If the ceiling fires first, the server parks the in-flight invocation in an `InvocationResultStore` and returns `{ status: "pending", invocationId }`. The moderator then calls `wait_invocation(invocationId)` to continue waiting, repeating until the result lands.
+
+This protocol exists because CC CLI's bundled undici enforces a ~5 min `bodyTimeout` on POST response bodies. The 270 s ceiling ensures each POST completes well before the client's HTTP stack kills the response. Agent-to-agent calls are unaffected — they use the 35-min undici dispatcher controlled by the agent container (§3.2).
+
+#### Caller-aware gating
+
+The long-poll path only activates when **both** conditions hold:
+
+1. `callerRole === 'moderator'`
+2. `ROLE_TIMEOUTS[target] > LONG_POLL_CEILING_MS` (270 000 ms)
+
+| Caller | Target | Role timeout | Path |
+|---|---|---|---|
+| Any agent | Any agent | 2–30 min | **Sync** — 35-min undici dispatcher |
+| Moderator | productowner | 2 min | **Sync** — under 270 s ceiling |
+| Moderator | moderator | 5 min | **Sync** — elicitation, under 270 s ceiling |
+| Moderator | teamlead | 10 min | **Long-poll** — exceeds ceiling |
+| Moderator | architect | 15 min | **Long-poll** — exceeds ceiling |
+| Moderator | qa | 15 min | **Long-poll** — exceeds ceiling |
+| Moderator | developer | 30 min | **Long-poll** — exceeds ceiling |
+
+#### Response envelope
+
+`invoke_agent` and `wait_invocation` share a common response shape:
+
+| Status | Meaning | Fields |
+|---|---|---|
+| `completed` | Agent finished successfully | `{ status, response }` |
+| `failed` | Agent timed out or errored | `{ status, response }` (with `success: false`) or `{ status, error }` |
+| `pending` | Ceiling timer fired; work still in flight | `{ status, invocationId, next }` |
+
+#### `wait_invocation` semantics
+
+1. Look up `invocationId` in the `InvocationResultStore`.
+2. Not found → return `{ status: "failed", error: "Unknown invocationId" }`.
+3. Record already completed or failed → return stored result immediately (sub-ms).
+4. Record still pending → race `record.deliveryPromise` against a fresh 270 s timer. Return `completed`/`failed` if delivery wins, or `pending` if the ceiling fires again.
+
+Each `wait_invocation` call is stateless — an independent long-poll window on the same underlying `deliveryPromise`. Multiple calls can `.then()` on the same promise without re-invoking the agent.
+
+#### `callerRole` auto-bind sidecar
+
+If the moderator's CC CLI session recycles mid-invocation (new `POST /mcp { initialize }` without re-running `register_agent`), the new session has no `callerRole`. The `wait_invocation` handler resolves `callerRole` from the stored record's `callerRole` field, preventing a `callerRole is required` rejection and allowing result retrieval to proceed on the new session.
+
+#### InvocationResultStore TTL
+
+Records are reaped on the existing 30 s reaper interval (§2.5). TTL per record = `ROLE_TIMEOUTS[target] + 10 min`. For the longest role (developer, 30 min) this means records survive up to 40 min — generous because the store is bounded by `maxCallDepth × concurrent moderator sessions` (in practice <20 entries) and records must outlive the agent's work to allow retrieval after completion.
+
+#### Protocol sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Mod as moderator (CC CLI)
+    participant Server as MCP server
+    participant Store as InvocationResultStore
+    participant BR as MessageBroker
+    participant Target as target agent (e.g. developer)
+    Mod->>Server: invoke_agent { target: developer }
+    Server->>BR: deliveryPromise = messageBroker.invoke(request)
+    Server->>Server: race deliveryPromise vs 270 s ceiling
+    Note over Server: ceiling fires at 270 s — broker still pending
+    Server->>Store: store({ invocationId, deliveryPromise, status: pending })
+    Server-->>Mod: { status: "pending", invocationId }
+    Note over Mod: CLAUDE.md rule: call wait_invocation immediately
+    Mod->>Server: wait_invocation(invocationId)
+    Server->>Store: get(invocationId) → status: pending
+    Server->>Server: race deliveryPromise vs fresh 270 s ceiling
+    Note over BR,Target: developer finishes during this window
+    Target-->>BR: InvokeResponse { success: true }
+    BR-->>Server: deliveryPromise resolves
+    Note over Store: .then() handler updates record:<br/>status=completed, response stored
+    Server-->>Mod: { status: "completed", response }
+```
 
 ---
 
@@ -433,6 +512,16 @@ The broker applies a per-role timeout when delivering an invocation. Defined in 
 
 Timeout is applied as a timeout-vs-delivery race in `deliverWithTimeout` (an explicit `new Promise(resolve => ...)` with a `setTimeout` racing against `delivery.then/catch`); on expiry the broker resolves with `{ success: false, error: 'Agent <role> timed out after <ms>ms' }` without throwing. This is independent of — and shorter than — the underlying undici `headersTimeout`/`bodyTimeout` on both sides (35 min), which exist solely to keep the HTTP connection from being killed before the role timeout has a chance to fire.
 
+With the long-poll continuation protocol (§3.6), three timeout layers now govern a moderator → long-role invocation:
+
+| Layer | Value | Authority | What it bounds |
+|---|---|---|---|
+| Long-poll ceiling | 270 s (`LONG_POLL_CEILING_MS`) | `mcp.service.ts` `raceAgainstCeiling()` | Maximum hold time for a single POST response before the server returns `pending` |
+| Per-role broker timeout | 2–30 min (`ROLE_TIMEOUTS`) | `message-broker.service.ts` `deliverWithTimeout()` | Deadline for the agent to complete its work — fires `{ success: false }` on expiry |
+| Undici dispatcher | 35 min (`headersTimeout` / `bodyTimeout`) | Agent + server undici `Agent` config | Transport ceiling — prevents HTTP stacks from killing the connection before role timeout fires |
+
+The role-timeout table itself is unchanged. The long-poll ceiling is a protocol-envelope concern (how to chunk the response for CC CLI's `bodyTimeout`), not a delivery-deadline concern — the broker's `deliverWithTimeout` and role-timeout semantics remain the sole authority for when work is considered timed out.
+
 ---
 
 ## 6. Cadence reference
@@ -446,6 +535,8 @@ Timeout is applied as a timeout-vs-delivery race in `deliverWithTimeout` (an exp
 | 2 s × N | agent connect retry | linear backoff, 10 attempts max |
 | 30 s | agent undici keepAliveInitialDelay | TCP keepalive on outbound transport |
 | 35 min | undici `headersTimeout` / `bodyTimeout` | both directions; allows the per-role timeouts above to be the sole authority |
+| 270 s | long-poll ceiling (`LONG_POLL_CEILING_MS`) | max hold time per POST in the long-poll continuation protocol (§3.6); must be under CC CLI's ~5 min `bodyTimeout` |
+| 40 min (max) | InvocationResultStore TTL | `ROLE_TIMEOUTS[target] + 10 min`; longest for developer (30 + 10 min); reaped on the 30 s reaper interval |
 
 ---
 
@@ -499,6 +590,8 @@ sequenceDiagram
 
 ### 7.3 Long-running invoke_agent — keepalive in action
 
+> **See also §7.4** for the long-poll continuation protocol, which is now the protocol-level model for moderator-driven long calls. The SSE keepalive flow below still operates at the transport level underneath each held POST window.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -521,6 +614,53 @@ sequenceDiagram
 
 The 15 s pings keep `lastSeenAt` continuously fresh on the moderator's session for the full duration of the invocation, regardless of whether its `GET /mcp` SSE happens to be open at that moment.
 
+### 7.4 Long-running invoke_agent — long-poll continuation
+
+End-to-end flow for a moderator → developer invocation that takes ~9 minutes, showing two pending cycles and final completion. Each held POST receives the same 15 s keepalive pings from §7.3 at the transport level.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Mod as moderator (CC CLI)
+    participant Server as MCP server
+    participant Dev as developer
+    Mod->>Server: POST /mcp invoke_agent { target: developer }
+    Server-->>Mod: 200 text/event-stream + : ready
+    par SSE keepalive (transport level)
+        loop every 15 s while POST open
+            Server-->>Mod: : ping (touchSession)
+        end
+    and broker delivers to developer
+        Server->>Dev: POST /invoke
+    end
+    Note over Server: 270 s ceiling fires — developer still working
+    Server-->>Mod: { status: "pending", invocationId: "inv_7c2a" }
+    Note over Mod: CLAUDE.md rule: immediately call wait_invocation
+    Mod->>Server: POST /mcp wait_invocation { invocationId: "inv_7c2a" }
+    Server-->>Mod: 200 text/event-stream + : ready
+    par SSE keepalive
+        loop every 15 s
+            Server-->>Mod: : ping
+        end
+    and waiting on deliveryPromise
+        Note over Server: race deliveryPromise vs fresh 270 s ceiling
+    end
+    Note over Server: 270 s ceiling fires again — still pending
+    Server-->>Mod: { status: "pending", invocationId: "inv_7c2a" }
+    Mod->>Server: POST /mcp wait_invocation { invocationId: "inv_7c2a" }
+    Server-->>Mod: 200 text/event-stream + : ready
+    Note over Dev,Server: developer finishes at ~549 s total
+    Dev-->>Server: 200 InvokeResponse { success: true }
+    Note over Server: deliveryPromise resolves → record.status=completed
+    Server-->>Mod: { status: "completed", response: { success: true, ... } }
+```
+
+Key observations:
+- Each POST window is capped at 270 s, safely under CC CLI's ~5 min `bodyTimeout`.
+- The SSE keepalive pings (§2.3) fire on every held POST, keeping `lastSeenAt` fresh and preventing idle-reaping during the wait.
+- The developer's work runs continuously server-side — the pending/wait cycle is purely a protocol-envelope concern for the moderator's HTTP transport.
+- If the moderator presses Esc mid-wait, the in-flight POST dies but the invocation continues. The next `wait_invocation` call (on a new or existing session) picks up the result from the `InvocationResultStore`.
+
 ---
 
 ## 8. Quick reference
@@ -539,17 +679,27 @@ The 15 s pings keep `lastSeenAt` continuously fresh on the moderator's session f
 | `Agent <role> registered at <url>` | `register_agent` handler | HTTP delivery (agents) |
 | `Agent <role> registered via MCP elicitation (session-bound)` | `register_agent` handler | elicitation delivery (moderator) |
 | `POST close: sessionId=<id> ... keepaliveFired=<bool>` | POST instrumentation | whether the long-running SSE keepalive engaged on this POST |
+| `Stored invocation: id=<id> caller=<role> target=<role> status=pending` | `InvocationResultStore.store` | long-poll record parked after 270 s ceiling fired |
+| `invoke_agent returning pending: correlationId=<id> invocationId=<id> target=<role> handlerMs=<ms>` | `invoke_agent` handler | pending envelope returned to moderator; `handlerMs` ≈ 270 000 |
+| `Invocation landed (async): id=<id> target=<role> success=<bool>` | `invoke_agent` `.then()` handler | broker resolved after the pending return; record updated in store |
+| `Invocation failed (async): id=<id> target=<role> error=<msg>` | `invoke_agent` `.then()` handler (warn) | broker rejected or `deliveryPromise` threw after the pending return |
+| `wait_invocation: still pending for <id>` | `wait_invocation` handler (debug) | 270 s ceiling fired again; another `wait_invocation` cycle needed |
+| `wait_invocation: delivery resolved for <id>` | `wait_invocation` handler (debug) | `deliveryPromise` resolved within this wait window |
+| `wait_invocation: immediate return for <id> status=<status>` | `wait_invocation` handler (debug) | record was already completed/failed when the call arrived |
+| `wait_invocation: auto-bound callerRole=<role> from invocation record <id>` | `wait_invocation` handler | session had no role; resolved from stored record (§3.6 auto-bind sidecar) |
+| `Reaped <N> stale invocation record(s), <N> remaining` | `InvocationResultStore.reapStaleInvocations` | TTL-expired records cleaned on 30 s reaper cycle |
 
 **Where to look in code:**
 
 | Concern | File |
 |---|---|
 | HTTP routing, session maps, reaper, SSE keepalive | `apps/mcp-server/src/mcp/mcp.controller.ts` |
-| Per-session McpServer, state, liveness predicate, tool handlers | `apps/mcp-server/src/mcp/mcp.service.ts` |
+| Per-session McpServer, state, liveness, invoke_agent racing logic, wait_invocation tool | `apps/mcp-server/src/mcp/mcp.service.ts` |
 | Registry / one-connection-per-role | `apps/mcp-server/src/registry/agent-registry.service.ts` |
 | HTTP connection abstraction (agents) | `apps/mcp-server/src/registry/http-agent-connection.ts` |
 | Elicitation connection abstraction (moderator) | `apps/mcp-server/src/registry/mcp-elicitation-connection.ts` |
 | Broker, depth/circular safeguards, role timeouts | `apps/mcp-server/src/messaging/message-broker.service.ts` |
+| Long-poll continuation: invocation store + TTL reaping | `apps/mcp-server/src/messaging/invocation-result-store.ts` |
 | Per-role timeout values | `apps/mcp-server/src/messaging/role-timeouts.ts` |
 | Agent client (connect, register, retry, shutdown) | `apps/agent/src/connection/mcp-client.service.ts` |
 | Agent inbound `/invoke` endpoint | `apps/agent/src/connection/invocation.controller.ts` |
