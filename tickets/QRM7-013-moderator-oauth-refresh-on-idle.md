@@ -1,6 +1,6 @@
 # QRM7-013: Moderator OAuth Access Token Not Auto-Refreshed Across Long Idle
 
-**Status: Open (filed 2026-05-09)**
+**Status: Code-complete (2026-05-14) — human-run steps pending (token issuance, /status check, hibernation regression test)**
 
 ## Summary
 
@@ -195,3 +195,37 @@ The OAuth credentials from prior `/login` runs remain on the volume; CC CLI's au
 - **Independent of [QRM7-012](QRM7-012-sse-stream-death-reaps-moderator.md)** (SSE-stream-death reaping). Different layer (Anthropic identity service vs MCP transport), different failure surface, different fix. Both should land — they compound on hibernation resume.
 - **Independent of [QRM7-008](QRM7-008-agent-retry-races-mcp-initialize.md)** — agent-side retry race; this ticket is moderator-side auth.
 - **Not** the [QRM7-003](QRM7-003-moderator-permission-grants-not-persisting.md) permission-grant regression. Different file (`~/.claude/.credentials.json` vs `<cwd>/.claude/settings.local.json`), different cause (token TTL vs read-only path), different fix. The QRM8 design run log § Issue 1 explicitly disambiguates the two.
+
+## Implementation Notes
+
+**Status:** Partial (code-side complete; human-run steps pending)
+
+**Date:** 2026-05-14
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `docker-compose.yml` | Modified | Added `CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}` to the moderator service's `environment:` block (line 170). Not added to `x-shared-env` — agents remain on `ANTHROPIC_API_KEY`. |
+| `.env.example` | Modified | Documented `CLAUDE_CODE_OAUTH_TOKEN` with issuance procedure (`claude setup-token`), subscription-tier requirement, billing context (QRM7-007), and ticket reference. Updated `ANTHROPIC_API_KEY` heading from `(terminal, agent)` to `(agents only)`. |
+| `docker/moderator/claude.json` | Modified | Added `"hasCompletedOnboarding": true` so the entrypoint's `jq -s '.[0] * .[1]'` merge propagates it on every start, suppressing first-run onboarding on fresh volumes. |
+| `tickets/QRM7-013-moderator-oauth-refresh-on-idle.md` | Modified | Flipped 6 code-resolvable acceptance criteria checkboxes; 3 human-only items remain unchecked. |
+
+### Verification
+
+- `npm run build` — compiles successfully
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 748 tests passing (0 new — config-only change, no new test surface)
+- `.env` confirmed in `.gitignore` (line 16)
+- `CLAUDE_CODE_OAUTH_TOKEN` is NOT in `x-shared-env` (verified in docker-compose.yml lines 7–17)
+- Agent services (architect, teamlead, developer) all inherit `<<: *shared-env` — no exposure to the moderator token
+- Entrypoint merge (`docker/moderator/entrypoint.sh:37-45`) uses baked-wins semantics (`jq -s '.[0] * .[1]'`): `hasCompletedOnboarding: true` propagates on fresh and existing volumes; existing CC CLI state (oauth, projects) survives
+- QRM7-007 "Token refresh" section already softened (2026-05-09) with cross-reference to QRM7-013 — pre-dates this commit
+- QRM7-000 Post-QRM7-001 Findings table already contains QRM7-013 row — pre-dates this commit
+
+### Pending Human-Run Steps (block ticket close)
+
+Three acceptance criteria require manual execution inside the rebuilt moderator container:
+1. `claude setup-token` — one-time token issuance, add to `.env`
+2. `claude /status` — verify subscription auth is active
+3. ≥ 12-hour hibernation regression test — the load-bearing acceptance test
