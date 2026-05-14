@@ -374,6 +374,8 @@ Two YAML anchors provide shared configuration:
 | `x-shared-env` | Common env vars (Anthropic API, MCP server URL, logging) |
 | `x-agent-security` | Security constraints (read-only fs, dropped caps, tmpfs mounts) |
 
+Agents authenticate via `ANTHROPIC_API_KEY` on `x-shared-env` (metered Anthropic API billing). The moderator authenticates separately via `CLAUDE_CODE_OAUTH_TOKEN` in its own environment block (flat-rate subscription-seat billing). These are deliberately separate billing tiers — the subscription token must never appear on `x-shared-env` to prevent billing-path conflation (see [QRM7-007](../tickets/QRM7-007-moderator-subscription-auth.md), [QRM7-013](../tickets/QRM7-013-moderator-oauth-refresh-on-idle.md)).
+
 **Services** (8 deployed): `mcp-server` (port 3000, default target), `moderator` (moderator target), `architect`, `teamlead`, `developer` (each port 3002, agent target), `opensearch` (port 9200), `ollama` (port 11434), `ollama-init` (init container, runs to completion). All agent containers share `x-agent-security` constraints and mount the workspace read-write. All services write logs to a shared bind-mounted `./logs` directory. Named volumes `opensearch-data`, `ollama-data`, and `moderator-claude-data` persist index data, model weights, and moderator state.
 
 The qa and productowner roles are fully defined (permissions, prompts, timeouts) but not yet added as compose services.
