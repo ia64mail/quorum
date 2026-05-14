@@ -100,6 +100,14 @@ QRM5-003, 2 commits (abc1234..def5678). Focus on error handling in HttpAgentConn
 
 Use natural language `action` only for non-review tasks (implementation, data retrieval, task decomposition).
 
+### Sizing implementation dispatches
+
+When dispatching `developer` for implementation, split into separate invocations whenever the ticket has > 3 logical units, > ~10 acceptance criteria, or expects > 4 commits. Pass `sessionId: ""` on each split invocation (or split across user turns, where `new_conversation` produces the same effect) — this discharges the cumulative-transcript cost that builds up across turns. Resumed sessions preserve the prior transcript on every turn's input, so resume does NOT save cost — only fresh sessions do. Brief each fresh invocation with the SHA / file path of the prior unit's commit so the developer can pick up the thread.
+
+### Gating `/simplify`
+
+`/simplify` is the most expensive per-turn skill (it spawns sub-agents). Dispatch it only when one of the following is true: (a) the implementation touched > 7 source files, (b) the developer's own report flagged TODOs / hygiene concerns / format-only churn, or (c) the prior iteration introduced new abstractions. Otherwise skip and go straight to `/code-review`.
+
 ## Context Management
 
 - **Store** session-level decisions in **project** scope (what the user requested, which approach was approved)
@@ -138,6 +146,10 @@ One row per `invoke_agent` call, in chronological order — multiple calls to th
 
 `invoke_agent` returns a JSON envelope containing `totalCostUsd`, `durationMs`, and `sessionId` directly. Parse each tool result as you go and accumulate the rows for the end-of-turn summary.
 
+### Cost feedback
+
+If a single `invoke_agent` row in the table exceeds $3.00, briefly call out to the user that the task was large and could likely be split next time. Cost transparency works best when paired with a concrete next-time suggestion.
+
 ### When to skip
 
 Skip the table only when the turn made zero agent invocations. Render it for single-invocation turns too — the per-turn cost signal is cheap and builds the user's intuition.
@@ -174,7 +186,9 @@ Files follow `{role}-{YYYYMMDDTHHmmss}.jsonl` where the timestamp is the contain
 
 Agent sessions are tracked server-side. When you invoke the same agent role multiple times within a turn, the agent automatically resumes its prior session with full conversation history. This is handled transparently — you do not pass `sessionId`.
 
-**What resume actually sends to the agent (important):** On resume, the agent receives **only the new task message you provide** — its role system prompt and any Prior Decisions bootstrap context are **NOT re-injected**, because the resumed session already carries them in its conversation history. This is by design: it keeps the agent's context coherent and avoids re-paying input cost on every resume.
+**What resume actually sends to the agent (important):** On resume, the agent receives **only the new task message you provide** — its role system prompt and any Prior Decisions bootstrap context are **NOT re-injected**, because the resumed session already carries them in its conversation history. This is by design: it keeps the agent's context coherent and avoids re-injecting the bootstrap on every resume.
+
+**Cost behavior of resume.** The prior transcript is part of the input on every resumed turn. Anthropic's prompt cache TTL is ~5 min — within that window the transcript reads at ~10× discount; past it, full input rates on the whole history. A tight back-to-back resume is cheap; a resume after a long idle (or while the user deliberates mid-turn) can cost more than starting fresh. When in doubt about idle gaps, prefer `sessionId: ""`.
 
 **Consequence — your follow-up action must fit the original session's intent.** The agent will interpret the new message as a continuation of the prior conversation. If you ask for something the prior system prompt or bootstrap context wouldn't have prepared the agent for (different ticket, different role expectation, fresh context), pass `sessionId: ""` to force a clean session — otherwise the agent operates with stale framing.
 
