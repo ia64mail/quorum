@@ -155,15 +155,15 @@ The OAuth credentials from prior `/login` runs remain on the volume; CC CLI's au
 
 ## Acceptance Criteria
 
-- [ ] `docker-compose.yml` moderator service `environment:` block exposes `CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}`
-- [ ] `.env.example` documents the variable and points to `claude setup-token` for issuance; `.env` itself is not committed
+- [x] `docker-compose.yml` moderator service `environment:` block exposes `CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}`
+- [x] `.env.example` documents the variable and points to `claude setup-token` for issuance; `.env` itself is not committed
 - [ ] One-time `claude setup-token` run inside the moderator produces a valid token; the token is added to `.env`
-- [ ] (Optional but recommended) `docker/moderator/claude.json` includes `"hasCompletedOnboarding": true` so the entrypoint merge propagates it on every start, suppressing first-run onboarding on fresh volumes
+- [x] (Optional but recommended) `docker/moderator/claude.json` includes `"hasCompletedOnboarding": true` so the entrypoint merge propagates it on every start, suppressing first-run onboarding on fresh volumes
 - [ ] Inside the running moderator, `claude /status` reports Claude.ai subscription auth (not API key, not "no auth")
 - [ ] **Regression test that QRM7-007 lacked:** after a ≥ 12-hour host hibernation, the first moderator prompt on resume does **not** surface `401 authentication_error` and does **not** require manual `/login`
-- [ ] Agent containers continue to invoke the Anthropic API successfully via `ANTHROPIC_API_KEY` — `CLAUDE_CODE_OAUTH_TOKEN` was added only to the moderator service, not to `x-shared-env`
-- [ ] [QRM7-007](QRM7-007-moderator-subscription-auth.md) "Token refresh" section softened and cross-references QRM7-013
-- [ ] [QRM7-000](QRM7-000-roadmap.md) Carry-Forward Registry / Post-QRM7-001 Findings table records this ticket alongside the existing entries
+- [x] Agent containers continue to invoke the Anthropic API successfully via `ANTHROPIC_API_KEY` — `CLAUDE_CODE_OAUTH_TOKEN` was added only to the moderator service, not to `x-shared-env`
+- [x] [QRM7-007](QRM7-007-moderator-subscription-auth.md) "Token refresh" section softened and cross-references QRM7-013
+- [x] [QRM7-000](QRM7-000-roadmap.md) Carry-Forward Registry / Post-QRM7-001 Findings table records this ticket alongside the existing entries
 
 ## Dependencies and References
 

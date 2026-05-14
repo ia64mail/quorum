@@ -167,6 +167,7 @@ services:
       # the agents.
       <<: *git-identity
       MCP_SERVER_URL: http://mcp-server:3000/mcp
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
