@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { InvocationResultStore } from '../messaging';
 import { McpService } from './mcp.service';
 
 /** QRM7-001: How often the reaper scans for stale sessions (ms). */
@@ -43,17 +44,20 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
   /** QRM7-001: periodic reaper that evicts stale sessions. */
   private reaperInterval?: ReturnType<typeof setInterval>;
 
-  constructor(private readonly mcpService: McpService) {}
+  constructor(
+    private readonly mcpService: McpService,
+    private readonly invocationResultStore: InvocationResultStore,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // Lifecycle — QRM7-001 liveness reaper
   // ---------------------------------------------------------------------------
 
   onModuleInit(): void {
-    this.reaperInterval = setInterval(
-      () => this.reapStaleSessions(),
-      REAPER_INTERVAL_MS,
-    );
+    this.reaperInterval = setInterval(() => {
+      this.reapStaleSessions();
+      this.invocationResultStore.reapStaleInvocations();
+    }, REAPER_INTERVAL_MS);
     this.reaperInterval.unref(); // Don't prevent process exit
   }
 

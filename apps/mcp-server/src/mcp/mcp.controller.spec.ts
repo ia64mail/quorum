@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import type { Request, Response } from 'express';
+import { InvocationResultStore } from '../messaging';
 import { McpController } from './mcp.controller';
 import { McpService } from './mcp.service';
 
@@ -84,7 +85,13 @@ describe('McpController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [McpController],
-      providers: [{ provide: McpService, useValue: mockMcpService }],
+      providers: [
+        { provide: McpService, useValue: mockMcpService },
+        {
+          provide: InvocationResultStore,
+          useValue: { reapStaleInvocations: jest.fn() },
+        },
+      ],
     }).compile();
 
     controller = module.get<McpController>(McpController);

@@ -12,14 +12,26 @@ import {
   ContextStore,
   INVOCABLE_AGENT_ROLES,
 } from '@app/common';
-import type { InvokeRequest } from '@app/common';
-import { MessageBroker } from '../messaging';
+import type { InvokeRequest, InvokeResponse } from '@app/common';
+import {
+  InvocationResultStore,
+  MessageBroker,
+  ROLE_TIMEOUTS,
+} from '../messaging';
+import type { InvocationRecord } from '../messaging';
 import {
   AgentRegistry,
   HttpAgentConnection,
   McpElicitationConnection,
 } from '../registry';
 import { McpServerConfigService } from '../config';
+
+/**
+ * Server-side long-poll ceiling (ms) for `invoke_agent` and `wait_invocation`
+ * (QRM7-017). Must be under undici's 5 min `bodyTimeout` (300 000 ms) so each
+ * POST completes before the client's HTTP stack kills the response body.
+ */
+export const LONG_POLL_CEILING_MS = 270_000; // 4 min 30 s
 
 /**
  * How long a session can be idle before isSessionAlive() returns false (QRM7-001).
@@ -116,6 +128,7 @@ export class McpService implements OnModuleInit {
     private readonly contextStore: ContextStore,
     private readonly registry: AgentRegistry,
     private readonly config: McpServerConfigService,
+    private readonly invocationResultStore: InvocationResultStore,
   ) {
     this.server = new McpServer({ name: 'quorum', version: '0.1.0' });
   }
@@ -240,6 +253,7 @@ export class McpService implements OnModuleInit {
   /** Register all tools and resources on the given server instance. */
   private registerTools(server: McpServer): void {
     this.registerInvokeAgentTool(server);
+    this.registerWaitInvocationTool(server);
     this.registerRegisterAgentTool(server);
     this.registerUnregisterAgentTool(server);
     this.registerContextStoreTool(server);
@@ -362,16 +376,98 @@ export class McpService implements OnModuleInit {
         };
 
         const handlerStart = Date.now();
-        const response = await this.messageBroker.invoke(request);
 
-        // Update session cache with returned sessionId
-        if (
-          state &&
-          typeof response.sessionId === 'string' &&
-          response.sessionId
-        ) {
-          state.agentSessions.set(target, response.sessionId);
+        // QRM7-017: Caller-aware long-poll racing.
+        // When the moderator targets a role whose ROLE_TIMEOUTS exceeds the
+        // long-poll ceiling (4m30s), race the broker against a server timer.
+        // If the broker wins, return inline (zero overhead — identical to
+        // today's sync path). If the timer wins, park the invocation in the
+        // InvocationResultStore and return { status: "pending" }.
+        const roleTimeout = ROLE_TIMEOUTS[target];
+        const useLongPoll =
+          callerRole === AgentRole.moderator &&
+          roleTimeout !== undefined &&
+          roleTimeout > LONG_POLL_CEILING_MS;
+
+        if (useLongPoll) {
+          const invocationId = randomUUID();
+          const deliveryPromise = this.messageBroker.invoke(request);
+
+          const winner = await this.raceAgainstCeiling(deliveryPromise);
+
+          if (winner.type === 'result') {
+            // Broker resolved within the ceiling — sync path
+            const response = winner.response;
+            this.updateSessionCache(state, target, response);
+            this.logger.debug(
+              `invoke_agent returning (long-poll sync): correlationId=${correlationId} ` +
+                `target=${args.target} success=${response.success} ` +
+                `handlerMs=${Date.now() - handlerStart}`,
+            );
+            return {
+              content: [
+                { type: 'text' as const, text: JSON.stringify(response) },
+              ],
+            };
+          }
+
+          // Timer won — park the invocation
+          const record: InvocationRecord = {
+            invocationId,
+            callerRole,
+            target,
+            status: 'pending',
+            deliveryPromise,
+            createdAt: Date.now(),
+          };
+          this.invocationResultStore.store(record);
+
+          // Wire a .then() to update the record when the broker resolves
+          deliveryPromise.then(
+            (response) => {
+              record.status = response.success ? 'completed' : 'failed';
+              record.response = response;
+              this.updateSessionCache(state, target, response);
+              this.logger.log(
+                `Invocation landed (async): id=${invocationId} ` +
+                  `target=${target} success=${response.success}`,
+              );
+            },
+            (err: unknown) => {
+              const message =
+                err instanceof Error ? err.message : 'Unknown error';
+              record.status = 'failed';
+              record.response = { success: false, error: message };
+              this.logger.warn(
+                `Invocation failed (async): id=${invocationId} ` +
+                  `target=${target} error=${message}`,
+              );
+            },
+          );
+
+          this.logger.log(
+            `invoke_agent returning pending: correlationId=${correlationId} ` +
+              `invocationId=${invocationId} target=${args.target} ` +
+              `handlerMs=${Date.now() - handlerStart}`,
+          );
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  status: 'pending',
+                  invocationId,
+                  next: 'call wait_invocation(invocationId)',
+                }),
+              },
+            ],
+          };
         }
+
+        // Default sync path — all non-moderator callers and short-timeout targets
+        const response = await this.messageBroker.invoke(request);
+        this.updateSessionCache(state, target, response);
 
         // QRM5-BUG-003 Phase 1 instrumentation: SDK write boundary.
         // Logged after broker resolution, immediately before the SDK serializes
@@ -386,6 +482,117 @@ export class McpService implements OnModuleInit {
 
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+        };
+      },
+    );
+  }
+
+  /**
+   * QRM7-017: `wait_invocation` — continue waiting for a pending invocation.
+   *
+   * Stateless long-poll: reads from the InvocationResultStore and races
+   * the stored `deliveryPromise` against a fresh 4m30s timer. Each call
+   * is an independent long-poll window on the same underlying work.
+   */
+  private registerWaitInvocationTool(server: McpServer): void {
+    server.registerTool(
+      'wait_invocation',
+      {
+        description:
+          'Continue waiting for a pending invoke_agent invocation. ' +
+          'Call this when invoke_agent returns status "pending" with an invocationId.',
+        inputSchema: {
+          invocationId: z
+            .string()
+            .describe('The invocationId from a pending invoke_agent response'),
+        },
+      },
+      async (args) => {
+        const state = this.sessionStates.get(server);
+
+        // Look up the invocation record
+        const record = this.invocationResultStore.get(args.invocationId);
+
+        // QRM7-017 Unit 4: callerRole auto-bind sidecar.
+        // When the moderator's CC CLI session recycled mid-invocation and
+        // hasn't called register_agent yet, resolve callerRole from the
+        // stored record so the session isn't rejected.
+        if (state && !state.role && record?.callerRole) {
+          state.role = record.callerRole;
+          this.logger.log(
+            `wait_invocation: auto-bound callerRole=${record.callerRole} ` +
+              `from invocation record ${args.invocationId}`,
+          );
+        }
+
+        if (!record) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  status: 'failed',
+                  error: 'Unknown invocationId',
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Completed or failed — return stored result immediately
+        if (record.status === 'completed' || record.status === 'failed') {
+          this.logger.debug(
+            `wait_invocation: immediate return for ${args.invocationId} ` +
+              `status=${record.status}`,
+          );
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  status: record.status,
+                  response: record.response,
+                }),
+              },
+            ],
+          };
+        }
+
+        // Pending — race deliveryPromise against a fresh 4m30s timer
+        const winner = await this.raceAgainstCeiling(record.deliveryPromise);
+
+        if (winner.type === 'result') {
+          this.logger.debug(
+            `wait_invocation: delivery resolved for ${args.invocationId}`,
+          );
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  status: winner.response.success ? 'completed' : 'failed',
+                  response: winner.response,
+                }),
+              },
+            ],
+          };
+        }
+
+        // Timer won again — still pending
+        this.logger.debug(
+          `wait_invocation: still pending for ${args.invocationId}`,
+        );
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                status: 'pending',
+                invocationId: args.invocationId,
+              }),
+            },
+          ],
         };
       },
     );
@@ -886,6 +1093,45 @@ export class McpService implements OnModuleInit {
         };
       },
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Race a delivery promise against the long-poll ceiling timer (QRM7-017).
+   * Returns a discriminated union so callers can branch on `type`.
+   */
+  private raceAgainstCeiling(
+    promise: Promise<InvokeResponse>,
+  ): Promise<
+    { type: 'result'; response: InvokeResponse } | { type: 'timeout' }
+  > {
+    return Promise.race([
+      promise.then((response) => ({
+        type: 'result' as const,
+        response,
+      })),
+      new Promise<{ type: 'timeout' }>((resolve) => {
+        const timer = setTimeout(
+          () => resolve({ type: 'timeout' }),
+          LONG_POLL_CEILING_MS,
+        );
+        timer.unref();
+      }),
+    ]);
+  }
+
+  /** Cache the target's sessionId from an invoke response (idempotent no-op guard). */
+  private updateSessionCache(
+    state: McpSessionState | undefined,
+    target: AgentRole,
+    response: InvokeResponse,
+  ): void {
+    if (state && typeof response.sessionId === 'string' && response.sessionId) {
+      state.agentSessions.set(target, response.sessionId);
+    }
   }
 
   // ---------------------------------------------------------------------------
