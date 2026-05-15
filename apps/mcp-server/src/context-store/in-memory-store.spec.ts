@@ -7,6 +7,7 @@ import {
   ContextScope,
   ContextStore,
 } from '@app/common';
+import type { SearchTrace } from '@app/common';
 import { contextStoreConfig } from '../config';
 import { InMemoryStore } from './in-memory-store';
 
@@ -459,6 +460,58 @@ describe('InMemoryStore', () => {
         'conv-1',
       );
       expect(results).toHaveLength(0);
+    });
+
+    it('should emit degenerate trace with engine=memory via onTrace callback', async () => {
+      let trace: SearchTrace | undefined;
+
+      const results = await store.search(
+        ContextScope.project,
+        'postgresql',
+        undefined,
+        undefined,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      expect(results).toHaveLength(1);
+      expect(trace).toBeDefined();
+      expect(trace!.engine).toBe('memory');
+      expect(trace!.hitCountRaw).toBe(1);
+      expect(trace!.hitCountReturned).toBe(1);
+      expect(trace!.truncatedByTokenBudget).toBe(false);
+      expect(trace!.errorMessage).toBeNull();
+      expect(trace!.results).toHaveLength(1);
+      expect(trace!.results[0].key).toBe('decision-1');
+      expect(trace!.results[0].score).toBeNull();
+      expect(trace!.results[0].includedInResult).toBe(true);
+      expect(trace!.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should report truncatedByTokenBudget=true when budget cuts hits (memory)', async () => {
+      let trace: SearchTrace | undefined;
+      const singleItemTokens = Math.ceil(
+        JSON.stringify('Use PostgreSQL for database').length / 4,
+      );
+
+      await store.search(
+        ContextScope.project,
+        'Use',
+        undefined,
+        singleItemTokens,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      expect(trace).toBeDefined();
+      expect(trace!.hitCountRaw).toBeGreaterThan(trace!.hitCountReturned);
+      expect(trace!.truncatedByTokenBudget).toBe(true);
+      const included = trace!.results.filter((r) => r.includedInResult);
+      const excluded = trace!.results.filter((r) => !r.includedInResult);
+      expect(included.length).toBe(1);
+      expect(excluded.length).toBeGreaterThan(0);
     });
   });
 

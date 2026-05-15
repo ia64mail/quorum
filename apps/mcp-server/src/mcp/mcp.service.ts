@@ -12,7 +12,8 @@ import {
   ContextStore,
   INVOCABLE_AGENT_ROLES,
 } from '@app/common';
-import type { InvokeRequest, InvokeResponse } from '@app/common';
+import type { InvokeRequest, InvokeResponse, SearchTrace } from '@app/common';
+import { ContextSearchTraceLogger } from '../observability';
 import {
   InvocationResultStore,
   MessageBroker,
@@ -129,6 +130,7 @@ export class McpService implements OnModuleInit {
     private readonly registry: AgentRegistry,
     private readonly config: McpServerConfigService,
     private readonly invocationResultStore: InvocationResultStore,
+    private readonly traceLogger: ContextSearchTraceLogger,
   ) {
     this.server = new McpServer({ name: 'quorum', version: '0.1.0' });
   }
@@ -867,16 +869,47 @@ export class McpService implements OnModuleInit {
         if (args.mode === 'search') {
           const maxTokens =
             args.maxTokens ?? this.config.context.defaultMaxTokens;
+          const queryId = randomUUID();
+          let capturedTrace: SearchTrace | undefined;
+
           const items = await this.contextStore.search(
             scope,
             args.query ?? '',
             id,
             maxTokens,
+            (trace) => {
+              capturedTrace = trace;
+            },
           );
+
+          const engine = capturedTrace?.engine ?? 'unknown';
+          const topScore = capturedTrace?.results[0]?.score;
           this.logger.debug(
             `context_query: scope=${scope} mode=search ` +
-              `id=${id ?? '_'} query="${args.query ?? ''}" → ${items.length} item(s)`,
+              `id=${id ?? '_'} queryId=${queryId} query="${args.query ?? ''}" ` +
+              `engine=${engine} → ${items.length} items (top_score=${topScore?.toFixed(2) ?? '_'})`,
           );
+
+          if (capturedTrace) {
+            this.traceLogger.log({
+              timestamp: new Date().toISOString(),
+              queryId,
+              correlationId: correlationId ?? null,
+              callerRole: state?.role ?? null,
+              scope,
+              id: id ?? null,
+              queryText: args.query ?? '',
+              maxTokens,
+              engine: capturedTrace.engine,
+              durationMs: capturedTrace.durationMs,
+              hitCountRaw: capturedTrace.hitCountRaw,
+              hitCountReturned: capturedTrace.hitCountReturned,
+              truncatedByTokenBudget: capturedTrace.truncatedByTokenBudget,
+              results: capturedTrace.results,
+              errorMessage: capturedTrace.errorMessage,
+            });
+          }
+
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(items) }],
           };

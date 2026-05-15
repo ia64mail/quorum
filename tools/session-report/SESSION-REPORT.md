@@ -169,6 +169,23 @@ Since QRM5, `context_query` supports `mode=search` (hybrid BM25 + k-NN over the 
 - Whether the embedding pipeline kept up (`EmbeddingPipelineService` logs should show `Embedded document […]` for each new item within ~90s).
 - Whether any degraded-to-BM25 fallback was logged (Ollama unreachable).
 
+### Context Search Trace Stream (post-QRM7-016)
+
+A dedicated JSONL stream at `logs/context-search-{startupTimestamp}.jsonl` captures full detail for every `context_query mode=search` invocation. Each record includes the verbatim query, engine choice (`hybrid`/`bm25-only`/`memory`), per-hit scores and snippets, token-budget truncation flag, timing, and error surface. The main MCP log retains a single-line breadcrumb with `queryId` linking to the detailed record.
+
+This stream is **not** consumed by `parse-logs.mjs` today. For ad-hoc search quality analysis:
+
+```bash
+# Score distribution
+jq -c '.extra.results[] | {score, key}' logs/context-search-*.jsonl
+
+# BM25-only fallbacks (embedding service degraded)
+jq -c 'select(.extra.engine == "bm25-only") | {queryId: .extra.queryId, query: .extra.queryText}' logs/context-search-*.jsonl
+
+# Token-budget truncations
+jq -c 'select(.extra.truncatedByTokenBudget == true) | {queryId: .extra.queryId, raw: .extra.hitCountRaw, returned: .extra.hitCountReturned}' logs/context-search-*.jsonl
+```
+
 ### Tips for Claude Code
 - The **Goal** and **User Prompt** are now first-class entries in the digest as `UserPrompt` and `ModeratorResponse` contexts — the adapter extracts them automatically from the CC CLI session log
 - Correlation IDs group related invocations within a single user turn; expect a new correlationId per turn (`new_conversation` rotates it)
@@ -189,6 +206,7 @@ All logs are JSONL with fields: `timestamp`, `level`, `context`, `message`, `age
 | mcp-server | `McpService` | `invoke_agent: caller → target` |
 | mcp-server | `MessageBroker` | `Invoke:` (start), `Completed:` (end + success) |
 | mcp-server | `InMemoryStore` | context load/save counts |
+| mcp-server (trace) | `ContextSearchTrace` | per-search detail: query, engine, scores, truncation (separate stream: `context-search-*.jsonl`) |
 | agent | `InvocationHandler` | `Invocation received:`, `Invocation complete:` (cost, turns, duration), `Invocation failed:` |
 | agent | `ClaudeCodeService` | `Session started:`, `SDK response:`, `SDK tool start/done/failed:`, `SDK reasoning:` |
 | agent | `McpClientService` | connection, registration, tool discovery |

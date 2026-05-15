@@ -3,6 +3,7 @@ import { AgentRole, ContextScope, ContextStore } from '@app/common';
 import type { InvokeRequest, InvokeResponse } from '@app/common';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { InvocationResultStore, MessageBroker } from '../messaging';
+import { ContextSearchTraceLogger } from '../observability';
 import { AgentRegistry, McpElicitationConnection } from '../registry';
 import { McpServerConfigService } from '../config';
 import {
@@ -134,6 +135,11 @@ const mockInvocationResultStore = {
   reapStaleInvocations: jest.fn(),
 };
 
+const mockTraceLogger = {
+  log: jest.fn(),
+  onModuleInit: jest.fn(),
+};
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -154,6 +160,10 @@ describe('McpService', () => {
         {
           provide: InvocationResultStore,
           useValue: mockInvocationResultStore,
+        },
+        {
+          provide: ContextSearchTraceLogger,
+          useValue: mockTraceLogger,
         },
       ],
     }).compile();
@@ -496,6 +506,7 @@ describe('McpService', () => {
         'REST',
         'conv-1',
         2000, // defaultMaxTokens from config
+        expect.any(Function),
       );
       const parsed = JSON.parse(textContent(result)) as unknown[];
       expect(parsed).toHaveLength(1);
@@ -517,7 +528,129 @@ describe('McpService', () => {
         'anything',
         undefined,
         500,
+        expect.any(Function),
       );
+    });
+
+    it('mode=search should invoke traceLogger.log with full trace record', async () => {
+      mockContextStore.search.mockImplementation(
+        (
+          _scope: string,
+          _query: string,
+          _id: string | undefined,
+          _maxTokens: number,
+          onTrace?: (trace: unknown) => void,
+        ) => {
+          if (onTrace) {
+            onTrace({
+              engine: 'hybrid',
+              durationMs: 42,
+              hitCountRaw: 1,
+              hitCountReturned: 1,
+              truncatedByTokenBudget: false,
+              results: [
+                {
+                  key: 'k1',
+                  score: 0.9,
+                  snippet: '"val"',
+                  tokensEstimate: 2,
+                  includedInResult: true,
+                },
+              ],
+              errorMessage: null,
+            });
+          }
+          return Promise.resolve([
+            { key: 'k1', value: 'val', scope: 'project' },
+          ]);
+        },
+      );
+
+      const handler = getToolHandler(service, 'context_query');
+      await handler({
+        scope: ContextScope.project,
+        mode: 'search',
+        query: 'test trace',
+      });
+
+      expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+      const calls = mockTraceLogger.log.mock.calls as Array<
+        [Record<string, unknown>]
+      >;
+      const record = calls[0][0];
+      expect(record.engine).toBe('hybrid');
+      expect(record.queryText).toBe('test trace');
+      expect(record.scope).toBe('project');
+      expect(record.maxTokens).toBe(2000);
+      expect(record.queryId).toBeDefined();
+      expect(typeof record.queryId).toBe('string');
+      expect(record.hitCountRaw).toBe(1);
+      expect(record.hitCountReturned).toBe(1);
+      expect(record.errorMessage).toBeNull();
+    });
+
+    it('mode=search breadcrumb should include queryId, engine, and top_score', async () => {
+      const loggerSpy = jest.spyOn(
+        (service as unknown as { logger: { debug: jest.Mock } }).logger,
+        'debug',
+      );
+
+      mockContextStore.search.mockImplementation(
+        (
+          _scope: string,
+          _query: string,
+          _id: string | undefined,
+          _maxTokens: number,
+          onTrace?: (trace: unknown) => void,
+        ) => {
+          if (onTrace) {
+            onTrace({
+              engine: 'bm25-only',
+              durationMs: 10,
+              hitCountRaw: 2,
+              hitCountReturned: 2,
+              truncatedByTokenBudget: false,
+              results: [
+                {
+                  key: 'a',
+                  score: 1.5,
+                  snippet: '"a"',
+                  tokensEstimate: 1,
+                  includedInResult: true,
+                },
+                {
+                  key: 'b',
+                  score: 0.8,
+                  snippet: '"b"',
+                  tokensEstimate: 1,
+                  includedInResult: true,
+                },
+              ],
+              errorMessage: null,
+            });
+          }
+          return Promise.resolve([
+            { key: 'a', value: 'a', scope: 'project' },
+            { key: 'b', value: 'b', scope: 'project' },
+          ]);
+        },
+      );
+
+      const handler = getToolHandler(service, 'context_query');
+      await handler({
+        scope: ContextScope.project,
+        mode: 'search',
+        query: 'breadcrumb test',
+      });
+
+      const debugCalls = loggerSpy.mock.calls.map((c) => c[0] as string);
+      const breadcrumb = debugCalls.find((msg) => msg.includes('mode=search'));
+      expect(breadcrumb).toBeDefined();
+      expect(breadcrumb).toContain('queryId=');
+      expect(breadcrumb).toContain('engine=bm25-only');
+      expect(breadcrumb).toContain('top_score=1.50');
+
+      loggerSpy.mockRestore();
     });
 
     it('mode=get-all should return all items for scope', async () => {

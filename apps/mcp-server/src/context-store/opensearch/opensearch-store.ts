@@ -12,6 +12,7 @@ import {
   SetParams,
   toEmbeddingText,
 } from '@app/common';
+import type { SearchTrace, SearchTraceHit } from '@app/common';
 import { opensearchConfig } from '../../config/opensearch.config';
 import { OpenSearchSetupService } from './opensearch-setup.service';
 import { EmbeddingService } from '../../embedding/embedding.service';
@@ -23,7 +24,7 @@ interface GetResponse {
 
 /** OpenSearch search response shape. */
 interface SearchResponse<T = ContextItem> {
-  body: { hits: { hits: Array<{ _source: T }> } };
+  body: { hits: { hits: Array<{ _source: T; _score?: number }> } };
 }
 
 /**
@@ -198,7 +199,9 @@ export class OpenSearchStore extends ContextStore {
     query: string,
     id?: string,
     maxTokens?: number,
+    onTrace?: (trace: SearchTrace) => void,
   ): Promise<ContextItem[]> {
+    const startMs = Date.now();
     const scopeAndTtlFilter = [
       { term: { scope: scope } },
       { term: { id: id ?? '_' } },
@@ -206,12 +209,14 @@ export class OpenSearchStore extends ContextStore {
     ];
 
     let body: Record<string, unknown>;
+    let engine: 'hybrid' | 'bm25-only';
 
     try {
       const queryEmbedding = await this.embeddingService.embedQuery(query);
 
       if (queryEmbedding) {
         // Hybrid query: BM25 + k-NN
+        engine = 'hybrid';
         this.logger.debug(`Hybrid search for scope=${scope}: "${query}"`);
         body = {
           _source: { excludes: ['embedding', 'embeddingText'] },
@@ -244,6 +249,7 @@ export class OpenSearchStore extends ContextStore {
         };
       } else {
         // BM25-only fallback
+        engine = 'bm25-only';
         this.logger.debug(
           `BM25-only search for scope=${scope} (embedding unavailable): "${query}"`,
         );
@@ -274,21 +280,56 @@ export class OpenSearchStore extends ContextStore {
       const tokenBudget = maxTokens ?? Infinity;
       let consumed = 0;
       const results: ContextItem[] = [];
+      const traceHits: SearchTraceHit[] = [];
+      const rawHits = response.body.hits.hits;
 
-      for (const hit of response.body.hits.hits) {
+      for (const hit of rawHits) {
         const tokens = this.estimateTokens(hit._source.value);
-        if (consumed + tokens > tokenBudget) {
-          break;
+        const valueStr = JSON.stringify(hit._source.value);
+        const fits = consumed + tokens <= tokenBudget;
+        if (fits) {
+          consumed += tokens;
+          results.push(hit._source);
         }
-        consumed += tokens;
-        results.push(hit._source);
+        traceHits.push({
+          key: hit._source.key,
+          score: hit._score ?? null,
+          snippet: valueStr.slice(0, 200),
+          tokensEstimate: tokens,
+          includedInResult: fits,
+        });
+      }
+
+      if (onTrace) {
+        onTrace({
+          engine,
+          durationMs: Date.now() - startMs,
+          hitCountRaw: rawHits.length,
+          hitCountReturned: results.length,
+          truncatedByTokenBudget: results.length < rawHits.length,
+          results: traceHits,
+          errorMessage: null,
+        });
       }
 
       return results;
     } catch (error) {
-      this.logger.error(
-        `Failed to search scope=${scope}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to search scope=${scope}: ${errorMessage}`);
+
+      if (onTrace) {
+        onTrace({
+          engine: 'bm25-only',
+          durationMs: Date.now() - startMs,
+          hitCountRaw: 0,
+          hitCountReturned: 0,
+          truncatedByTokenBudget: false,
+          results: [],
+          errorMessage,
+        });
+      }
+
       return [];
     }
   }
