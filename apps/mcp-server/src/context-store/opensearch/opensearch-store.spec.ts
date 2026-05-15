@@ -626,6 +626,65 @@ describe('OpenSearchStore', () => {
       expect(results[0].key).toBe('a');
     });
 
+    it('should not include later hits even if they fit after a budget-exceeding hit', async () => {
+      mockEmbedQuery.mockResolvedValue(null);
+      // hit a: "aa" → 4 chars → ceil(4/4) = 1 token
+      // hit b: long value → exceeds budget
+      // hit c: "cc" → 4 chars → ceil(4/4) = 1 token (would fit, but budget is exhausted)
+      mockSearch.mockResolvedValue(
+        makeHits(
+          [
+            {
+              key: 'a',
+              value: 'aa',
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+            {
+              key: 'b',
+              value: 'x'.repeat(100),
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+            {
+              key: 'c',
+              value: 'cc',
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+          ],
+          [3.0, 2.0, 1.0],
+        ),
+      );
+      const { store } = createStore();
+      let trace: SearchTrace | undefined;
+
+      const results = await store.search(
+        ContextScope.project,
+        'test',
+        undefined,
+        2,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      // Only hit a should be in results — hit c must NOT slip in past hit b
+      expect(results).toHaveLength(1);
+      expect(results[0].key).toBe('a');
+
+      // Trace records all 3 hits but only hit a is includedInResult
+      expect(trace).toBeDefined();
+      expect(trace!.results).toHaveLength(3);
+      expect(trace!.results[0].includedInResult).toBe(true);
+      expect(trace!.results[1].includedInResult).toBe(false);
+      expect(trace!.results[2].includedInResult).toBe(false);
+      expect(trace!.truncatedByTokenBudget).toBe(true);
+    });
+
     it('should reference hybrid-search pipeline in hybrid query', async () => {
       const fakeEmbedding = new Array<number>(1024).fill(0.5);
       mockEmbedQuery.mockResolvedValue(fakeEmbedding);
@@ -763,7 +822,7 @@ describe('OpenSearchStore', () => {
       expect(trace!.results[0].score).toBe(1.2);
     });
 
-    it('should emit error trace when OpenSearch throws', async () => {
+    it('should emit error trace with engine=bm25-only when embedQuery returns null and search throws', async () => {
       mockEmbedQuery.mockResolvedValue(null);
       mockSearch.mockRejectedValue(new Error('cluster unavailable'));
       const { store } = createStore();
@@ -781,10 +840,34 @@ describe('OpenSearchStore', () => {
 
       expect(results).toEqual([]);
       expect(trace).toBeDefined();
+      expect(trace!.engine).toBe('bm25-only');
       expect(trace!.errorMessage).toBe('cluster unavailable');
       expect(trace!.hitCountRaw).toBe(0);
       expect(trace!.hitCountReturned).toBe(0);
       expect(trace!.results).toEqual([]);
+    });
+
+    it('should emit error trace with engine=hybrid when embedQuery succeeds but search throws', async () => {
+      const fakeEmbedding = new Array<number>(1024).fill(0.1);
+      mockEmbedQuery.mockResolvedValue(fakeEmbedding);
+      mockSearch.mockRejectedValue(new Error('timeout'));
+      const { store } = createStore();
+      let trace: SearchTrace | undefined;
+
+      const results = await store.search(
+        ContextScope.project,
+        'fail-hybrid',
+        undefined,
+        undefined,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      expect(results).toEqual([]);
+      expect(trace).toBeDefined();
+      expect(trace!.engine).toBe('hybrid');
+      expect(trace!.errorMessage).toBe('timeout');
     });
 
     it('should set truncatedByTokenBudget=true when budget cuts hits', async () => {

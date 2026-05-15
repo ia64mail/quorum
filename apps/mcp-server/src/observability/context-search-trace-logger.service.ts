@@ -1,6 +1,6 @@
 import { mkdirSync } from 'fs';
 import { join } from 'path';
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import * as winston from 'winston';
 
 /**
@@ -60,7 +60,7 @@ function traceJsonFormat(): winston.Logform.Format {
 }
 
 @Injectable()
-export class ContextSearchTraceLogger implements OnModuleInit {
+export class ContextSearchTraceLogger implements OnModuleInit, OnModuleDestroy {
   private logger!: winston.Logger;
 
   onModuleInit(): void {
@@ -86,6 +86,13 @@ export class ContextSearchTraceLogger implements OnModuleInit {
     this.logger = winston.createLogger({
       level: 'info',
       transports,
+    });
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      this.logger.close();
+      this.logger.on('finish', resolve);
     });
   }
 

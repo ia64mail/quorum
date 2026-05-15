@@ -209,7 +209,7 @@ export class OpenSearchStore extends ContextStore {
     ];
 
     let body: Record<string, unknown>;
-    let engine: 'hybrid' | 'bm25-only';
+    let engine: 'hybrid' | 'bm25-only' = 'bm25-only';
 
     try {
       const queryEmbedding = await this.embeddingService.embedQuery(query);
@@ -279,6 +279,7 @@ export class OpenSearchStore extends ContextStore {
       // Apply token budget
       const tokenBudget = maxTokens ?? Infinity;
       let consumed = 0;
+      let budgetExhausted = false;
       const results: ContextItem[] = [];
       const traceHits: SearchTraceHit[] = [];
       const rawHits = response.body.hits.hits;
@@ -286,10 +287,12 @@ export class OpenSearchStore extends ContextStore {
       for (const hit of rawHits) {
         const tokens = this.estimateTokens(hit._source.value);
         const valueStr = JSON.stringify(hit._source.value);
-        const fits = consumed + tokens <= tokenBudget;
+        const fits = !budgetExhausted && consumed + tokens <= tokenBudget;
         if (fits) {
           consumed += tokens;
           results.push(hit._source);
+        } else {
+          budgetExhausted = true;
         }
         traceHits.push({
           key: hit._source.key,
@@ -320,7 +323,7 @@ export class OpenSearchStore extends ContextStore {
 
       if (onTrace) {
         onTrace({
-          engine: 'bm25-only',
+          engine,
           durationMs: Date.now() - startMs,
           hitCountRaw: 0,
           hitCountReturned: 0,
