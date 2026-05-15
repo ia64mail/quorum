@@ -2,6 +2,15 @@
 
 [![CI](https://github.com/ia64mail/quorum/actions/workflows/ci.yml/badge.svg)](https://github.com/ia64mail/quorum/actions/workflows/ci.yml)
 
+> **About this project.** Quorum is a case study used to research AI-agent-driven software development. It is a working system, but its primary purpose is to serve as a hands-on research vehicle, not a production product. Specifically, the project explores:
+>
+> - **Ticket-driven development** — treating the `tickets/` directory as an implementation timeline knowledge base, where each ticket captures the circumstances, reasoning, and approach behind a discrete unit of work and the codebase remains the source of truth for *how*.
+> - **Codebase evolution metrics** — measuring how complexity, entropy, and delivery velocity behave when an autonomous, role-based agent fleet shapes the code over time (see `tools/entropy-report` and `tools/session-report`).
+> - **Anthropic SDK and the Model Context Protocol** — a deep dive into the Claude Agent SDK, the MCP server/protocol, transport semantics (Streamable HTTP, sessions, elicitation), tool bridging, and per-role permission enforcement.
+> - **Context management in multi-agent environments** — a pull-based context model with scoped storage (project / conversation / agent), hybrid BM25 + vector retrieval, asynchronous embedding, and context postprocessing (bootstrap assembly, summarization, token-budget control) so agents collaborate without ever forwarding full conversation histories.
+>
+> The remainder of this README describes the system that emerged from these experiments.
+
 Multi-agent AI orchestration for semi-autonomous software development. Quorum coordinates role-based AI agents that collaborate on development tasks — each agent is an LLM with a specialized role, and they communicate, delegate, and share decisions through an MCP server without ever passing full conversation histories to each other.
 
 ```mermaid
