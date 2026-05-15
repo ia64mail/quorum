@@ -35,7 +35,7 @@ QRM6's live runs exposed several operational issues that individually degrade th
 
 ### QRM7-001 — MCP Session Cleanup Not Firing
 
-**Status:** Open (promoted from QRM6-BUG-007)
+**Status:** Done (2026-05-03) — all 4 layers landed (lastSeenAt check, TCP keepalive, periodic reaper, SIGTERM DELETE); promoted from QRM6-BUG-007
 
 Stale MCP sessions accumulate because `transport.onclose` never fires on container shutdown — Streamable HTTP has no transport-level signal that the client died. The registry reports dead sessions as `connected: true`, causing `invoke_agent(target=moderator)` to route to a dead `McpElicitationConnection` and wait the full elicitation timeout.
 
@@ -97,7 +97,7 @@ The moderator's `WORKDIR /app` is inherited boilerplate from other Dockerfile st
 
 ### QRM7-005 — Unified Moderator Log Adapter
 
-**Status:** Open (moved from QRM6-011)
+**Status:** Done (2026-05-10) — moved from QRM6-011
 
 After `apps/terminal/` deletion, `parse-logs.mjs` has no moderator-side input. CC CLI writes session transcripts in a different JSONL schema than QuorumLogger. A post-processor adapter reads raw CC CLI session JSONL and emits `logs/moderator-{timestamp}.jsonl` in QuorumLogger shape, so `parse-logs.mjs` can ingest moderator activity on equal terms with agents.
 
@@ -115,7 +115,7 @@ After `apps/terminal/` deletion, `parse-logs.mjs` has no moderator-side input. C
 
 ### QRM7-006 — Unit Test Gap-Fill for QRM6 Server-Side Components
 
-**Status:** Open (deferred from QRM6-008)
+**Status:** Skipped — won't do (2026-05-14). Coverage targets remain documented below for future revisit, but the milestone-level decision is that QRM6's live playbook plus the integration-style specs already added under QRM7-008/009/014/017 provide sufficient regression signal. No dedicated unit-test gap-fill ticket will be filed for this scope.
 
 QRM6 landed new server-side components (elicitation connection, session auto-injection, `new_conversation` tool, clarification auto-persist) with the existing 760-test suite intact but no dedicated unit coverage for the new paths. The live playbook served as integration verification, but systematic unit tests are needed for CI regression gates.
 
@@ -134,7 +134,7 @@ QRM6 landed new server-side components (elicitation connection, session auto-inj
 
 ### QRM7-008 — Agent `McpClientService` Retry-Once Path Races MCP `initialize`
 
-**Status:** Open
+**Status:** Done (2026-05-09) — `reconnectPromise` memoization landed and `isSessionNotFound()` broadened to recognize `Server not initialized`. Pending runtime verification of the server-restart AC.
 
 The agent-side retry-once self-heal added in QRM5-BUG-005 fires `client.callTool()` *before* the new transport's MCP `initialize` round-trip has committed server-side. The retry lands on a freshly-opened-but-not-yet-initialized SDK server and surfaces `Bad Request: Server not initialized` — a different error class from `Session not found`, so `isSessionNotFound()` does not catch it and the call surfaces as a hard SDK tool failure. Work-output is preserved because the SDK adapts; log signal-to-noise is alarming and operator mental model degrades.
 
@@ -182,7 +182,7 @@ Premise falsified by runtime instrumentation: CC CLI 2.1.126 **does** open SSE G
 
 ### QRM7-012 — Moderator Session Reaped After SSE GET Stream Dies
 
-**Status:** Open (2026-05-09) — third iteration. Supersedes QRM7-011, which superseded QRM7-010.
+**Status:** Done — Candidates A + E landed and validated 2026-05-09; Candidate B′ shipped as [QRM7-014](QRM7-014-candidate-b-prime-live-sse-response-signal.md) on 2026-05-10. Supersedes QRM7-011, which superseded QRM7-010.
 
 CC CLI opens GET on every session within ~20 ms of creation, before `register_agent` runs. `markSseOpened` flips `hasOpenedSse=true` while role is still `undefined`; QRM7-011-B's exemption branch (`role===moderator && !hasOpenedSse`) never fires. The reaper falls through to the bare `lastSeenAt` check. When the SSE stream dies (NAT/conntrack idle, OS TCP teardown, CC CLI internal recycle, transient blip) the keepalive stops refreshing `lastSeenAt`, and 2 min later the moderator session reaps. Same downstream symptom as QRM7-010 and QRM7-011; both prior framings were misdiagnoses caused by inferring transport behavior from logs that didn't capture the relevant signal.
 
@@ -206,7 +206,7 @@ CC CLI opens GET on every session within ~20 ms of creation, before `register_ag
 
 ### QRM7-013 — Moderator OAuth Access Token Not Auto-Refreshed Across Long Idle
 
-**Status:** Open (filed 2026-05-09)
+**Status:** Code-complete (2026-05-14) — `CLAUDE_CODE_OAUTH_TOKEN` wired into the moderator container, onboarding bypass seeded, two-tier billing split documented in `docs/system-design.md`. Human-run steps pending: one-time `claude setup-token` token issuance, `/status` check, hibernation regression test.
 
 After QRM7-007 shifted the moderator from `ANTHROPIC_API_KEY` to interactive `/login` subscription OAuth, the moderator surfaces `401 authentication_error` after every laptop-hibernation gap ≥ ~10 h, despite a valid refresh token sitting on the persistent volume. QRM7-007's "Token refresh" claim that CC CLI handles renewal transparently is falsified by field evidence (5 401s across a single 47-hour session). Mitigate by switching to a long-lived token via `claude setup-token`, exposed to the container as `CLAUDE_CODE_OAUTH_TOKEN` — preserves QRM7-007's flat-rate subscription-seat billing and is the documented headless path.
 
@@ -230,7 +230,7 @@ Implements Candidate B′ from QRM7-012's candidate matrix. Replaces the sticky 
 
 ### QRM7-015 — Long-Call Response Delivery (Research)
 
-**Status:** Open — Research (rewritten 2026-05-12)
+**Status:** Accepted (2026-05-13) — design accepted; implementation shipped as [QRM7-017](QRM7-017-long-poll-continuation-implementation.md)
 
 Research ticket recommending a **long-poll continuation** pattern for delivering `invoke_agent` responses that exceed CC CLI's 5-minute `undici.bodyTimeout`. The server holds the POST response up to a 4 min 30 s ceiling and returns `{ status: "pending", invocationId }` cleanly before the timeout fires; the moderator follows a one-paragraph CLAUDE.md rule to call `wait_invocation(invocationId)` to continue waiting. Sub-5-min calls have zero protocol overhead (sync-shaped from the LLM's perspective); a 20-min task costs ~$0.40 in continuations with sub-second completion latency. Selected over server-push (CC CLI MCP client confirmed not to surface notifications), fire-and-forget Bash-sleep polling (~$2.40 + 60–180 s latency), and singleton-anchor designs after empirical evidence from 48 successful long-hold POST responses post-QRM7-014.
 
@@ -256,7 +256,7 @@ Add a dedicated `/app/logs/context-search-{startupTimestamp}.jsonl` stream that 
 
 ### QRM7-017 — Long-Poll Continuation Implementation
 
-**Status:** Open (filed 2026-05-13)
+**Status:** Done (2026-05-13) — `InvocationResultStore`, `invoke_agent` racing logic, `wait_invocation` MCP tool, `callerRole` auto-bind sidecar, and CLAUDE.md long-poll continuation rule all merged via PR #6.
 
 Implements the long-poll continuation pattern designed in QRM7-015 (research, accepted). When the moderator calls `invoke_agent` targeting a role whose `ROLE_TIMEOUTS` exceeds 270 s, the server races the broker's delivery against a 4 min 30 s server timer. If the timer wins, the server stores the in-flight invocation in a new `InvocationResultStore` and returns `{ status: "pending", invocationId }`. The moderator calls `wait_invocation(invocationId)` — a new MCP tool — to continue waiting, repeating until the result lands. Sub-5-min calls have zero overhead. Agent-to-agent calls are unaffected.
 
@@ -268,31 +268,44 @@ Single ticket covering: `InvocationResultStore`, `invoke_agent` racing logic, `w
 
 **Full ticket:** [QRM7-017](QRM7-017-long-poll-continuation-implementation.md)
 
+### QRM7-018 — GitHub Actions CI Pipeline
+
+**Status:** Done (2026-05-14) — workflow merged via PR #7; README CI badge added.
+
+First CI infrastructure for the repo: a `.github/workflows/ci.yml` that runs lint, unit tests, and the build on every push and pull request, gating regressions before merge to `main`. Scoped narrowly to the Node.js test matrix — no e2e / Docker integration runs yet (those remain manual via the smoke-test runbook).
+
+**Touches:** `.github/workflows/ci.yml` (new), `README.md` (CI badge), `.env.example` (formatting nit)
+
+**Depends on:** —
+
+**Full ticket:** [QRM7-018](QRM7-018-github-actions-ci-pipeline.md)
+
 ---
 
 ## Dependency Graph
 
 ```
-QRM7-001 (Session Cleanup)         ─── independent (DONE 2026-05-03)
-QRM7-002 (Schema-First Migration)  ─── independent (DONE 2026-05-04)
-QRM7-003 (Permission Persistence)  ─── SUPERSEDED by QRM7-004 (closed 2026-05-08)
-QRM7-004 (Moderator cwd Fix)       ─── independent (DONE 2026-05-08, closes QRM7-003)
-QRM7-005 (Log Adapter)             ─── independent
-QRM7-006 (Unit Test Gap-Fill)      ─── independent
-QRM7-007 (Moderator Subscription)  ─── independent (DONE 2026-05-04)
-QRM7-008 (Agent Retry Race)        ─── independent
-QRM7-009 (Scope Reaper)            ─── after QRM7-001 (DONE 2026-05-09)
-QRM7-010 (Moderator Stale Session) ─── SUPERSEDED by QRM7-011 (closed 2026-05-09)
-QRM7-011 (CC CLI POST-Only Liveness)  ─── SUPERSEDED by QRM7-012 (closed 2026-05-09 — premise falsified)
-QRM7-012 (SSE-Stream-Death Reaping)   ─── independent (open 2026-05-09; A reverts 011-B's effective regression)
-QRM7-013 (Moderator OAuth Refresh)    ─── after QRM7-007 (DONE) — open
-QRM7-014 (Live SSE Response Signal)   ─── after QRM7-012 (DONE 2026-05-10)
-QRM7-015 (Long-Call Delivery Research)─── after QRM7-014 (research, open) — implementation ticket TBD
+QRM7-001 (Session Cleanup)              ─── independent (DONE 2026-05-03)
+QRM7-002 (Schema-First Migration)       ─── independent (DONE 2026-05-04)
+QRM7-003 (Permission Persistence)       ─── SUPERSEDED by QRM7-004 (closed 2026-05-08)
+QRM7-004 (Moderator cwd Fix)            ─── independent (DONE 2026-05-08, closes QRM7-003)
+QRM7-005 (Log Adapter)                  ─── independent (DONE 2026-05-10)
+QRM7-006 (Unit Test Gap-Fill)           ─── SKIPPED (won't do, 2026-05-14)
+QRM7-007 (Moderator Subscription)       ─── independent (DONE 2026-05-04; partially superseded by QRM7-013)
+QRM7-008 (Agent Retry Race)             ─── independent (DONE 2026-05-09)
+QRM7-009 (Scope Reaper)                 ─── after QRM7-001 (DONE 2026-05-09)
+QRM7-010 (Moderator Stale Session)      ─── SUPERSEDED by QRM7-011 (closed 2026-05-09)
+QRM7-011 (CC CLI POST-Only Liveness)    ─── SUPERSEDED by QRM7-012 (closed 2026-05-09 — premise falsified)
+QRM7-012 (SSE-Stream-Death Reaping)     ─── independent (DONE 2026-05-09; B′ landed as QRM7-014)
+QRM7-013 (Moderator OAuth Refresh)      ─── after QRM7-007 (CODE-COMPLETE 2026-05-14; human-run steps pending)
+QRM7-014 (Live SSE Response Signal)     ─── after QRM7-012 (DONE 2026-05-10)
+QRM7-015 (Long-Call Delivery Research)  ─── after QRM7-014 (ACCEPTED 2026-05-13; implemented by QRM7-017)
 QRM7-016 (Context Search Observability) ─── independent (DONE 2026-05-15)
-QRM7-017 (Long-Poll Continuation)      ─── after QRM7-015 + QRM7-014 (open 2026-05-13)
+QRM7-017 (Long-Poll Continuation)       ─── after QRM7-015 + QRM7-014 (DONE 2026-05-13)
+QRM7-018 (GitHub Actions CI Pipeline)   ─── independent (DONE 2026-05-14)
 ```
 
-QRM7-001, QRM7-002, QRM7-004, QRM7-007, QRM7-009, QRM7-014, and QRM7-016 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 and QRM7-011 are both closed via supersession on the same operational bug — the moderator-reap regression. QRM7-012 carries the bug forward with the corrected mechanism: CC CLI opens SSE on init, QRM7-011-B's exemption is dead code, and `Session not found` reproduces on any SSE-stream death plus 2 min of POST silence. QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
+All stabilization tickets in scope are now complete or formally closed. QRM7-003, -010, and -011 are closed via supersession (QRM7-004, -011, -012 respectively); QRM7-006 is skipped (won't do). QRM7-013 is code-complete but carries a small human-run residue (one-time `claude setup-token` issuance, `/status` check, hibernation regression test) — no further code work tracked under the milestone.
 
 **Recommended sequencing (by operational impact, given current state):**
 
@@ -300,15 +313,17 @@ QRM7-001, QRM7-002, QRM7-004, QRM7-007, QRM7-009, QRM7-014, and QRM7-016 are com
 2. ~~**QRM7-009** (scope reaper)~~ — ✅ DONE 2026-05-09. Eliminates 9 spurious agent reconnects/burst that the QRM8 design run captured; immediately quiets log signal-to-noise.
 3. ~~**QRM7-011** Candidate B (POST-only exemption)~~ — ✅ Code landed 2026-05-09 but is dead in the running bundle (sticky-true `hasOpenedSse` flips before role binds). **Replaced by QRM7-012 Candidate B** (live-SSE-response signal).
 4. ~~**QRM7-012** Candidate B′~~ — ✅ DONE 2026-05-10 as [QRM7-014](QRM7-014-candidate-b-prime-live-sse-response-signal.md). Replaces dead `hasOpenedSse` with `activeSseToken` identity-guarded tracking; correctness cleanup on top of Candidates A + E.
-5. **QRM7-013** (moderator OAuth refresh) — high daily-use friction (5 user-visible 401s per ~47h session). Hotfix via `claude setup-token` long-lived token. Blocks any "always-on" QRM8 scenario; one-time setup + compose/entrypoint edits.
-6. **QRM7-012** Candidate D (SSE-stream-death investigation) — research task. Refocused QRM7-011-C: not "why does CC CLI never open SSE" (it does) but "why does the SSE stream die mid-session." Carries forward QRM7-010 Part 3 instrumentation draft.
-7. **QRM7-015** (long-call delivery — research) — accept the long-poll continuation design, then file the implementation ticket. Unblocks reliable >5-min `invoke_agent` calls (developer/architect/qa long work) without duplicate-invocation recovery thrash.
-8. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency now that 009 ships but still needed for correctness.
+5. ~~**QRM7-013** (moderator OAuth refresh)~~ — ✅ CODE-COMPLETE 2026-05-14. `CLAUDE_CODE_OAUTH_TOKEN` wired; one-time `claude setup-token` issuance + `/status` check + hibernation regression test remain as human-run steps.
+6. **QRM7-012** Candidate D (SSE-stream-death investigation) — *deferred / not pursued under QRM7*. With A + E mitigating and B′ shipped as QRM7-014, the metronomic reap cadence is no longer user-visible. Promote out-of-band if SSE-death telemetry becomes interesting again.
+7. ~~**QRM7-015** (long-call delivery — research)~~ — ✅ ACCEPTED 2026-05-13. Long-poll continuation design accepted and shipped as QRM7-017.
+8. ~~**QRM7-008** (agent retry race)~~ — ✅ DONE 2026-05-09. `reconnectPromise` memoization in place; `isSessionNotFound()` broadened to recognize `Server not initialized`.
 9. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
 10. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
 11. ~~**QRM7-016** (context search observability)~~ — ✅ DONE 2026-05-15. Dedicated search trace JSONL stream, breadcrumb in main MCP log, hybrid/BM25 engine distinction, budget-exhaustion semantics aligned with InMemoryStore.
-12. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
-13. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
+12. ~~**QRM7-017** (long-poll continuation implementation)~~ — ✅ DONE 2026-05-13. `InvocationResultStore`, `wait_invocation` MCP tool, `callerRole` auto-bind, CLAUDE.md rule.
+13. ~~**QRM7-018** (CI pipeline)~~ — ✅ DONE 2026-05-14. First CI for the repo: lint + unit tests + build gating, README badge.
+14. ~~**QRM7-005** (log adapter)~~ — ✅ DONE 2026-05-10. `cc-session-adapter.mjs` lands moderator activity on equal terms with agent JSONL in `parse-logs.mjs`.
+15. ~~**QRM7-006** (unit tests)~~ — ⛔ SKIPPED 2026-05-14. Won't do; coverage retained via integration-style specs added under -008/-009/-014/-017.
 
 ## Additional Goals
 
@@ -316,7 +331,7 @@ Beyond the stabilization carry-forwards above, the following goals are appended 
 
 ### QRM7-007 — Shift Moderator from API Key to Subscription (OAuth) Auth
 
-**Status:** Open
+**Status:** Done (2026-05-04) — partially superseded by [QRM7-013](QRM7-013-moderator-oauth-refresh-on-idle.md) for long-idle token-refresh behavior
 
 The moderator currently inherits `ANTHROPIC_API_KEY` via the compose `x-shared-env` anchor and bills against the org's metered API quota for every CC CLI orchestration turn. With a Claude.ai subscription seat available, the moderator should authenticate via `claude /login` (OAuth) so its interactive turns are covered by the flat per-month seat. Agents must keep the API key — Claude Agent SDK calls the Anthropic API programmatically, which subscription seats do not grant.
 
@@ -345,8 +360,8 @@ Items deferred into QRM7 from previous milestones:
 | Schema-first `InvokeRequest` | QRM6-BUG-014 Option B | QRM7-002 |
 | Permission grant persistence (CC CLI 2.1.119+ regression) | Observed post-QRM6 | QRM7-003 (superseded by QRM7-004) |
 | Moderator cwd misalignment | Observed post-QRM6 | QRM7-004 |
-| Unified moderator log adapter | QRM6-011 | QRM7-005 |
-| Unit test gap-fill for server-side components | QRM6-008 deferred | QRM7-006 |
+| Unified moderator log adapter | QRM6-011 | QRM7-005 (done 2026-05-10) |
+| Unit test gap-fill for server-side components | QRM6-008 deferred | QRM7-006 (skipped 2026-05-14 — won't do) |
 
 ## Post-QRM7-001 Findings (Surfaced In-Milestone)
 
