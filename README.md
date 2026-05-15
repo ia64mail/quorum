@@ -1,5 +1,7 @@
 # Quorum
 
+[![CI](https://github.com/ia64mail/quorum/actions/workflows/ci.yml/badge.svg)](https://github.com/ia64mail/quorum/actions/workflows/ci.yml)
+
 Multi-agent AI orchestration for semi-autonomous software development. Quorum coordinates role-based AI agents that collaborate on development tasks — each agent is an LLM with a specialized role, and they communicate, delegate, and share decisions through an MCP server without ever passing full conversation histories to each other.
 
 ```mermaid
