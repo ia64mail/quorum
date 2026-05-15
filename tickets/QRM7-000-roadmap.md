@@ -244,7 +244,7 @@ Research ticket recommending a **long-poll continuation** pattern for delivering
 
 ### QRM7-016 — Context Store Search Observability
 
-**Status:** Open (filed 2026-05-12)
+**Status:** Done (2026-05-15)
 
 Add a dedicated `/app/logs/context-search-{startupTimestamp}.jsonl` stream that captures every `context_query mode=search` invocation in full detail — verbatim query, scope/id filters, hybrid vs BM25-only engine choice, top hits with scores and snippets, token-budget truncation flag, round-trip duration, error surface. The existing one-line debug entry in the main MCP log becomes a breadcrumb carrying a `queryId` UUID linking back to the detailed record. Capture seam: optional `onTrace` callback on `ContextStore.search()` keeps the public API `ContextItem[]` unchanged. Purpose: make context-search quality auditable offline (silent BM25 fallback, bad relevance, budget-driven truncation) and enable feeding the stream directly into a future relevance-eval script.
 
@@ -288,11 +288,11 @@ QRM7-012 (SSE-Stream-Death Reaping)   ─── independent (open 2026-05-09; A 
 QRM7-013 (Moderator OAuth Refresh)    ─── after QRM7-007 (DONE) — open
 QRM7-014 (Live SSE Response Signal)   ─── after QRM7-012 (DONE 2026-05-10)
 QRM7-015 (Long-Call Delivery Research)─── after QRM7-014 (research, open) — implementation ticket TBD
-QRM7-016 (Context Search Observability) ─── independent (open 2026-05-12)
+QRM7-016 (Context Search Observability) ─── independent (DONE 2026-05-15)
 QRM7-017 (Long-Poll Continuation)      ─── after QRM7-015 + QRM7-014 (open 2026-05-13)
 ```
 
-QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 and QRM7-011 are both closed via supersession on the same operational bug — the moderator-reap regression. QRM7-012 carries the bug forward with the corrected mechanism: CC CLI opens SSE on init, QRM7-011-B's exemption is dead code, and `Session not found` reproduces on any SSE-stream death plus 2 min of POST silence. QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
+QRM7-001, QRM7-002, QRM7-004, QRM7-007, QRM7-009, QRM7-014, and QRM7-016 are complete. QRM7-003 is closed (superseded by QRM7-004). QRM7-010 and QRM7-011 are both closed via supersession on the same operational bug — the moderator-reap regression. QRM7-012 carries the bug forward with the corrected mechanism: CC CLI opens SSE on init, QRM7-011-B's exemption is dead code, and `Session not found` reproduces on any SSE-stream death plus 2 min of POST silence. QRM7-008 is the remaining post-QRM7-001 cluster member: hardens the agent-side retry path for residual failures (real mcp-server restart, container crash) — much lower frequency now that QRM7-009 has eliminated the dominant trigger.
 
 **Recommended sequencing (by operational impact, given current state):**
 
@@ -306,7 +306,7 @@ QRM7-001, QRM7-002, QRM7-004, QRM7-007, and QRM7-009 are complete. QRM7-003 is c
 8. **QRM7-008** (agent retry race) — hardens the residual-trigger path that 009 cannot eliminate (real mcp-server restart, container crash). Lower urgency now that 009 ships but still needed for correctness.
 9. ~~**QRM7-004** (cwd fix)~~ — ✅ DONE 2026-05-08. Smallest change, high daily-use improvement, also resolves QRM7-003.
 10. ~~**QRM7-002** (schema-first)~~ — ✅ DONE 2026-05-04. Code quality, prevents future silent-strip bugs.
-11. **QRM7-016** (context search observability) — observability/tooling. No functional urgency, but high payoff while iterating on OpenSearch tuning and embedding choice. Land alongside or after QRM7-006.
+11. ~~**QRM7-016** (context search observability)~~ — ✅ DONE 2026-05-15. Dedicated search trace JSONL stream, breadcrumb in main MCP log, hybrid/BM25 engine distinction, budget-exhaustion semantics aligned with InMemoryStore.
 12. **QRM7-006** (unit tests) — CI hardening, can run after any of the above.
 13. **QRM7-005** (log adapter) — tooling convenience, no functional urgency.
 

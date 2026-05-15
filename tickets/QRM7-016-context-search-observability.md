@@ -1,6 +1,6 @@
 # QRM7-016: Context Store Search Observability
 
-**Status:** Open
+**Status:** Done (2026-05-15)
 
 ## Summary
 
@@ -151,16 +151,16 @@ Independent. No dependencies on open QRM7 tickets. Land alongside or after QRM7-
 
 ## Acceptance Criteria
 
-- [ ] Every `context_query mode=search` call produces one record in `/app/logs/context-search-{startupTimestamp}.jsonl` matching the schema above
-- [ ] Main MCP log breadcrumb includes `queryId`, `engine`, and `top_score`
-- [ ] Trace distinguishes `engine=hybrid` from `engine=bm25-only`
-- [ ] Trace records `truncatedByTokenBudget=true` when the token budget cuts hits
-- [ ] Trace records `errorMessage` and `engine=null` (or the closest valid value) when OpenSearch throws
-- [ ] InMemoryStore path emits a degenerate trace (`engine=memory`) for parity
-- [ ] No behavioral change to `context_query` from the caller's perspective (same `ContextItem[]` returned, same return-type shape)
-- [ ] Unit tests cover hybrid trace, BM25-only trace, error trace, and InMemoryStore trace
-- [ ] `docs/context-store.md` and `tools/session-report/SESSION-REPORT.md` document the new stream
-- [ ] `npm run lint` clean, `npm run test` passes (new tests + no regression in the 760-test baseline)
+- [x] Every `context_query mode=search` call produces one record in `/app/logs/context-search-{startupTimestamp}.jsonl` matching the schema above
+- [x] Main MCP log breadcrumb includes `queryId`, `engine`, and `top_score`
+- [x] Trace distinguishes `engine=hybrid` from `engine=bm25-only`
+- [x] Trace records `truncatedByTokenBudget=true` when the token budget cuts hits
+- [x] Trace records `errorMessage` and `engine=null` (or the closest valid value) when OpenSearch throws
+- [x] InMemoryStore path emits a degenerate trace (`engine=memory`) for parity
+- [x] No behavioral change to `context_query` from the caller's perspective (same `ContextItem[]` returned, same return-type shape)
+- [x] Unit tests cover hybrid trace, BM25-only trace, error trace, and InMemoryStore trace
+- [x] `docs/context-store.md` and `tools/session-report/SESSION-REPORT.md` document the new stream
+- [x] `npm run lint` clean, `npm run test` passes (new tests + no regression in the 760-test baseline)
 
 ## Dependencies and References
 
