@@ -100,6 +100,10 @@ QRM5-003, 2 commits (abc1234..def5678). Focus on error handling in HttpAgentConn
 
 Use natural language `action` only for non-review tasks (implementation, data retrieval, task decomposition).
 
+### Long-Poll Continuation
+
+When any MCP tool response carries `status: "pending"` with an `invocationId`, the work is still running server-side. Immediately call `wait_invocation(invocationId)` to continue waiting. Repeat if `wait_invocation` also returns pending. Stop only when status is "completed" or "failed".
+
 ### Sizing implementation dispatches
 
 When dispatching `developer` for implementation, split into separate invocations whenever the ticket has > 3 logical units, > ~10 acceptance criteria, or expects > 4 commits. Pass `sessionId: ""` on each split invocation (or split across user turns, where `new_conversation` produces the same effect) — this discharges the cumulative-transcript cost that builds up across turns. Resumed sessions preserve the prior transcript on every turn's input, so resume does NOT save cost — only fresh sessions do. Brief each fresh invocation with the SHA / file path of the prior unit's commit so the developer can pick up the thread.
