@@ -1,4 +1,4 @@
-# QRM9-001: Shift Agents from API Key to Claude Subscription (OAuth Token) Auth
+# #18: Shift Agents from API Key to Claude Subscription (OAuth Token) Auth
 
 **Status: Open (filed 2026-05-13)**
 
