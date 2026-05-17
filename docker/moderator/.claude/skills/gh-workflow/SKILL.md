@@ -56,9 +56,8 @@ This is also the moment to call scope: a single, well-bounded ticket stays a sta
 Once the draft has been reviewed:
 
 1. **Open the GitHub epic issue** with the draft's summary and motivation as its body. No implementation detail, no design notes — those stay in the ticket file.
-2. **Stamp the `Epic` issue type** (the org/repo-native field).
-3. **Attach the issue to the epic's milestone.** Create the milestone first if it doesn't exist yet (`{Marker} — {Title}`, e.g. `QRM8 — Workspace Isolation`).
-4. **Decide whether staging is needed:**
+2. **Attach the issue to the epic's milestone.** Create the milestone first if it doesn't exist yet (`{Marker} — {Title}`, e.g. `QRM8 — Workspace Isolation`).
+3. **Decide whether staging is needed:**
    - Use staging when the epic will produce **two or more** sub-issues' worth of code that should land together — they need a single integration branch to mature on.
    - In that case, cut a `{issue-number}-{slug}-staging` branch off `main`. The branch name's `-staging` suffix is the only marker — no separate field flag is used.
    - A single-sub-issue epic skips staging entirely — that one sub-issue just branches off `main` and merges back to it.
@@ -77,9 +76,8 @@ Now that there's a real issue number to anchor against:
 The epic's breakdown table is the source list. Walk through it, and for each row:
 
 1. **File a sub-issue** carrying that row's title and description — summary plus acceptance criteria only, no implementation detail.
-2. **Stamp the type** — `Task` for ordinary work, `Bug` if the row is fixing a defect.
-3. **Hang it off the epic** via GitHub's native sub-issue (parent-child) link.
-4. **Attach it to the same milestone as the parent epic** so the milestone's progress bar counts the whole wave.
+2. **Hang it off the epic** via GitHub's native sub-issue (parent-child) link.
+3. **Attach it to the same milestone as the parent epic** so the milestone's progress bar counts the whole wave.
 
 A sub-issue does not need a PR right away — it can sit in "To Do" until someone takes it.
 
@@ -117,7 +115,6 @@ Open a fresh ticket under `tickets/` on `main`. How deep the draft goes depends 
 - **No issue yet?** Open one in the repo using the ticket's summary and problem statement — never any implementation detail.
 
 Then, in both cases, make sure the issue:
-- **Has a type** — `Bug` for defects, `Task` for any other discrete piece of work.
 - **Is attached to a milestone** only when it belongs to a larger initiative's wave (e.g., a QRM8-era regression fix). Pure one-offs stay milestone-free.
 - **Has an assignee** when the right person is already obvious.
 
@@ -185,32 +182,22 @@ This applies to **any PR that targets a non-default branch**: epic spec PRs that
 - The slug is preserved from the draft filename (minus the `draft-` prefix).
 - Update the title inside the file so the first H1 references the issue number.
 
-### Issue Type
+### Issue Classification
 
-Issue classification is carried entirely by the **Issue Type** field — a repo/org-native, label-free mechanism. Don't use repo labels to encode classification.
+GitHub's native **Issue Types** field (`Epic` / `Bug` / `Task`) is an org-level feature and is **not available** in this user-owned repo — `gh api repos/ia64mail/quorum/issues/types` returns `404 Not Found`. Don't try to set a type; the PATCH silently no-ops.
 
-| Type   | Meaning                                                   |
-| ------ | --------------------------------------------------------- |
-| `Epic` | Major initiative — parent of multiple sub-issues          |
-| `Bug`  | An unexpected problem or behavior                         |
-| `Task` | A specific piece of work (default for sub-issues)         |
+Classification is implicit instead:
 
-`gh issue create` has no `--type` flag (as of CLI 2.x), so setting the type is a second step:
+- **Epic** = an issue that has linked sub-issues (the native parent-child relationship) and an attached milestone whose name matches the epic title.
+- **Sub-issue** = an issue with a parent link to an epic, attached to the same milestone.
+- **Standalone** = no parent, no milestone (or milestone-only if it belongs to a release wave).
 
-```bash
-gh api -X PATCH repos/{owner}/{repo}/issues/{issue-number} -f type=Epic   # or Bug, Task
-```
-
-Reading the type back:
-
-```bash
-gh issue view {issue-number} --json issueType -q .issueType.name
-```
+Don't reach for repo labels to encode Epic/Bug/Task either — the sub-issue graph and milestone attachments already carry the signal cleanly.
 
 ### Epic / Sub-Issue Hierarchy
 
-- An **epic** is a GitHub issue with **issue type `Epic`**.
-- **Sub-issues** are linked to it via GitHub's native parent-child sub-issue feature; each sub-issue carries its own type (`Task` or `Bug`).
+- An **epic** is a GitHub issue with sub-issues linked to it and an attached milestone.
+- **Sub-issues** are linked to the epic via GitHub's native parent-child sub-issue feature and attached to the same milestone.
 - The epic body may list its sub-issues for visibility, but the parent-child link is the source of truth.
 - `gh issue edit --add-parent` does not exist; the link is established via GraphQL:
 
@@ -234,8 +221,8 @@ gh issue view {issue-number} --json issueType -q .issueType.name
 ## Important Rules
 
 - **Never put implementation details in issue descriptions.** If the user offers them, suggest moving them into the PR body or a `tickets/*.md` file.
-- **Always confirm before creating anything.** Show the user a preview of what's about to happen — title, body, issue type, target branch base, link targets — and wait for approval.
-- **Always report back** the new issue number, the issue type that was applied, and (for sub-issues) the parent epic.
+- **Always confirm before creating anything.** Show the user a preview of what's about to happen — title, body, target branch base, link targets — and wait for approval.
+- **Always report back** the new issue number and (for sub-issues) the parent epic.
 - When creating multiple sub-issues for an epic at once, create them sequentially, report each with its number, and confirm before adding the next so the user can adjust the roadmap as they go.
 
 ---
@@ -246,6 +233,6 @@ When this skill is invoked:
 
 1. **Locate the user in the workflow.** Are they drafting an epic, promoting a draft into a GH issue, opening sub-issues, starting work on an existing issue, opening a PR, or something else? Ask if it's not obvious.
 2. **Map the situation to the steps above.** Pick the lifecycle (epic vs. standalone) and the step or steps that apply.
-3. **Draft a concrete plan.** Spell out the exact `gh`/`git`/file operations you intend to run, in order, with the values filled in (issue title, body, type, branch name, PR title/body, etc.).
+3. **Draft a concrete plan.** Spell out the exact `gh`/`git`/file operations you intend to run, in order, with the values filled in (issue title, body, branch name, PR title/body, etc.).
 4. **Confirm with the user before executing.** Present the plan, wait for approval, then run it. Stop and re-check whenever something diverges from the plan.
 5. **Report back** what was created, with full references (issue number, PR number, branch name, ticket file path) so the user can update the roadmap and ticket library.
