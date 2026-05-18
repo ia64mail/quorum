@@ -99,13 +99,15 @@ The communication backbone connecting all agents.
 | **Messaging** | Message broker for agent-to-agent invocation |
 | **Workspace** | Read-write mount at `/mnt/quorum/workspace` (context file persistence) |
 
-**MCP Tools (7):**
+**MCP Tools (9):**
 
 | Tool | Purpose |
 |------|---------|
 | `invoke_agent` | Route inter-agent messages via Message Broker |
+| `wait_invocation` | Continue waiting on a pending invocation from `invoke_agent` (long-poll continuation, moderator-only — see [mcp-connectivity.md §3.6](mcp-connectivity.md#36-long-poll-continuation-moderator-only)) |
 | `register_agent` | Register an agent's role and callback URL |
 | `unregister_agent` | Remove an agent from the registry |
+| `new_conversation` | Mint a per-turn correlation ID and clear session cache |
 | `context_store` | Write context items (scoped by project/conversation/agent) |
 | `context_query` | Read context with mode selection (`keys`, `search`, `get-all`) |
 | `context_summarize` | Compress conversation context (POC: truncation-based) |
@@ -371,6 +373,8 @@ Two YAML anchors provide shared configuration:
 |--------|---------|
 | `x-shared-env` | Common env vars (Anthropic API, MCP server URL, logging) |
 | `x-agent-security` | Security constraints (read-only fs, dropped caps, tmpfs mounts) |
+
+Agents authenticate via `ANTHROPIC_API_KEY` on `x-shared-env` (metered Anthropic API billing). The moderator authenticates separately via `CLAUDE_CODE_OAUTH_TOKEN` in its own environment block (flat-rate subscription-seat billing). These are deliberately separate billing tiers — the subscription token must never appear on `x-shared-env` to prevent billing-path conflation (see [QRM7-007](../tickets/QRM7-007-moderator-subscription-auth.md), [QRM7-013](../tickets/QRM7-013-moderator-oauth-refresh-on-idle.md)).
 
 **Services** (8 deployed): `mcp-server` (port 3000, default target), `moderator` (moderator target), `architect`, `teamlead`, `developer` (each port 3002, agent target), `opensearch` (port 9200), `ollama` (port 11434), `ollama-init` (init container, runs to completion). All agent containers share `x-agent-security` constraints and mount the workspace read-write. All services write logs to a shared bind-mounted `./logs` directory. Named volumes `opensearch-data`, `ollama-data`, and `moderator-claude-data` persist index data, model weights, and moderator state.
 

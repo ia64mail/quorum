@@ -1,4 +1,5 @@
 {
+  "hasCompletedOnboarding": true,
   "mcpServers": {
     "quorum": {
       "type": "http",

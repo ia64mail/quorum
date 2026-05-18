@@ -21,7 +21,7 @@ export class McpClientService implements OnApplicationShutdown {
   private client!: Client;
   private transport!: StreamableHTTPClientTransport;
   private registered = false;
-  private reconnecting = false;
+  private reconnectPromise: Promise<void> | null = null;
   private shuttingDown = false;
   private cachedTools: Tool[] = [];
 
@@ -87,8 +87,15 @@ export class McpClientService implements OnApplicationShutdown {
     }
   }
 
-  async onApplicationShutdown(_signal?: string): Promise<void> {
+  async onApplicationShutdown(signal?: string): Promise<void> {
     this.shuttingDown = true;
+    // QRM7-001 Layer 4: log the signal so operators can trace graceful
+    // shutdown → DELETE /mcp flow. closeTransport() calls transport.close()
+    // which the SDK translates into a DELETE request, triggering server-side
+    // transport.onclose and session cleanup.
+    this.logger.log(
+      `Shutdown received (signal=${signal ?? 'unknown'}) — closing MCP session`,
+    );
     await this.unregister();
     await this.closeTransport();
   }
@@ -145,7 +152,11 @@ export class McpClientService implements OnApplicationShutdown {
       this.registered = false;
       if (this.shuttingDown) return;
       this.logger.warn('MCP transport closed, attempting reconnection');
-      void this.handleReconnection();
+      this.handleReconnection().catch((err) => {
+        this.logger.error(
+          `Reconnection failed: ${err instanceof Error ? err.message : err}`,
+        );
+      });
     };
 
     await this.client.connect(this.transport);
@@ -197,19 +208,19 @@ export class McpClientService implements OnApplicationShutdown {
   // ---------------------------------------------------------------------------
 
   private async handleReconnection(): Promise<void> {
-    if (this.reconnecting) return;
-    this.reconnecting = true;
+    if (this.reconnectPromise) return this.reconnectPromise;
+    this.reconnectPromise = this.runReconnection();
     try {
-      await this.connectWithRetry();
-      await this.register();
-      await this.discoverTools();
-    } catch (err) {
-      this.logger.error(
-        `Reconnection failed: ${err instanceof Error ? err.message : err}`,
-      );
+      await this.reconnectPromise;
     } finally {
-      this.reconnecting = false;
+      this.reconnectPromise = null;
     }
+  }
+
+  private async runReconnection(): Promise<void> {
+    await this.connectWithRetry();
+    await this.register();
+    await this.discoverTools();
   }
 
   // ---------------------------------------------------------------------------

@@ -1,4 +1,11 @@
+x-git-identity: &git-identity
+  GIT_AUTHOR_NAME: Quorum Agent
+  GIT_AUTHOR_EMAIL: quorum-agent@noreply.local
+  GIT_COMMITTER_NAME: Quorum Agent
+  GIT_COMMITTER_EMAIL: quorum-agent@noreply.local
+
 x-shared-env: &shared-env
+  <<: *git-identity
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
   ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
   ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-4096}
@@ -7,10 +14,6 @@ x-shared-env: &shared-env
   LOG_JSON_DIR: /app/logs
   LOG_LEVEL: ${LOG_LEVEL:-log}
   npm_config_cache: /tmp/.npm
-  GIT_AUTHOR_NAME: Quorum Agent
-  GIT_AUTHOR_EMAIL: quorum-agent@noreply.local
-  GIT_COMMITTER_NAME: Quorum Agent
-  GIT_COMMITTER_EMAIL: quorum-agent@noreply.local
 
 x-base-security: &base-security
   security_opt:
@@ -44,6 +47,12 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    init: true
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        ollama serve 2>&1 | grep --line-buffered -Ev '\[GIN\].*"(/|/api/tags)"$'
     depends_on:
       ollama-init:
         condition: service_completed_successfully
@@ -84,6 +93,13 @@ services:
         APP_NAME: mcp-server
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1000}
+    # QRM7-001 Layer 2: faster TCP keepalive for dead-peer detection on SSE sockets.
+    # Detection time: 15s + (5s × 6) = 45s from idle to dead-peer detection.
+    # These are namespaced sysctls — no extra capabilities needed.
+    sysctls:
+      net.ipv4.tcp_keepalive_time: 15
+      net.ipv4.tcp_keepalive_intvl: 5
+      net.ipv4.tcp_keepalive_probes: 6
     ports:
       - "3000:3000"
     environment:
@@ -140,12 +156,23 @@ services:
       mcp-server:
         condition: service_healthy
     environment:
-      <<: *shared-env
+      # QRM7-007: do NOT inherit *shared-env — that would re-introduce
+      # ANTHROPIC_API_KEY, which CC CLI prefers over the OAuth credentials
+      # written by `/login`, silently routing moderator turns to org metered
+      # billing instead of the user's subscription seat. The other shared
+      # vars (LOG_*, ANTHROPIC_MODEL/MAX_TOKENS, MCP_REQUEST_TIMEOUT_MS,
+      # npm_config_cache) are NestJS-app concerns that CC CLI does not read.
+      # *git-identity is merged in explicitly so any git command the
+      # moderator spawns via Bash uses the Quorum Agent identity, matching
+      # the agents.
+      <<: *git-identity
       MCP_SERVER_URL: http://mcp-server:3000/mcp
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
       - moderator-claude-data:/home/quorum/.claude
+      - ./logs/moderator-sessions:/home/quorum/.claude/projects
     networks:
       - quorum-net
 

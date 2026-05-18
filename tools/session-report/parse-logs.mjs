@@ -20,9 +20,10 @@
  * Output: Structured markdown digest to stdout.
  */
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../..');
@@ -41,6 +42,7 @@ function parseArgs() {
     session: null,
     list: false,
     verbose: false,
+    noAdapter: false,
     logsDir: DEFAULT_LOGS_DIR,
   };
 
@@ -48,6 +50,7 @@ function parseArgs() {
     if (args[i] === '--list') opts.list = true;
     else if (args[i] === '--latest') opts.session = null;
     else if (args[i] === '--verbose') opts.verbose = true;
+    else if (args[i] === '--no-adapter') opts.noAdapter = true;
     else if (args[i] === '--logs-dir' && args[i + 1]) opts.logsDir = resolve(args[++i]);
     else if (!args[i].startsWith('-')) opts.session = args[i];
   }
@@ -139,10 +142,25 @@ function findSessionGroup(sessions, mcpTimestamp) {
   const mcpTime = parseTimestamp(mcpTimestamp);
   const group = { mcpTimestamp, files: [] };
 
+  // Find the next mcp-server session start (upper bound for moderator grouping)
+  const mcpTimestamps = [...sessions.entries()]
+    .filter(([, files]) => files.some(f => f.role === 'mcp-server'))
+    .map(([ts]) => parseTimestamp(ts))
+    .sort((a, b) => a - b);
+  const nextMcpTime = mcpTimestamps.find(t => t > mcpTime) || Infinity;
+
   for (const [ts, files] of sessions) {
     const t = parseTimestamp(ts);
+    // Agent containers start within ~30s of mcp-server
     if (Math.abs(t - mcpTime) < 30000) {
       for (const f of files) {
+        group.files.push({ ...f, timestamp: ts });
+      }
+    // Moderator files can start minutes/hours after mcp-server — group them
+    // if their timestamp falls between this mcp-server session and the next.
+    } else if (t > mcpTime && t < nextMcpTime) {
+      const moderatorFiles = files.filter(f => f.role === 'moderator');
+      for (const f of moderatorFiles) {
         group.files.push({ ...f, timestamp: ts });
       }
     }
@@ -188,7 +206,12 @@ function parseSession(logsDir, sessionGroup, verbose) {
   for (const f of sessionGroup.files) {
     if (f.role === 'mcp-server' || f.role === 'terminal' || f.role === 'unknown') continue;
     const entries = readJsonl(resolve(logsDir, f.file));
-    parseAgentLog(entries, f.role, result, verbose);
+    // Moderator adapted logs use different contexts than agent logs
+    if (f.role === 'moderator') {
+      parseModeratorLog(entries, result);
+    } else {
+      parseAgentLog(entries, f.role, result, verbose);
+    }
   }
 
   return result;
@@ -362,6 +385,90 @@ function parseAgentLog(entries, role, result, verbose) {
     if (level === 'error') result.errors.push({ timestamp, context: `${role}/${context}`, message });
     if (level === 'warn') result.warnings.push({ timestamp, context: `${role}/${context}`, message });
   }
+}
+
+function parseModeratorLog(entries, result) {
+  // Moderator adapted logs have QuorumLogger shape with contexts:
+  // UserPrompt, ModeratorResponse, ToolCall, ToolResult, SessionSummary, Elicitation
+  if (entries.length === 0) return;
+
+  const firstEntry = entries.find(e => !e._parseError && e.timestamp);
+  if (!firstEntry) return;
+
+  const key = `moderator-session:moderator:${firstEntry.timestamp}`;
+  const activity = {
+    role: 'moderator',
+    correlationId: 'moderator-session',
+    startTime: firstEntry.timestamp,
+    action: '',
+    turns: 0,
+    toolCalls: [],
+    toolErrors: [],
+    responses: [],
+    mcpToolCalls: [],
+    cost: null,
+    durationMs: null,
+    reportedTurns: null,
+    success: null,
+  };
+
+  for (const e of entries) {
+    if (e._parseError) continue;
+    const { timestamp, context, message } = e;
+
+    if (!result.endTime || timestamp > result.endTime) result.endTime = timestamp;
+
+    if (context === 'UserPrompt') {
+      activity.turns++;
+      // Use first user prompt as the action/task description
+      if (!activity.action && message) {
+        activity.action = message.slice(0, 150);
+      }
+    }
+
+    if (context === 'ModeratorResponse') {
+      activity.turns++;
+    }
+
+    if (context === 'ToolCall') {
+      activity.turns++;
+      // Extract tool names from the message — format: "Tool calls: Name({...}), Name({...})"
+      // Match word characters before an opening paren, anywhere in the message
+      const toolNames = [];
+      const toolNameRegex = /\b([A-Za-z_][\w]*)\(\{/g;
+      let match;
+      while ((match = toolNameRegex.exec(message)) !== null) {
+        // Skip "calls" from "Tool calls:" prefix
+        if (match[1] !== 'calls') toolNames.push(match[1]);
+      }
+      for (const tool of toolNames) {
+        activity.toolCalls.push(tool);
+        if (tool.startsWith('mcp__quorum__')) {
+          activity.mcpToolCalls.push({ timestamp, tool: tool.replace('mcp__quorum__', '') });
+        }
+      }
+    }
+
+    if (context === 'ToolResult') {
+      // Tool results are counted but not as separate turns
+    }
+
+    if (context === 'SessionSummary') {
+      activity.turns++;
+    }
+
+    if (context === 'Elicitation') {
+      activity.turns++;
+    }
+  }
+
+  // Calculate duration from first to last entry
+  const lastEntry = [...entries].reverse().find(e => !e._parseError && e.timestamp);
+  if (firstEntry && lastEntry) {
+    activity.durationMs = new Date(lastEntry.timestamp) - new Date(firstEntry.timestamp);
+  }
+
+  result.agentActivity.set(key, activity);
 }
 
 // ─── Output Formatting ──────────────────────────────────────────────
@@ -575,8 +682,33 @@ function listSessions(logsDir) {
 
 // ─── Main ────────────────────────────────────────────────────────────
 
+function runAdapterIfNeeded(opts) {
+  if (opts.noAdapter) return;
+
+  const sessionsDir = resolve(REPO_ROOT, 'logs/moderator-sessions');
+  if (!existsSync(sessionsDir)) return;
+
+  const adapterPath = resolve(__dirname, 'cc-session-adapter.mjs');
+  if (!existsSync(adapterPath)) {
+    console.error('Warning: cc-session-adapter.mjs not found, skipping moderator log adaptation.');
+    return;
+  }
+
+  try {
+    console.log('Running CC CLI session adapter...');
+    execFileSync(process.execPath, [adapterPath, '--sessions-dir', sessionsDir, '--output-dir', opts.logsDir], {
+      stdio: 'inherit',
+    });
+  } catch (err) {
+    console.error(`Warning: cc-session-adapter failed: ${err.message}`);
+  }
+}
+
 function main() {
   const opts = parseArgs();
+
+  // Auto-invoke the CC CLI session adapter before session discovery
+  runAdapterIfNeeded(opts);
 
   if (opts.list) {
     listSessions(opts.logsDir);

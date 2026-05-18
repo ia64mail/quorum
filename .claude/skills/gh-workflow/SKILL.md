@@ -1,0 +1,1 @@
+../../../docker/moderator/.claude/skills/gh-workflow/SKILL.md

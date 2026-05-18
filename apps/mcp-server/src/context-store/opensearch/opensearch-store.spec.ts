@@ -1,5 +1,5 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import type { ContextItem } from '@app/common';
+import type { ContextItem, SearchTrace } from '@app/common';
 import {
   CompositeKeyBuilder,
   ContextScope,
@@ -82,13 +82,23 @@ function createStore(overrides: Partial<typeof defaultOsConfig> = {}): {
   return { store, emitter };
 }
 
-function makeHits(items: Array<Partial<ContextItem>>): {
-  body: { hits: { hits: Array<{ _source: Partial<ContextItem> }> } };
+function makeHits(
+  items: Array<Partial<ContextItem>>,
+  scores?: number[],
+): {
+  body: {
+    hits: {
+      hits: Array<{ _source: Partial<ContextItem>; _score?: number }>;
+    };
+  };
 } {
   return {
     body: {
       hits: {
-        hits: items.map((item) => ({ _source: item })),
+        hits: items.map((item, i) => ({
+          _source: item,
+          ...(scores ? { _score: scores[i] } : {}),
+        })),
       },
     },
   };
@@ -616,6 +626,65 @@ describe('OpenSearchStore', () => {
       expect(results[0].key).toBe('a');
     });
 
+    it('should not include later hits even if they fit after a budget-exceeding hit', async () => {
+      mockEmbedQuery.mockResolvedValue(null);
+      // hit a: "aa" → 4 chars → ceil(4/4) = 1 token
+      // hit b: long value → exceeds budget
+      // hit c: "cc" → 4 chars → ceil(4/4) = 1 token (would fit, but budget is exhausted)
+      mockSearch.mockResolvedValue(
+        makeHits(
+          [
+            {
+              key: 'a',
+              value: 'aa',
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+            {
+              key: 'b',
+              value: 'x'.repeat(100),
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+            {
+              key: 'c',
+              value: 'cc',
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+          ],
+          [3.0, 2.0, 1.0],
+        ),
+      );
+      const { store } = createStore();
+      let trace: SearchTrace | undefined;
+
+      const results = await store.search(
+        ContextScope.project,
+        'test',
+        undefined,
+        2,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      // Only hit a should be in results — hit c must NOT slip in past hit b
+      expect(results).toHaveLength(1);
+      expect(results[0].key).toBe('a');
+
+      // Trace records all 3 hits but only hit a is includedInResult
+      expect(trace).toBeDefined();
+      expect(trace!.results).toHaveLength(3);
+      expect(trace!.results[0].includedInResult).toBe(true);
+      expect(trace!.results[1].includedInResult).toBe(false);
+      expect(trace!.results[2].includedInResult).toBe(false);
+      expect(trace!.truncatedByTokenBudget).toBe(true);
+    });
+
     it('should reference hybrid-search pipeline in hybrid query', async () => {
       const fakeEmbedding = new Array<number>(1024).fill(0.5);
       mockEmbedQuery.mockResolvedValue(fakeEmbedding);
@@ -672,6 +741,172 @@ describe('OpenSearchStore', () => {
 
       const knnLeg = arg.body.query.hybrid.queries[1];
       expect(knnLeg.knn.embedding.k).toBe(100);
+    });
+
+    it('should emit hybrid trace via onTrace callback', async () => {
+      const fakeEmbedding = new Array<number>(1024).fill(0.1);
+      mockEmbedQuery.mockResolvedValue(fakeEmbedding);
+      mockSearch.mockResolvedValue(
+        makeHits(
+          [
+            {
+              key: 'r1',
+              value: 'matched',
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+          ],
+          [0.85],
+        ),
+      );
+      const { store } = createStore();
+      let trace: SearchTrace | undefined;
+
+      await store.search(
+        ContextScope.project,
+        'test',
+        undefined,
+        undefined,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      expect(trace).toBeDefined();
+      expect(trace!.engine).toBe('hybrid');
+      expect(trace!.hitCountRaw).toBe(1);
+      expect(trace!.hitCountReturned).toBe(1);
+      expect(trace!.truncatedByTokenBudget).toBe(false);
+      expect(trace!.errorMessage).toBeNull();
+      expect(trace!.results).toHaveLength(1);
+      expect(trace!.results[0].key).toBe('r1');
+      expect(trace!.results[0].score).toBe(0.85);
+      expect(trace!.results[0].snippet).toBe('"matched"');
+      expect(trace!.results[0].includedInResult).toBe(true);
+      expect(trace!.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should emit bm25-only trace when embedding is unavailable', async () => {
+      mockEmbedQuery.mockResolvedValue(null);
+      mockSearch.mockResolvedValue(
+        makeHits(
+          [
+            {
+              key: 'bm',
+              value: 'text',
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+          ],
+          [1.2],
+        ),
+      );
+      const { store } = createStore();
+      let trace: SearchTrace | undefined;
+
+      await store.search(
+        ContextScope.project,
+        'query',
+        undefined,
+        undefined,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      expect(trace).toBeDefined();
+      expect(trace!.engine).toBe('bm25-only');
+      expect(trace!.hitCountReturned).toBe(1);
+      expect(trace!.results[0].score).toBe(1.2);
+    });
+
+    it('should emit error trace with engine=bm25-only when embedQuery returns null and search throws', async () => {
+      mockEmbedQuery.mockResolvedValue(null);
+      mockSearch.mockRejectedValue(new Error('cluster unavailable'));
+      const { store } = createStore();
+      let trace: SearchTrace | undefined;
+
+      const results = await store.search(
+        ContextScope.project,
+        'fail',
+        undefined,
+        undefined,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      expect(results).toEqual([]);
+      expect(trace).toBeDefined();
+      expect(trace!.engine).toBe('bm25-only');
+      expect(trace!.errorMessage).toBe('cluster unavailable');
+      expect(trace!.hitCountRaw).toBe(0);
+      expect(trace!.hitCountReturned).toBe(0);
+      expect(trace!.results).toEqual([]);
+    });
+
+    it('should emit error trace with engine=hybrid when embedQuery succeeds but search throws', async () => {
+      const fakeEmbedding = new Array<number>(1024).fill(0.1);
+      mockEmbedQuery.mockResolvedValue(fakeEmbedding);
+      mockSearch.mockRejectedValue(new Error('timeout'));
+      const { store } = createStore();
+      let trace: SearchTrace | undefined;
+
+      const results = await store.search(
+        ContextScope.project,
+        'fail-hybrid',
+        undefined,
+        undefined,
+        (t) => {
+          trace = t;
+        },
+      );
+
+      expect(results).toEqual([]);
+      expect(trace).toBeDefined();
+      expect(trace!.engine).toBe('hybrid');
+      expect(trace!.errorMessage).toBe('timeout');
+    });
+
+    it('should set truncatedByTokenBudget=true when budget cuts hits', async () => {
+      mockEmbedQuery.mockResolvedValue(null);
+      // Each "aaaa" → '"aaaa"' → 6 chars → ceil(6/4) = 2 tokens
+      mockSearch.mockResolvedValue(
+        makeHits(
+          [
+            {
+              key: 'a',
+              value: 'aaaa',
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+            {
+              key: 'b',
+              value: 'bbbb',
+              scope: ContextScope.project,
+              id: '_',
+              createdAt: 1000000,
+            },
+          ],
+          [2.0, 1.5],
+        ),
+      );
+      const { store } = createStore();
+      let trace: SearchTrace | undefined;
+
+      await store.search(ContextScope.project, 'test', undefined, 3, (t) => {
+        trace = t;
+      });
+
+      expect(trace).toBeDefined();
+      expect(trace!.hitCountRaw).toBe(2);
+      expect(trace!.hitCountReturned).toBe(1);
+      expect(trace!.truncatedByTokenBudget).toBe(true);
+      expect(trace!.results[0].includedInResult).toBe(true);
+      expect(trace!.results[1].includedInResult).toBe(false);
     });
   });
 

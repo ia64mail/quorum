@@ -244,6 +244,107 @@ describe('McpClientService', () => {
     });
   });
 
+  describe('QRM7-008 reconnectPromise memoization', () => {
+    beforeEach(async () => {
+      // Establish initial connection
+      mockConnect.mockResolvedValue(undefined);
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+      });
+      mockListTools.mockResolvedValue({ tools: [] });
+      mockClose.mockResolvedValue(undefined);
+      await service.connectAndRegister();
+      jest.clearAllMocks();
+      // Reset mocks for the actual test
+      mockConnect.mockResolvedValue(undefined);
+      mockListTools.mockResolvedValue({ tools: [] });
+      mockClose.mockResolvedValue(undefined);
+    });
+
+    it('should run a single reconnection chain when onclose and callTool catch both trigger', async () => {
+      // Make close trigger onclose — simulates real transport behavior where
+      // transport.close() fires the onclose callback synchronously.
+      mockClose.mockImplementation(() => {
+        capturedOnclose?.();
+        return Promise.resolve();
+      });
+
+      const events: string[] = [];
+      mockConnect.mockImplementation(async () => {
+        events.push('connect');
+      });
+      mockListTools.mockImplementation(async () => {
+        events.push('discoverTools');
+        return { tools: [] };
+      });
+
+      mockCallTool
+        // First callTool attempt — session not found
+        .mockRejectedValueOnce(new Error('Session not found'))
+        // register_agent during reconnection
+        .mockImplementationOnce(async () => {
+          events.push('register');
+          return { content: [{ type: 'text', text: 'ok' }] };
+        })
+        // Retry callTool — succeeds
+        .mockImplementationOnce(async () => {
+          events.push('retry');
+          return { content: [{ type: 'text', text: 'retry-result' }] };
+        });
+
+      const result = await service.callTool('invoke_agent', {
+        target: 'developer',
+      });
+
+      // Single chain: connect → register → discoverTools ran exactly once
+      expect(events.filter((e) => e === 'connect')).toHaveLength(1);
+      expect(events.filter((e) => e === 'register')).toHaveLength(1);
+      expect(events.filter((e) => e === 'discoverTools')).toHaveLength(1);
+      // Retry ran after the full chain completed
+      expect(events.indexOf('retry')).toBeGreaterThan(
+        events.indexOf('discoverTools'),
+      );
+      expect(result).toEqual({
+        content: [{ type: 'text', text: 'retry-result' }],
+      });
+    });
+
+    it('should share a single reconnection chain across concurrent callTool failures', async () => {
+      mockCallTool
+        // Both initial calls fail with Session not found
+        .mockRejectedValueOnce(new Error('Session not found'))
+        .mockRejectedValueOnce(new Error('Session not found'))
+        // register_agent during reconnection (only one chain)
+        .mockResolvedValueOnce({
+          content: [{ type: 'text', text: 'ok' }],
+        })
+        // Retry for first callTool
+        .mockResolvedValueOnce({
+          content: [{ type: 'text', text: 'result-a' }],
+        })
+        // Retry for second callTool
+        .mockResolvedValueOnce({
+          content: [{ type: 'text', text: 'result-b' }],
+        });
+
+      const [resultA, resultB] = await Promise.all([
+        service.callTool('tool_a', { key: 'a' }),
+        service.callTool('tool_b', { key: 'b' }),
+      ]);
+
+      // One reconnection chain: one connect, one discoverTools
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+      expect(mockListTools).toHaveBeenCalledTimes(1);
+      // Both retries succeeded
+      expect(resultA).toEqual({
+        content: [{ type: 'text', text: 'result-a' }],
+      });
+      expect(resultB).toEqual({
+        content: [{ type: 'text', text: 'result-b' }],
+      });
+    });
+  });
+
   describe('onApplicationShutdown', () => {
     it('should unregister and close transport', async () => {
       mockConnect.mockResolvedValue(undefined);

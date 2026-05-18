@@ -39,7 +39,7 @@ abstract class ContextStore {
   abstract set(params: SetParams): Promise<void>;
   abstract get(scope: ContextScope, key: string, id?: string): Promise<unknown>;
   abstract getAll(scope: ContextScope, id?: string): Promise<Record<string, unknown>>;
-  abstract search(scope: ContextScope, query: string, id?: string, maxTokens?: number): Promise<ContextItem[]>;
+  abstract search(scope: ContextScope, query: string, id?: string, maxTokens?: number, onTrace?: (trace: SearchTrace) => void): Promise<ContextItem[]>;
   abstract getStats(scope?: ContextScope, id?: string): Promise<ContextStats>;
 }
 ```
@@ -390,6 +390,43 @@ Docker dependency chain ensures correct ordering:
 5. **`OpenSearchSetupService.onModuleInit()`** — creates index + `hybrid-search` pipeline (idempotent)
 6. **`MigrationService.onModuleInit()`** — imports `quorum.context` records if index is empty
 7. **`EmbeddingPipelineService.onModuleInit()`** — backfills vectors for documents missing embeddings
+
+## Search Observability
+
+Every `context_query mode=search` call produces a structured trace record in a dedicated JSONL stream at `${LOG_JSON_DIR}/context-search-{startupTimestamp}.jsonl`. This enables offline search-quality analysis without wading through the main MCP log.
+
+### Trace Record
+
+One JSONL record per search invocation. Each record includes session metadata (`queryId`, `correlationId`, `callerRole`, `scope`), the verbatim query text, the effective token budget, the search engine used (`hybrid`, `bm25-only`, or `memory`), timing, and a `results` array with per-hit `key`, `score`, `snippet` (first 200 chars), `tokensEstimate`, and `includedInResult` flag.
+
+The `truncatedByTokenBudget` boolean signals when the token budget cut lower-ranked hits. `errorMessage` captures OpenSearch or embedding-service failures (null on success).
+
+### Architecture
+
+The trace flows through three layers:
+
+1. **Backend trace callback** — `ContextStore.search()` accepts an optional `onTrace?: (trace: SearchTrace) => void` callback. `OpenSearchStore` populates the trace with engine choice, raw hit scores, and duration. `InMemoryStore` emits a degenerate trace with `engine=memory` and `score=null`. The callback fires inside `try`/`finally` so the trace lands even on partial errors.
+
+2. **MCP layer enrichment** — `McpService.registerContextQueryTool()` generates a `queryId` (UUID v4), captures the backend trace via the callback, wraps it with session/correlation metadata, and emits the full record to `ContextSearchTraceLogger`.
+
+3. **JSONL file transport** — `ContextSearchTraceLogger` (in `apps/mcp-server/src/observability/`) owns a dedicated winston file transport. Records match the `QuorumLogger` JSON shape (`timestamp`, `level`, `context`, `message`, `agentRole`, `extra`) for grep compatibility across log streams. The service is exported via `ObservabilityModule` and imported by `McpModule`.
+
+### Breadcrumb
+
+The main MCP log retains a single-line debug breadcrumb per search that includes `queryId`, `engine`, and `top_score`. This links `correlationId`-based traces in the main log to detailed records in the trace file.
+
+### Ad-hoc Analysis
+
+```bash
+# Score distribution for a session
+jq -c '.extra.results[] | {score, key}' logs/context-search-*.jsonl
+
+# Searches that fell back to BM25-only
+jq -c 'select(.extra.engine == "bm25-only") | {queryId: .extra.queryId, query: .extra.queryText}' logs/context-search-*.jsonl
+
+# Token-budget truncations
+jq -c 'select(.extra.truncatedByTokenBudget == true) | {queryId: .extra.queryId, raw: .extra.hitCountRaw, returned: .extra.hitCountReturned}' logs/context-search-*.jsonl
+```
 
 ## Future Enhancements
 

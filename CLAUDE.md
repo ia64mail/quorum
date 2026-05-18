@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Scope:** This file is for Claude Code sessions developing the Quorum codebase from outside the system. The in-container moderator persona — runtime orchestration prompts, MCP tool semantics, session-resume rules — lives in [docker/moderator/CLAUDE.md](docker/moderator/CLAUDE.md) and is not loaded here.
+
 ## Project Overview
 
 Quorum is a multi-agent AI orchestration system for semi-autonomous software development. It coordinates role-based AI agents (Claude Code instances) that collaborate on development tasks through an MCP server.
@@ -35,13 +37,20 @@ apps/
   agent/          # Agent App — single image, multi-role via AGENT_ROLE env var (Claude Agent SDK)
 libs/
   common/         # Shared library — AgentRole, messaging types, prompts, config, logger, tool-mapper
+docker/           # Container assets per role
+  moderator/      # Moderator persona (CLAUDE.md), claude.json, settings.json, entrypoint.sh
+  plugins/        # CC CLI plugins mounted into agent/moderator containers
 docs/             # Project documentation — living reference for system architecture
 tickets/          # Ticket library — implementation timeline knowledge base (see tickets/README.md)
+releases/         # Per-milestone post-implementation summaries (RELEASE-QRM*.md)
+scripts/          # Developer helpers — start.sh, moderator.sh
 logs/             # Docker JSON logs (bind-mounted, gitignored) — {role}-{timestamp}.jsonl
   sessions/       # Written session reports — analysis of Docker run logs
 tools/            # Developer tooling scripts
   entropy-report/ # Source code entropy/complexity analysis
   session-report/ # Session log parser (parse-logs.mjs) + report writing guide
+CHANGELOG.md      # Top-line chronological summary across all milestones
+quorum.md         # Workspace conventions read by agents at runtime
 ```
 
 ### Ticket Library
@@ -50,19 +59,32 @@ The `tickets/` directory is an **implementation timeline knowledge base** — no
 
 Tickets complement `docs/` — documentation describes the current system; tickets explain the sequence of decisions that built it. See [tickets/README.md](tickets/README.md) for naming conventions, structure requirements, and writing guidelines.
 
+### Research Tools
+
+The `tools/` directory holds developer scripts for analyzing the codebase and runtime behavior — not part of the runtime system, but used to understand and report on it.
+
+| Tool | Purpose |
+|------|---------|
+| [tools/entropy-report/README.md](tools/entropy-report/README.md) | Source-code complexity analysis — Halstead metrics aggregated across commits |
+| [tools/session-report/SESSION-REPORT.md](tools/session-report/SESSION-REPORT.md) | Parse Docker JSON logs into narrative session reports |
+
 ## Documentation
 
 | Document | Purpose |
 |----------|---------|
 | [docs/system-design.md](docs/system-design.md) | Overall architecture, containers, deployment |
 | [docs/agent-messaging.md](docs/agent-messaging.md) | Bidirectional MCP concepts, communication patterns |
+| [docs/mcp-connectivity.md](docs/mcp-connectivity.md) | MCP session lifecycle for agents (HTTP) and moderator (elicitation) — establish, maintain, recycle, register, reap |
 | [docs/message-broker.md](docs/message-broker.md) | Message Broker implementation details, safeguards |
 | [docs/context-management.md](docs/context-management.md) | Context sharing concepts, MCP resources/tools API |
 | [docs/context-store.md](docs/context-store.md) | Context Store implementation, InMemoryStore, file persistence |
 | [docs/claude-code-sdk.md](docs/claude-code-sdk.md) | Claude Code SDK integration, tool bridge, permissions, hardening |
 | [docs/knowledge-management.md](docs/knowledge-management.md) | Knowledge management philosophy, three domains, KB concept |
 | [tickets/README.md](tickets/README.md) | Ticket library conventions and structure guide |
-| [tools/session-report/SESSION-REPORT.md](tools/session-report/SESSION-REPORT.md) | Session log parser and report writing guide |
+| [releases/README.md](releases/README.md) | Milestone index and per-release notes (QRM1–QRM7) |
+| [CHANGELOG.md](CHANGELOG.md) | Top-line chronological changelog across all milestones |
+| [quorum.md](quorum.md) | Workspace conventions read by agents at runtime |
+| [docker/moderator/CLAUDE.md](docker/moderator/CLAUDE.md) | In-container moderator persona — orchestration prompts, MCP tool semantics |
 
 ## Build Commands
 

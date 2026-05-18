@@ -1,4 +1,5 @@
 {
+  "forceLoginMethod": "claudeai",
   "permissions": {
     "deny": ["Write", "Edit", "NotebookEdit"]
   },
