@@ -62,18 +62,6 @@ echo "--- ~/.claude/CLAUDE.md (user-scope) ---"
 cat /home/quorum/.claude/CLAUDE.md
 echo
 
-if [ -f /mnt/quorum/workspace/CLAUDE.md ]; then
-  echo "--- /mnt/quorum/workspace/CLAUDE.md (project-scope) ---"
-  cat /mnt/quorum/workspace/CLAUDE.md
-  echo
-fi
-
-if [ -f /mnt/quorum/workspace/quorum.md ]; then
-  echo "--- /mnt/quorum/workspace/quorum.md (@quorum.md import target) ---"
-  cat /mnt/quorum/workspace/quorum.md
-  echo
-fi
-
 echo "===== END moderator effective prompt ====="
 
 # Self-verify: fail loudly if CC CLI doesn't see the Quorum MCP server.

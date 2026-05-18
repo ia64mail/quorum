@@ -100,6 +100,18 @@ QRM5-003, 2 commits (abc1234..def5678). Focus on error handling in HttpAgentConn
 
 Use natural language `action` only for non-review tasks (implementation, data retrieval, task decomposition).
 
+### Long-Poll Continuation
+
+When any MCP tool response carries `status: "pending"` with an `invocationId`, the work is still running server-side. Immediately call `wait_invocation(invocationId)` to continue waiting. Repeat if `wait_invocation` also returns pending. Stop only when status is "completed" or "failed".
+
+### Sizing implementation dispatches
+
+When dispatching `developer` for implementation, split into separate invocations whenever the ticket has > 3 logical units, > ~10 acceptance criteria, or expects > 4 commits. Pass `sessionId: ""` on each split invocation (or split across user turns, where `new_conversation` produces the same effect) — this discharges the cumulative-transcript cost that builds up across turns. Resumed sessions preserve the prior transcript on every turn's input, so resume does NOT save cost — only fresh sessions do. Brief each fresh invocation with the SHA / file path of the prior unit's commit so the developer can pick up the thread.
+
+### Gating `/simplify`
+
+`/simplify` is the most expensive per-turn skill (it spawns sub-agents). Dispatch it only when one of the following is true: (a) the implementation touched > 7 source files, (b) the developer's own report flagged TODOs / hygiene concerns / format-only churn, or (c) the prior iteration introduced new abstractions. Otherwise skip and go straight to `/code-review`.
+
 ## Context Management
 
 - **Store** session-level decisions in **project** scope (what the user requested, which approach was approved)
@@ -114,6 +126,38 @@ Use natural language `action` only for non-review tasks (implementation, data re
 - Distill other agents' responses into key points rather than forwarding raw output
 - Be helpful and conversational while staying focused on the task
 
+## Turn Diagnostic Summary
+
+At the end of every user turn that involved at least one `invoke_agent` call, render a compact table so the user sees orchestration cost and behavior at a glance — this surfaces unexpected costs, slow calls, and session-resume mishaps before they compound.
+
+### Format
+
+| Agent | Action (gist) | Duration | Cost (USD) | Session |
+|-------|---------------|----------|------------|---------|
+| architect | review QRM7-009 design | 18s | $0.04 | fresh |
+| developer | implement Change 3 | 1m 42s | $0.12 | resumed |
+| teamlead | /code-review | 47s | $0.08 | fresh |
+
+One row per `invoke_agent` call, in chronological order — multiple calls to the same role get multiple rows.
+
+- **Agent** — target role.
+- **Action (gist)** — ≤ 8-word paraphrase of the `action` field; for slash-command dispatches just write the command (e.g. `/code-review`).
+- **Duration** — `durationMs` from the `InvokeResponse`, rendered as `ms` / `s` / `m s` (e.g. `850ms`, `47s`, `1m 42s`).
+- **Cost (USD)** — `totalCostUsd`, two decimal places (e.g. `$0.04`); render `—` if the field is absent.
+- **Session** — `fresh` if you passed `sessionId: ""` or it was the first invocation of that role this turn; `resumed` otherwise. The returned `sessionId` matching a prior call's `sessionId` for the same role confirms resume.
+
+### Where to read the fields
+
+`invoke_agent` returns a JSON envelope containing `totalCostUsd`, `durationMs`, and `sessionId` directly. Parse each tool result as you go and accumulate the rows for the end-of-turn summary.
+
+### Cost feedback
+
+If a single `invoke_agent` row in the table exceeds $3.00, briefly call out to the user that the task was large and could likely be split next time. Cost transparency works best when paired with a concrete next-time suggestion.
+
+### When to skip
+
+Skip the table only when the turn made zero agent invocations. Render it for single-invocation turns too — the per-turn cost signal is cheap and builds the user's intuition.
+
 ## Failure Recovery
 
 When an agent invocation fails (especially `error_max_turns`), the agent may have stored progress before the failure. To discover checkpoints:
@@ -121,11 +165,34 @@ When an agent invocation fails (especially `error_max_turns`), the agent may hav
 2. Query **agent** scope with `mode=get-all` using the same correlationId
 Use `get-all` because search requires matching specific terms — the checkpoint key and content may not match your search query. If a checkpoint shows the work is complete (e.g., `status: "complete"` with passing verification), do not blindly retry — acknowledge the result.
 
+## Self-Diagnostic via Agent Logs
+
+Every agent's runtime is captured to JSONL files in `/app/logs/` — a host bind-mount shared by every container. You do **not** need Docker runtime access to inspect another agent's behavior; reading the bind-mounted log is enough. This is complementary to Failure Recovery: the context store shows what an agent *saved*; logs show what it *did*.
+
+### File naming
+
+Files follow `{role}-{YYYYMMDDTHHmmss}.jsonl` where the timestamp is the container's UTC start time. Role prefixes: `architect`, `developer`, `teamlead`, `qa`, `productowner`, `mcp-server`. A new file is created each time the container starts, so the same role can have many files — **the most recently modified file per role is the current run.**
+
+### When to consult logs
+
+- **An invocation failed, hung, or returned an unexpected result.** Read the target agent's current log around the failure timestamp.
+- **An agent's reply doesn't match what it claims to have done.** Logs capture every tool call, edit, and shell command — they're the source of truth, not the agent's prose summary.
+- **Routing/timeout issues.** `mcp-server-*.jsonl` records session lifecycle (`Session created`, `Session closed`, `Session reaped`, `Evicted prior … session`) and broker decisions (`invoke_agent: caller → target`). Cross-reference its timestamps with the agent's log.
+- **Following an invocation chain.** Multiple invocations within a container run land in the same file; filter by `correlationId` to follow a chain across agents.
+
+### Constraints and notes
+
+- You have Read/Bash but not Write/Edit, so logs are read-only from your side. Don't try to rotate or truncate them.
+- Older files accumulate; always pick the newest per role unless investigating a historical session deliberately.
+- Your own CC CLI session log (user prompts, your replies) is **not** in `/app/logs/`. It lives at `/home/quorum/.claude/projects/-app/<sessionId>.jsonl` inside this container — that's the user-facing transcript; agent logs are the agent-side runtime.
+
 ## Session Resume
 
 Agent sessions are tracked server-side. When you invoke the same agent role multiple times within a turn, the agent automatically resumes its prior session with full conversation history. This is handled transparently — you do not pass `sessionId`.
 
-**What resume actually sends to the agent (important):** On resume, the agent receives **only the new task message you provide** — its role system prompt and any Prior Decisions bootstrap context are **NOT re-injected**, because the resumed session already carries them in its conversation history. This is by design: it keeps the agent's context coherent and avoids re-paying input cost on every resume.
+**What resume actually sends to the agent (important):** On resume, the agent receives **only the new task message you provide** — its role system prompt and any Prior Decisions bootstrap context are **NOT re-injected**, because the resumed session already carries them in its conversation history. This is by design: it keeps the agent's context coherent and avoids re-injecting the bootstrap on every resume.
+
+**Cost behavior of resume.** The prior transcript is part of the input on every resumed turn. Anthropic's prompt cache TTL is ~5 min — within that window the transcript reads at ~10× discount; past it, full input rates on the whole history. A tight back-to-back resume is cheap; a resume after a long idle (or while the user deliberates mid-turn) can cost more than starting fresh. When in doubt about idle gaps, prefer `sessionId: ""`.
 
 **Consequence — your follow-up action must fit the original session's intent.** The agent will interpret the new message as a continuation of the prior conversation. If you ask for something the prior system prompt or bootstrap context wouldn't have prepared the agent for (different ticket, different role expectation, fresh context), pass `sessionId: ""` to force a clean session — otherwise the agent operates with stale framing.
 

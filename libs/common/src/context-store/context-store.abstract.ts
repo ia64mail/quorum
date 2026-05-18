@@ -6,6 +6,32 @@ import {
 } from './context-store.types';
 
 /**
+ * Per-hit detail for the {@link SearchTrace} callback.
+ */
+export interface SearchTraceHit {
+  key: string;
+  score: number | null;
+  snippet: string;
+  tokensEstimate: number;
+  includedInResult: boolean;
+}
+
+/**
+ * Backend-produced trace emitted via the `onTrace` callback in
+ * {@link ContextStore.search}. The MCP layer wraps this with
+ * session/correlation/queryId fields before writing to the trace log.
+ */
+export interface SearchTrace {
+  engine: 'hybrid' | 'bm25-only' | 'memory';
+  durationMs: number;
+  hitCountRaw: number;
+  hitCountReturned: number;
+  truncatedByTokenBudget: boolean;
+  results: SearchTraceHit[];
+  errorMessage: string | null;
+}
+
+/**
  * Abstract storage contract for the Context Store subsystem.
  *
  * All consumers (MCP tools, MCP resources, Message Broker) depend on this
@@ -83,6 +109,7 @@ export abstract class ContextStore {
     query: string,
     id?: string,
     maxTokens?: number,
+    onTrace?: (trace: SearchTrace) => void,
   ): Promise<ContextItem[]>;
 
   /**

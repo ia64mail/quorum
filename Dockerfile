@@ -85,7 +85,7 @@ CMD ["sh", "-c", "mkdir -p /home/quorum/.claude/debug && exec node dist/main.js"
 # --- Runtime: moderator (Claude Code CLI + MCP client config) ---
 FROM node:24-bookworm-slim AS moderator
 
-WORKDIR /app
+WORKDIR /mnt/quorum/workspace
 
 ARG HOST_UID=1000
 ARG HOST_GID=1000

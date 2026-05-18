@@ -17,6 +17,7 @@ import {
   ContextStore,
   SetParams,
 } from '@app/common';
+import type { SearchTrace, SearchTraceHit } from '@app/common';
 import { contextStoreConfig } from '../config';
 
 @Injectable()
@@ -189,11 +190,15 @@ export class InMemoryStore
     query: string,
     id?: string,
     maxTokens?: number,
+    onTrace?: (trace: SearchTrace) => void,
   ): Promise<ContextItem[]> {
+    const startMs = Date.now();
     const results: ContextItem[] = [];
+    const traceHits: SearchTraceHit[] = [];
     const lowerQuery = query.toLowerCase();
     const prefix = `${scope}:${id ?? '_'}:`;
     let tokenBudget = maxTokens ?? Infinity;
+    let budgetExhausted = false;
 
     for (const [compositeKey, item] of this.store) {
       if (!compositeKey.startsWith(prefix)) {
@@ -214,12 +219,39 @@ export class InMemoryStore
         terms.every((term) => searchable.includes(term))
       ) {
         const tokens = this.estimateTokens(item.value);
-        if (tokens > tokenBudget) {
-          break;
+        if (!budgetExhausted && tokens <= tokenBudget) {
+          tokenBudget -= tokens;
+          results.push(item);
+          traceHits.push({
+            key: item.key,
+            score: null,
+            snippet: serialized.slice(0, 200),
+            tokensEstimate: tokens,
+            includedInResult: true,
+          });
+        } else {
+          budgetExhausted = true;
+          traceHits.push({
+            key: item.key,
+            score: null,
+            snippet: serialized.slice(0, 200),
+            tokensEstimate: tokens,
+            includedInResult: false,
+          });
         }
-        tokenBudget -= tokens;
-        results.push(item);
       }
+    }
+
+    if (onTrace) {
+      onTrace({
+        engine: 'memory',
+        durationMs: Date.now() - startMs,
+        hitCountRaw: traceHits.length,
+        hitCountReturned: results.length,
+        truncatedByTokenBudget: traceHits.length > results.length,
+        results: traceHits,
+        errorMessage: null,
+      });
     }
 
     return results;

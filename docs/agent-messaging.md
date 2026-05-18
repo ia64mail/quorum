@@ -120,13 +120,15 @@ server.tool('invoke_agent', {
   target: z.enum(INVOCABLE_AGENT_ROLES),   // All 6 roles (including moderator)
   action: z.string(),                       // What you need the agent to do
   context: z.record(z.unknown()).optional(), // Relevant context to pass
-  wait: z.boolean().default(true),          // Block until response (async not yet implemented)
+  wait: z.boolean().default(true),          // Block until response; long-poll continuation for moderator→long-role calls (mcp-connectivity §3.6)
   correlationId: z.string().optional(),     // Generated as UUID if omitted
   depth: z.number().int().min(0).default(0) // Call depth (auto-incremented by bridge)
 });
 ```
 
 When called through the MCP Tool Bridge, `callerRole`, `correlationId`, and `depth` are auto-injected — agents only need to specify `target`, `action`, and optionally `context`.
+
+For moderator → long-timeout-role calls (teamlead, architect, qa, developer), the response may not arrive within a single POST window. When the server's 270 s ceiling fires before the target agent finishes, `invoke_agent` returns `{ status: "pending", invocationId, next: "call wait_invocation(invocationId)" }` instead of an `InvokeResponse`. The moderator must then call `wait_invocation(invocationId)` to continue waiting, repeating until `status` is `completed` or `failed`. Agent-to-agent calls and moderator calls targeting short-timeout roles (productowner, moderator) always return an `InvokeResponse` inline. See [MCP Connectivity §3.6](mcp-connectivity.md#36-long-poll-continuation-moderator-only) for the full protocol.
 
 ### Agent Registration
 
@@ -171,6 +173,29 @@ sequenceDiagram
 
 **Chaining:** Synchronous calls compose naturally. When Developer calls Architect mid-task, and Architect calls ProductOwner for clarification, each call is a nested synchronous request-response. The call stack unwinds as responses return. The broker tracks depth and circular calls to prevent unbounded chains.
 
+### Long-poll continuation (moderator → long-running agents)
+
+When the moderator invokes a long-timeout role (teamlead, architect, qa, developer), the server splits the response across multiple POST windows to stay under CC CLI's ~5 min `bodyTimeout`. The caller sees a `pending` → `wait` → `completed` cycle instead of one long-held POST:
+
+```mermaid
+sequenceDiagram
+    participant Mod as Moderator
+    participant B as Broker
+    participant Dev as Developer
+    Mod->>B: invoke_agent(developer, "implement feature")
+    B->>Dev: POST /invoke
+    Note over B: 270 s ceiling fires — still working
+    B-->>Mod: { status: "pending", invocationId }
+    Mod->>B: wait_invocation(invocationId)
+    Note over Dev: finishes work
+    Dev-->>B: response
+    B-->>Mod: { status: "completed", response }
+```
+
+The developer's work runs continuously server-side; the pending/wait cycle is purely a protocol-envelope concern for the moderator's HTTP transport. Agent-to-agent calls are unaffected — they complete in a single synchronous round-trip on the 35-min undici dispatcher.
+
+See [MCP Connectivity §3.6](mcp-connectivity.md#36-long-poll-continuation-moderator-only) for the full protocol details including caller-aware gating, the `InvocationResultStore`, and TTL reaping.
+
 ### User Clarification (via Moderator)
 
 Agents can invoke the `moderator` to escalate decisions to the user. The MCP server routes the invocation to the moderator's Claude Code CLI container, which surfaces the question to the user via MCP elicitation.
@@ -205,6 +230,7 @@ Quorum's bidirectional MCP architecture enables:
 | User escalation | Invoke moderator → MCP elicitation → user |
 | Task decomposition | Chained synchronous calls with depth tracking |
 | Call safety | Circular call prevention, depth limit, role-based timeouts |
+| Long-poll continuation | Moderator → long-role calls split across multiple POSTs via `wait_invocation` ([mcp-connectivity §3.6](mcp-connectivity.md#36-long-poll-continuation-moderator-only)) |
 | Fire-and-forget (wait: false) | Schema accepts the parameter but broker always awaits — not yet implemented |
 
 This architecture transforms MCP from a simple tool-calling protocol into a **multi-agent coordination platform**.

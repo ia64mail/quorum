@@ -67,37 +67,41 @@ A complete session report requires **four** inputs:
 
 | Source | What it provides | How to get it |
 |--------|-----------------|---------------|
-| **parse-logs.mjs digest** | Structured data: agent invocations, tool calls, costs, errors. **Does not cover the moderator** (see below). | `node tools/session-report/parse-logs.mjs` |
-| **Moderator CC CLI session log** | User prompts, moderator's text replies, MCP tool results the moderator saw, retry/re-register narration | Read from the `quorum_moderator-claude-data` named volume (see "Moderator Session Log" below) |
+| **parse-logs.mjs digest** | Structured data: agent invocations, tool calls, costs, errors. **Includes moderator activity** — the adapter runs automatically (see below). | `node tools/session-report/parse-logs.mjs` |
+| **Moderator CC CLI session log (raw)** | User prompts, moderator's text replies, MCP tool results, retry/re-register narration | Bind-mounted at `logs/moderator-sessions/` — auto-adapted by `parse-logs.mjs` |
 | **OpenSearch `quorum-context` index** | Context Store items — full JSON payloads stored by agents during session | Query OpenSearch (QRM5-009 replaced the legacy `quorum.context` JSON dump). See "Context Store Dump" below for the curl recipe. |
 | **User context** | Session goal, run number, known bugs to verify | User provides when requesting the report |
 
-### Moderator Session Log (post-QRM6-002)
+### Moderator Session Log (post-QRM7-005)
 
-The moderator is now Claude Code CLI running inside the `quorum-moderator-1` container (QRM6-002). It does **not** write to `logs/terminal-*.jsonl` — that file is the legacy `apps/terminal/` NestJS app, which still starts as a Compose service and still calls `register_agent(role='moderator')` at boot but is no longer the user-facing interface (deletion is QRM6-009). For sessions after QRM6-002, the user-visible "moderator" is the CC CLI process the user attaches to via `./scripts/moderator.sh` or `docker compose exec -it moderator claude`.
+The moderator is Claude Code CLI running inside the `quorum-moderator-1` container. CC CLI writes one JSONL file per session under `/home/quorum/.claude/projects/<project-slug>/<sessionId>.jsonl`. A nested bind-mount in `docker-compose.yml` shadows the named volume's `projects/` subtree onto the host at `logs/moderator-sessions/`, so raw session files are directly accessible — no `docker exec` or alpine container needed.
 
-CC CLI writes one JSONL file per session under `/home/quorum/.claude/projects/-app/<sessionId>.jsonl` inside the moderator container, persisted via the `quorum_moderator-claude-data` named volume. To read it from the host:
+**Automatic ingestion:** `parse-logs.mjs` auto-runs `cc-session-adapter.mjs` before parsing when `logs/moderator-sessions/` exists. The adapter reads CC CLI session JSONLs and emits `logs/moderator-{timestamp}.jsonl` files in QuorumLogger format, which the parser then ingests as first-class agent activity. Use `--no-adapter` to skip:
 
 ```bash
-# List all moderator session files, newest last
-docker run --rm -v quorum_moderator-claude-data:/data alpine sh -c \
-  'cd /data/projects/-app && for f in *.jsonl; do echo "$(stat -c "%y" "$f") $f"; done' | sort
+# Normal use — adapter runs automatically
+node tools/session-report/parse-logs.mjs
 
-# Pull the latest one to /tmp for analysis
-docker run --rm -v quorum_moderator-claude-data:/data alpine \
-  cat /data/projects/-app/<sessionId>.jsonl > /tmp/moderator-session.jsonl
+# Skip adapter (e.g., if you already ran it manually)
+node tools/session-report/parse-logs.mjs --no-adapter
 
-# Extract user prompts only
-jq -r 'select(.type=="user" and (.message.content|type=="string")) | .message.content' \
-  /tmp/moderator-session.jsonl
-
-# Extract moderator (assistant) text replies
-jq -r 'select(.type=="assistant") | .message.content
-       | if type=="array" then (map(select(.type=="text") | .text) | join("\n")) else . end' \
-  /tmp/moderator-session.jsonl
+# Run adapter standalone (debugging, incremental analysis)
+node tools/session-report/cc-session-adapter.mjs
+node tools/session-report/cc-session-adapter.mjs --dry-run
 ```
 
-Each line is one of: `permission-mode`, `summary`, `user`, `assistant`, or `tool_use_result`. `assistant` entries with non-empty `text` content are the moderator's user-facing narration — that's where you find decisions, retry messages ("Session identity was lost"), and summaries of agent responses.
+**Event mapping:** The adapter maps CC CLI event types to QuorumLogger contexts:
+
+| CC CLI shape | Adapter context | Notes |
+|---|---|---|
+| `type: "user"` with string content or text-only blocks | `UserPrompt` | User's input to the moderator |
+| `type: "user"` with `tool_result` content blocks | `ToolResult` | Tool execution results |
+| `type: "assistant"` with text blocks | `ModeratorResponse` | Moderator's user-facing narration |
+| `type: "assistant"` with `tool_use` blocks | `ToolCall` | Includes tool name and input |
+| `type: "summary"` | `SessionSummary` | Session summary entries |
+| `type: "elicitation"` | `Elicitation` | Agent-to-user clarification (when CC CLI logs these) |
+
+Internal types (`queue-operation`, `ai-title`, `last-prompt`, `attachment`, `permission-mode`) are dropped silently. Thinking-only assistant messages are also dropped. Unrecognized types produce a `console.warn` and are skipped.
 
 ### Multiple moderator registrations are normal
 
@@ -165,8 +169,25 @@ Since QRM5, `context_query` supports `mode=search` (hybrid BM25 + k-NN over the 
 - Whether the embedding pipeline kept up (`EmbeddingPipelineService` logs should show `Embedded document […]` for each new item within ~90s).
 - Whether any degraded-to-BM25 fallback was logged (Ollama unreachable).
 
+### Context Search Trace Stream (post-QRM7-016)
+
+A dedicated JSONL stream at `logs/context-search-{startupTimestamp}.jsonl` captures full detail for every `context_query mode=search` invocation. Each record includes the verbatim query, engine choice (`hybrid`/`bm25-only`/`memory`), per-hit scores and snippets, token-budget truncation flag, timing, and error surface. The main MCP log retains a single-line breadcrumb with `queryId` linking to the detailed record.
+
+This stream is **not** consumed by `parse-logs.mjs` today. For ad-hoc search quality analysis:
+
+```bash
+# Score distribution
+jq -c '.extra.results[] | {score, key}' logs/context-search-*.jsonl
+
+# BM25-only fallbacks (embedding service degraded)
+jq -c 'select(.extra.engine == "bm25-only") | {queryId: .extra.queryId, query: .extra.queryText}' logs/context-search-*.jsonl
+
+# Token-budget truncations
+jq -c 'select(.extra.truncatedByTokenBudget == true) | {queryId: .extra.queryId, raw: .extra.hitCountRaw, returned: .extra.hitCountReturned}' logs/context-search-*.jsonl
+```
+
 ### Tips for Claude Code
-- The **Goal** and **User Prompt** come from the moderator CC CLI session log (`jq -r 'select(.type=="user" ...)'`) — no need to ask the user to paste anymore
+- The **Goal** and **User Prompt** are now first-class entries in the digest as `UserPrompt` and `ModeratorResponse` contexts — the adapter extracts them automatically from the CC CLI session log
 - Correlation IDs group related invocations within a single user turn; expect a new correlationId per turn (`new_conversation` rotates it)
 - A second invocation with the **same** correlationId, target, and prompt body is a retry. Inspect the moderator log around that timestamp — a "Session identity was lost" narration confirms an MCP transport drop; otherwise look for the agent's first response failing to render in the moderator transcript
 - Cost data comes from agent-side `InvocationHandler` logs; the digest extracts it automatically. Note: `parse-logs.mjs` keys agent-activity entries by `correlationId:role:startTime`, so two invocations with the same correlationId+role surface as separate rows but the second row's "reportedTurns/cost" can race the parser — cross-check with the agent JSONL directly for retries
@@ -185,6 +206,7 @@ All logs are JSONL with fields: `timestamp`, `level`, `context`, `message`, `age
 | mcp-server | `McpService` | `invoke_agent: caller → target` |
 | mcp-server | `MessageBroker` | `Invoke:` (start), `Completed:` (end + success) |
 | mcp-server | `InMemoryStore` | context load/save counts |
+| mcp-server (trace) | `ContextSearchTrace` | per-search detail: query, engine, scores, truncation (separate stream: `context-search-*.jsonl`) |
 | agent | `InvocationHandler` | `Invocation received:`, `Invocation complete:` (cost, turns, duration), `Invocation failed:` |
 | agent | `ClaudeCodeService` | `Session started:`, `SDK response:`, `SDK tool start/done/failed:`, `SDK reasoning:` |
 | agent | `McpClientService` | connection, registration, tool discovery |
