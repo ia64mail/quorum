@@ -146,6 +146,7 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
       }
     };
     const headerWatch = setInterval(maybeStartKeepalive, 250);
+    headerWatch.unref(); // Request socket owns the lifecycle; don't anchor the event loop.
     res.on('finish', () => clearInterval(headerWatch));
     res.on('close', () => clearInterval(headerWatch));
 
@@ -315,6 +316,7 @@ export class McpController implements OnModuleInit, OnModuleDestroy {
         clearInterval(interval);
       }
     }, SSE_KEEPALIVE_INTERVAL_MS);
+    interval.unref(); // Response socket owns the lifecycle; don't anchor the event loop.
 
     res.on('close', () => {
       clearInterval(interval);
