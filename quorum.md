@@ -103,6 +103,89 @@ All tickets follow the structure and naming conventions defined in `tickets/READ
 - **Post-implementation**: Implementation Notes section added with status, files modified, deviations, and verification results
 - **Acceptance criteria**: Flip `- [ ]` to `- [x]` upon completion
 
+## GitHub Workflow
+
+All work in Quorum flows through GitHub issues, branches, and PRs. This section is a shared reference for every agent role. The canonical, full-detail spec lives in [`docker/moderator/.claude/skills/gh-workflow/SKILL.md`](docker/moderator/.claude/skills/gh-workflow/SKILL.md); what follows is the condensed mental model.
+
+### Two Lifecycles
+
+| Lifecycle | When to use | Integration branch? | Milestone? |
+|-----------|-------------|---------------------|------------|
+| **Epic** | Multi-step initiative with 2+ sub-issues | Yes — `{issue-number}-{slug}-staging` off `main` | Required — one per epic |
+| **Standalone** | Single branch, single unit of work | No — branch directly off `main` | Only if it belongs to an existing wave |
+
+**Epic flow:** requirement → draft ticket MD → GH epic issue (+ milestone) → staging branch → staging PR → sub-issues → per-sub-issue branches/PRs into staging → final staging→main merge.
+
+**Standalone flow:** requirement → draft ticket MD → GH issue → branch off `main` → PR → merge to `main`.
+
+### Milestones
+
+- One milestone per epic. Title format: `{Marker} — {Title}` (e.g., `QRM8 — Workspace Isolation`).
+- The epic issue **and** every sub-issue attach to the same milestone — this is what makes the progress bar meaningful.
+- Standalone issues skip milestones unless they belong to an existing initiative's wave.
+- No Projects v2, no custom fields. Status is expressed via Open/Closed and PR state.
+
+### Branch Naming
+
+- **Feature branch:** `{issue-number}-{slug}` (e.g., `42-multi-agent-router`). Slug: lowercase, hyphens, 3–6 words.
+- **Staging branch:** `{issue-number}-{slug}-staging`. The `-staging` suffix marks it as a protected integration branch.
+- No `feature/`, `bugfix/`, or `issue-` prefixes — just number and slug.
+- Sub-issue branches under a staging epic branch **from** the staging branch and PR **into** it.
+
+### PR Conventions
+
+- **Title:** `#{issue-number}: {Issue title}` (e.g., `#42: Multi-agent conversation routing`).
+- **Body first line:** `Resolves: https://github.com/ia64mail/quorum/issues/{issue-number}` — this triggers auto-linking.
+- **Body remainder:** implementation details, design decisions, test plan. Never put implementation details in the issue description.
+- Push with `-u` to set tracking on first push.
+
+### The `Resolves:` Two-Step Retarget Trick
+
+GitHub's `Resolves:` keyword only auto-links when the PR targets the **default branch** (`main`). PRs targeting staging branches are silently ignored. Workaround:
+
+1. **Create the PR targeting `main` first** — this fires the auto-link and populates the Development sidebar.
+2. **Immediately retarget to the staging branch:**
+   ```bash
+   gh pr edit {pr-number} --base {staging-branch}
+   ```
+   The link survives the base change.
+
+If the installed `gh` is too old for `gh pr edit --base` (e.g., Debian's `gh 2.23.0`), fall back to the REST API:
+```bash
+gh api --method PATCH /repos/ia64mail/quorum/pulls/{pr-number} -f base="{staging-branch}"
+```
+
+This applies to **every** PR targeting a non-default branch — never skip it.
+
+### Ticket File Naming
+
+- **Draft:** `tickets/draft-{slug}.md` (on `main` or the working branch).
+- **After issue creation:** rename to `tickets/{issue-number}-{slug}.md`. Update the H1 inside to `# #{issue-number}: {Title}`.
+- The slug is preserved from the draft filename (minus the `draft-` prefix).
+
+### Issue Content Rule
+
+- Issues contain **Summary, Motivation, and Problem Statement only** — the "what" and the "why."
+- **Never** include implementation details in issue descriptions. Those belong in the ticket MD file or the PR body.
+- If a detailed spec exists in `tickets/*.md`, reference it from the issue body.
+
+### Epic / Sub-Issue Hierarchy
+
+- An **epic** is an issue with sub-issues linked via GitHub's native parent-child relationship, plus an attached milestone.
+- Sub-issues are linked via GraphQL (`addSubIssue` mutation) and attached to the same milestone.
+- `gh issue edit --add-parent` does not exist; use the GraphQL API.
+
+### Classification (Implicit)
+
+GitHub Issue Types (`Epic`/`Bug`/`Task`) are **not available** in this user-owned repo. Classification is implicit:
+- **Epic** = issue with sub-issues + milestone.
+- **Sub-issue** = issue with a parent link, same milestone.
+- **Standalone** = no parent, no milestone (or milestone-only for wave membership).
+
+No labels needed — the sub-issue graph and milestone carry the signal.
+
+---
+
 ## Codebase Conventions
 
 ### Import Patterns
@@ -124,14 +207,15 @@ All tickets follow the structure and naming conventions defined in `tickets/READ
 - Keep implementations focused — no speculative features
 
 ### Commit Messages
-- **Prefix every commit with the ticket ID**: `QRMX-NNN: <concise description>`
-- For bug tickets: `QRMX-BUG-NNN: <concise description>`
-- When no ticket applies (e.g. ad-hoc fixes during session): `QRMX(no-ticket): <description>`
+- **Canonical format (post-#20):** `#<issue-number>: <concise description>` — use the GitHub issue number as the prefix. This format was established by ticket #20 (PR-based workflow bootstrap) and applies to all subsequent work.
+- **Bug/no-ticket:** `QRMX(no-ticket): <description>` for ad-hoc fixes not tied to an issue. Prefer filing an issue first so commits are traceable.
+- **Legacy format:** `QRMX-NNN: <concise description>` is retained for historical commits and remains acceptable on tickets that predate the GH-issue-numbered convention.
 - Keep the description concise — what changed and why, not how
-- Multiple logical units → separate commits, each with the same ticket prefix
+- Multiple logical units → separate commits, each with the same issue-number prefix
 - Examples:
-  - `QRM4-005: add bootstrap context unit tests`
-  - `QRM4-BUG-012: fix moderator prompt caching`
+  - `#20: add PR-based workflow bootstrap spec`
+  - `#42: implement multi-agent conversation routing`
+  - `QRM4-005: add bootstrap context unit tests` *(legacy)*
   - `QRM4(no-ticket): fix typo in docker-compose healthcheck`
 
 ---
@@ -355,6 +439,16 @@ Prefer reasonable assumptions for non-controversial decisions. Every `invoke_age
 - Force-push or run destructive commands (`git push --force`, `rm -rf /`)
 - Decompose work into subtasks — that's the team lead's role
 - Guess at requirements when context is missing — query or ask
+
+### Moderator
+
+The moderator is the **orchestration hub** — the only agent that interfaces directly with the user. All tasks begin and end with the moderator.
+
+The moderator drives `/gh-workflow` to create GitHub issues, branches, and PRs for every ticket. It enforces a **two-phase user-review process**: Phase 1 pauses after the spec PR is open so the user can review the ticket before any implementation starts; Phase 2 pauses after implementation and code review are complete so the user can do a final review and merge.
+
+The moderator does not design (architect), decompose tasks (team lead), or implement code (developer). Write/Edit/NotebookEdit are mechanically denied to the moderator — it delegates all file modifications to other agents.
+
+Operational rules for the moderator's ticket lifecycle — the 5-step workflow, gating conditions, and pre-isolation workspace notes — live in [`docker/moderator/CLAUDE.md`](docker/moderator/CLAUDE.md) under "Ticket Workflow Discipline". The summary here is for agents' shared understanding of what the moderator does and how it interacts with the rest of the team.
 
 ## Constraints
 
