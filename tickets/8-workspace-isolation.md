@@ -15,7 +15,7 @@ The current shared-workspace model was adequate for sequential, single-developer
 | All agent containers share a single bind-mounted working tree | Concurrent invocations edit the same files; `git status` is non-deterministic; partial commits capture another agent's in-flight work | Architecture since QRM1 — never isolated |
 | Agents can run `git commit` directly in the SDK loop | Uncontrolled commit timing, inconsistent commit messages, partial work committed mid-task; no handler-level verification before push | Developer role allows `git commit`; architect/qa deny it but developer/teamlead do not |
 | Host filesystem is the single bridge between containers | Cannot deploy on a remote host without NFS/sshfs; host changes bypass git entirely; bind-mount is a container-escape surface | `${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw` in `docker-compose.yml` |
-| No remote git push auth in containers | Agents commit locally today, but the workspace bind mount is what makes those commits reach the host. With the bind mount removed (QRM8-002, QRM8-005), there is no path for agent or moderator commits to reach the user without remote push, and no PAT or gh credentials are configured. The handler's `checkUncommittedChanges()` warns but can't resolve; moderator has no GitHub CLI integration | Bind-mount transitive: agent identity is wired (`docker-compose.yml:1-5`, `x-git-identity`), git binary is installed (`Dockerfile:48`), developer/teamlead roles permit `git commit` (`role-tool-profiles.ts:51,70-78`), but no remote credentials — relied on the bind mount as the implicit transport |
+| No remote git push auth in containers | Agents commit locally today, but the workspace bind mount is what makes those commits reach the host. With the bind mount removed (#11, #14), there is no path for agent or moderator commits to reach the user without remote push, and no PAT or gh credentials are configured. The handler's `checkUncommittedChanges()` warns but can't resolve; moderator has no GitHub CLI integration | Bind-mount transitive: agent identity is wired (`docker-compose.yml:1-5`, `x-git-identity`), git binary is installed (`Dockerfile:48`), developer/teamlead roles permit `git commit` (`role-tool-profiles.ts:51,70-78`), but no remote credentials — relied on the bind mount as the implicit transport |
 | `InMemorySessionStore` loses sessions on process restart | Session resume relies on in-process memory; container restart drops all session history; `FileSessionStore` design exists but was never implemented | QRM5-001 identified the fix; `tickets/tmp/session-resume-investigation.md` documented the root cause |
 | CC auto-memory writes to ephemeral tmpfs on agents | Memory files accumulate on `~/.claude` tmpfs, lost on restart; model wastes turns writing to a sink that provides no cross-session value; no redirect to the durable Context Store | CC SDK default behavior; agent tmpfs at `docker-compose.yml:34` |
 | Moderator depends on host bind mount for workspace access | Moderator cannot `git push`; reads stale host state; no mechanism to detect remote changes by agents | Same bind-mount dependency as agents |
@@ -46,7 +46,7 @@ Three session persistence backends were evaluated (see `tickets/tmp/session-resu
 
 ### Volume-Based Memory Persistence vs. Context Store Redirect
 
-Under QRM8-002 worktrees, each invocation's cwd is `/var/agent-worktrees/<correlationId>`. CC encodes this into `~/.claude/projects/-var-agent-worktrees-<correlationId>/memory/` — a per-invocation subdirectory. A shared per-role volume at `~/.claude/projects/` would accumulate disjoint per-invocation memory dirs that no subsequent invocation ever reads. The only workarounds (pinning SDK cwd to a stable non-worktree path, or symlink-hacking each encoded subdir) are fragile across SDK upgrades.
+Under #11 worktrees, each invocation's cwd is `/var/agent-worktrees/<correlationId>`. CC encodes this into `~/.claude/projects/-var-agent-worktrees-<correlationId>/memory/` — a per-invocation subdirectory. A shared per-role volume at `~/.claude/projects/` would accumulate disjoint per-invocation memory dirs that no subsequent invocation ever reads. The only workarounds (pinning SDK cwd to a stable non-worktree path, or symlink-hacking each encoded subdir) are fragile across SDK upgrades.
 
 **Verdict:** Volume-based CC memory persistence is structurally non-viable under worktrees. Redirect persistent role-level knowledge to `context_store(scope='agent')` via prompt guidance. Accept that CC memory writes occasionally land on agent tmpfs and die at container restart — the cost is a handful of tokens per session; the benefit is zero implementation work and free memory isolation for future same-role parallelism.
 
@@ -420,24 +420,24 @@ No mechanical fences. No auto-memory deny rules. Moderator memory unchanged (per
 |------|-------------|--------------|
 | **Per-invocation Docker containers** | Worktrees provide sufficient isolation at ~1s vs. 30–90s overhead. Container orchestration adds complexity with no proportional benefit for file-level isolation. | Worktrees prove insufficient (e.g., agent needs different system packages per task, or worktree cleanup is unreliable) |
 | **Redis SessionStore** | FileSessionStore on named volume is sufficient for single-host, single-container-per-role deployment. No external dependency. | Multi-host scaling or same-role horizontal scaling (multiple developer containers) |
-| **Context Store quality upgrades** | Background summarization, agent-scope bootstrap injection, decay/TTL — these make `context_store(scope='agent')` a full replacement for CC memory. Valuable but out of scope for QRM8's isolation theme. | QRM9. Monitor agent performance after QRM8-007 lands; if agents show degraded multi-step task quality, escalate priority |
+| **Context Store quality upgrades** | Background summarization, agent-scope bootstrap injection, decay/TTL — these make `context_store(scope='agent')` a full replacement for CC memory. Valuable but out of scope for QRM8's isolation theme. | QRM9. Monitor agent performance after #16 lands; if agents show degraded multi-step task quality, escalate priority |
 | **Per-role git identity** | All commits attributed to PAT owner's GitHub identity. Per-role identity (separate GitHub Apps or bot accounts) enables audit trails per agent. | When audit accountability matters — deferred until the single-PAT model causes real confusion |
 | **Web UI / remote moderator** | QRM8 removes bind mounts but keeps the moderator as a local Docker-attached CLI session. Remote access (web UI, SSH tunnel) is a separate concern. | User demand for remote access without Docker exec |
-| **`new_conversation` prompt alignment** | The moderator prompt in `docker/moderator/CLAUDE.md` should align language with D9 (session cache persists across turns) and D10 (turn-start reminder). This is a prompt refinement, not a code change. The mechanical reminder (D10) reduces the urgency — the prompt change is polish, not a safety gap. | QRM8-005 or shortly after |
+| **`new_conversation` prompt alignment** | The moderator prompt in `docker/moderator/CLAUDE.md` should align language with D9 (session cache persists across turns) and D10 (turn-start reminder). This is a prompt refinement, not a code change. The mechanical reminder (D10) reduces the urgency — the prompt change is polish, not a safety gap. | #14 or shortly after |
 | **Automatic `agentSessions` restore from context_store on MCP restart** | The optional cross-MCP-restart durability for D9. Valuable but not blocking — MCP restarts are infrequent and FileSessionStore data survives regardless (only the cache pointer is lost). | If MCP restart frequency increases or session resume failures become a pain point |
 
 ---
 
 ## Milestone Scope
 
-### QRM8-001 — FileSessionStore on Named Volume
+### #10 — FileSessionStore on Named Volume
 
 **Status:** Open (builds on QRM5-001 session resume foundation)
 
 Replace `InMemorySessionStore` with a `FileSessionStore` that persists SDK session transcripts to a Docker named volume. The current in-memory store (`claude-code.service.ts:24`) loses all session data on process restart — resume only works within a single container lifetime. The `FileSessionStore` implementation follows the design validated in `tickets/tmp/session-resume-investigation.md` (Option A). **Implements D3 (FileSessionStore), the mcp-server-side change for D9 (cross-turn resume), and D10 (turn-start reminder in `new_conversation` response).**
 
 **Key decisions:**
-- Storage path: `/var/agent-sessions/` on a per-role named Docker volume (not the workspace mount, which is removed in QRM8-002)
+- Storage path: `/var/agent-sessions/` on a per-role named Docker volume (not the workspace mount, which is removed in #11)
 - Implements the SDK `SessionStore` interface (`append`, `load`, `listSubkeys`)
 - **[D3] Session lookup keyed by `sessionId` only** — `projectKey` is accepted on `append()` for SDK compatibility but ignored on `load()`. SessionIds are globally-unique UUIDs; worktree cwd changes don't break resume.
 - The volume survives container restarts; each agent role gets its own volume to prevent cross-role session leakage
@@ -456,9 +456,9 @@ Replace `InMemorySessionStore` with a `FileSessionStore` that persists SDK sessi
 
 **Depends on:** —
 
-**Full ticket:** [QRM8-001](QRM8-001-file-session-store.md)
+**Full ticket:** [#10](10-file-session-store.md)
 
-### QRM8-002 — Git Worktree Per Invocation + Agent-Side Repository Infrastructure
+### #11 — Git Worktree Per Invocation + Agent-Side Repository Infrastructure
 
 **Status:** Open (core isolation mechanism — implements D1)
 
@@ -478,11 +478,11 @@ Each invocation creates an isolated git worktree at `/var/agent-worktrees/<corre
 
 **Touches:** `libs/common/src/messaging/invoke.types.ts` (add `branch` field), `apps/agent/src/connection/invocation-handler.service.ts` (worktree lifecycle), `apps/agent/src/llm/claude-code.service.ts` (accept cwd in params), `apps/agent/src/llm/claude-code.types.ts` (add cwd to ExecuteParams), `apps/agent/src/config/agent.config.ts` (redefine workspaceDir semantics), `docker-compose.yml` (remove bind mount, add repo + worktree volumes, add agent entrypoint), `Dockerfile` (agent stage: add entrypoint for clone init, create `/var/agent-worktrees/` dir)
 
-**Depends on:** QRM8-006 (PAT wiring — the clone and fetch operations need git auth)
+**Depends on:** #15 (PAT wiring — the clone and fetch operations need git auth)
 
-**Full ticket:** [QRM8-002](QRM8-002-worktree-per-invocation.md)
+**Full ticket:** [#11](11-worktree-per-invocation.md)
 
-### QRM8-003 — Handler-Controlled Commit and Push
+### #12 — Handler-Controlled Commit and Push
 
 **Status:** Open (completes the "agents only edit, handler does git" model — implements D2)
 
@@ -494,15 +494,15 @@ Move `git add`, `git commit`, and `git push` out of the SDK loop and into `Invoc
 4. All agent roles get `git commit` and `git push` added to `deniedBashCommands` in `role-tool-profiles.ts`
 5. `git checkout -b` also denied for all roles (the handler controls branching via worktrees)
 
-**Commit message format:** The handler constructs the message from the invocation's action and correlationId. If the action contains a ticket ID (e.g., "QRM8-003"), it uses that as the prefix. Otherwise, it uses the correlationId as a reference.
+**Commit message format:** The handler constructs the message from the invocation's action and correlationId. If the action contains a ticket ID (e.g., "#12"), it uses that as the prefix. Otherwise, it uses the correlationId as a reference.
 
 **Touches:** `apps/agent/src/connection/invocation-handler.service.ts` (replace `checkUncommittedChanges` with `commitAndPush`), `apps/agent/src/config/role-tool-profiles.ts` (deny `git commit`/`git push`/`git checkout -b` for all roles), `apps/agent/src/config/tool-guard-hook.spec.ts` (update tests)
 
-**Depends on:** QRM8-002 (worktree cwd — commit/push targets the worktree), QRM8-006 (PAT — push auth)
+**Depends on:** #11 (worktree cwd — commit/push targets the worktree), #15 (PAT — push auth)
 
-**Full ticket:** [QRM8-003](QRM8-003-handler-commit-push.md)
+**Full ticket:** [#12](12-handler-commit-push.md)
 
-### QRM8-004 — Branch-in-Flight Guard in MessageBroker
+### #13 — Branch-in-Flight Guard in MessageBroker
 
 **Status:** Open (concurrency safeguard — implements D6)
 
@@ -518,11 +518,11 @@ Add a broker-level guard that prevents two concurrent invocations from operating
 
 **Touches:** `apps/mcp-server/src/messaging/message-broker.service.ts` (new safeguard), `apps/mcp-server/src/messaging/message-broker.service.spec.ts` (test coverage)
 
-**Depends on:** QRM8-002 (the `branch` field in `InvokeRequest` must exist for the guard to operate)
+**Depends on:** #11 (the `branch` field in `InvokeRequest` must exist for the guard to operate)
 
-**Full ticket:** [QRM8-004](QRM8-004-branch-in-flight-guard.md)
+**Full ticket:** [#13](13-branch-in-flight-guard.md)
 
-### QRM8-005 — Moderator Becomes Standalone Git Client
+### #14 — Moderator Becomes Standalone Git Client
 
 **Status:** Open (moderator-side isolation — implements D4, D5 moderator side)
 
@@ -538,15 +538,15 @@ Remove the moderator's workspace bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/w
 - Tool-guard defense-in-depth: deny `cat ~/.config/gh/hosts.yml` and similar paths via moderator settings.json deny rules
 - `docker-compose.yml`: remove workspace bind mount from moderator service; add GH_TOKEN to moderator environment (with note to unset in entrypoint)
 
-**Interaction with QRM7-004:** QRM7-004 sets `WORKDIR /mnt/quorum/workspace`. This path remains valid under QRM8-005 — it points to the git clone location on the named volume instead of the bind mount. The WORKDIR change in QRM7-004 is preserved and works correctly with the new backing storage. CC CLI still auto-loads `CLAUDE.md` from cwd.
+**Interaction with QRM7-004:** QRM7-004 sets `WORKDIR /mnt/quorum/workspace`. This path remains valid under #14 — it points to the git clone location on the named volume instead of the bind mount. The WORKDIR change in QRM7-004 is preserved and works correctly with the new backing storage. CC CLI still auto-loads `CLAUDE.md` from cwd.
 
 **Touches:** `docker/moderator/entrypoint.sh` (clone + auth bootstrap), `docker-compose.yml` (remove bind mount, add GH_TOKEN env), `Dockerfile` moderator stage (ensure git/gh CLI available, create clone target dir), `docker/moderator/settings.json` (add deny rules for credential paths)
 
-**Depends on:** QRM8-006 (PAT and gh CLI auth — the clone needs credentials)
+**Depends on:** #15 (PAT and gh CLI auth — the clone needs credentials)
 
-**Full ticket:** [QRM8-005](QRM8-005-moderator-git-client.md)
+**Full ticket:** [#14](14-moderator-git-client.md)
 
-### QRM8-006 — PAT Wiring and SDK Environment Filtering
+### #15 — PAT Wiring and SDK Environment Filtering
 
 **Status:** Open (remote auth foundation — implements D5; commit identity already wired via `x-git-identity`)
 
@@ -571,15 +571,15 @@ Wire a fine-grained GitHub Personal Access Token (PAT) through the system. The P
 
 **Depends on:** —
 
-**Full ticket:** [QRM8-006](QRM8-006-pat-wiring.md)
+**Full ticket:** [#15](15-pat-wiring.md)
 
-### QRM8-007 — Redirect Agent Memory to Context Store
+### #16 — Redirect Agent Memory to Context Store
 
 **Status:** Open (prompt-only change — implements D7)
 
 Add a paragraph to `SYSTEM_PREAMBLE` in `role-prompt-templates.ts` explaining that CC memory is ephemeral on agents (lost on container restart) and that persistent role-level knowledge belongs in `context_store(scope='agent')`. No mechanical deny rules, no auto-memory prompt stripping — prompt guidance only.
 
-**Structural finding — why volume-based persistence isn't viable:** Under QRM8-002 worktrees, each invocation's cwd is `/var/agent-worktrees/<correlationId>`, which CC encodes into `~/.claude/projects/-var-agent-worktrees-<correlationId>/memory/` — a per-invocation subdirectory. A shared per-role volume at `~/.claude/projects/` would accumulate disjoint per-invocation memory dirs that no subsequent invocation reads. The only workarounds (pinning SDK cwd to a stable non-worktree path, or symlink-hacking each encoded subdir) are fragile across SDK upgrades. Memory persistence through CC-native means is structurally broken under worktrees.
+**Structural finding — why volume-based persistence isn't viable:** Under #11 worktrees, each invocation's cwd is `/var/agent-worktrees/<correlationId>`, which CC encodes into `~/.claude/projects/-var-agent-worktrees-<correlationId>/memory/` — a per-invocation subdirectory. A shared per-role volume at `~/.claude/projects/` would accumulate disjoint per-invocation memory dirs that no subsequent invocation reads. The only workarounds (pinning SDK cwd to a stable non-worktree path, or symlink-hacking each encoded subdir) are fragile across SDK upgrades. Memory persistence through CC-native means is structurally broken under worktrees.
 
 **What we accept:** Memory writes occasionally happen on agent tmpfs and die at container restart. Cost: a handful of tokens per session. Benefit: zero implementation work, zero maintenance, and same-role parallelism (future) gets memory isolation for free from the cwd encoding.
 
@@ -591,9 +591,9 @@ Add a paragraph to `SYSTEM_PREAMBLE` in `role-prompt-templates.ts` explaining th
 
 **Depends on:** —
 
-**Full ticket:** [QRM8-007](QRM8-007-disable-agent-memory.md)
+**Full ticket:** [#16](16-disable-agent-memory.md)
 
-### QRM8-008 — MCP Server Bind Mount Removal
+### #17 — MCP Server Bind Mount Removal
 
 **Status:** Open (trivial docker-compose cleanup — implements D8)
 
@@ -609,51 +609,51 @@ Comment out the workspace bind mount on the mcp-server service and drop the `MCP
 
 **Depends on:** —
 
-**Full ticket:** [QRM8-008](QRM8-008-mcp-server-bind-mount.md)
+**Full ticket:** [#17](17-mcp-server-bind-mount.md)
 
 ---
 
 ## Dependency Graph
 
 ```
-QRM8-001 (FileSessionStore + D9)     ─── independent
-QRM8-006 (PAT Wiring)               ─── independent
-QRM8-007 (Redirect Agent Memory)    ─── independent
-QRM8-008 (MCP Bind Mount Removal)   ─── independent
+#10 (FileSessionStore + D9)     ─── independent
+#15 (PAT Wiring)               ─── independent
+#16 (Redirect Agent Memory)    ─── independent
+#17 (MCP Bind Mount Removal)   ─── independent
 
-QRM8-006 ──┬── QRM8-002 (Worktree Per Invocation)
-            └── QRM8-005 (Moderator Git Client)
+#15 ──┬── #11 (Worktree Per Invocation)
+            └── #14 (Moderator Git Client)
 
-QRM8-002 ──┬── QRM8-003 (Handler Commit/Push)
-            └── QRM8-004 (Branch-in-Flight Guard)
+#11 ──┬── #12 (Handler Commit/Push)
+            └── #13 (Branch-in-Flight Guard)
 
-QRM8-006 ──── QRM8-003 (Handler Commit/Push)
+#15 ──── #12 (Handler Commit/Push)
 ```
 
 **Summary of constraints:**
-- QRM8-002 depends on QRM8-006 (clone/fetch need git auth)
-- QRM8-003 depends on QRM8-002 (worktree cwd) AND QRM8-006 (push auth)
-- QRM8-004 depends on QRM8-002 (branch field in InvokeRequest)
-- QRM8-005 depends on QRM8-006 (gh auth, PAT)
-- QRM8-008 is independent (no code changes, no dependencies)
-- QRM8-001, QRM8-006, QRM8-007, QRM8-008 are independent of each other and of the chain
+- #11 depends on #15 (clone/fetch need git auth)
+- #12 depends on #11 (worktree cwd) AND #15 (push auth)
+- #13 depends on #11 (branch field in InvokeRequest)
+- #14 depends on #15 (gh auth, PAT)
+- #17 is independent (no code changes, no dependencies)
+- #10, #15, #16, #17 are independent of each other and of the chain
 
 ## Recommended Sequencing
 
 ```
 Phase 1 (foundations, parallel):
-  QRM8-001  FileSessionStore + D9 (cross-turn resume)
-  QRM8-006  PAT Wiring
-  QRM8-007  Redirect Agent Memory
-  QRM8-008  MCP Server Bind Mount Removal
+  #10  FileSessionStore + D9 (cross-turn resume)
+  #15  PAT Wiring
+  #16  Redirect Agent Memory
+  #17  MCP Server Bind Mount Removal
 
 Phase 2 (core isolation):
-  QRM8-002  Worktree Per Invocation    ← needs QRM8-006
+  #11  Worktree Per Invocation    ← needs #15
 
 Phase 3 (hardening, parallel after Phase 2):
-  QRM8-003  Handler Commit/Push        ← needs QRM8-002 + QRM8-006
-  QRM8-004  Branch-in-Flight Guard     ← needs QRM8-002
-  QRM8-005  Moderator Git Client       ← needs QRM8-006
+  #12  Handler Commit/Push        ← needs #11 + #15
+  #13  Branch-in-Flight Guard     ← needs #11
+  #14  Moderator Git Client       ← needs #15
 
 Phase 4 (integration testing):
   Full-system validation with all isolation changes active
@@ -661,11 +661,11 @@ Phase 4 (integration testing):
 
 **Rationale for deviation from proposed ordering:**
 
-The original proposal sequenced QRM8-006 (PAT) after QRM8-003 (commit/push), but commit/push requires auth to function — `git push` from the handler fails without credentials. QRM8-006 is a foundational dependency and must land before QRM8-002 (clone needs auth) and QRM8-003 (push needs auth). Moving it to Phase 1 unblocks the entire agent-side chain.
+The original proposal sequenced #15 (PAT) after #12 (commit/push), but commit/push requires auth to function — `git push` from the handler fails without credentials. #15 is a foundational dependency and must land before #11 (clone needs auth) and #12 (push needs auth). Moving it to Phase 1 unblocks the entire agent-side chain.
 
-QRM8-001 and QRM8-007 are genuinely independent and can run in any phase; placing them in Phase 1 front-loads work that has no blocking dependencies. QRM8-001 now includes the D9 mcp-server change (removing `agentSessions.clear()`) — this is a one-line deletion with no dependencies, and bundling it with the FileSessionStore work ensures cross-turn resume is testable as soon as the store lands.
+#10 and #16 are genuinely independent and can run in any phase; placing them in Phase 1 front-loads work that has no blocking dependencies. #10 now includes the D9 mcp-server change (removing `agentSessions.clear()`) — this is a one-line deletion with no dependencies, and bundling it with the FileSessionStore work ensures cross-turn resume is testable as soon as the store lands.
 
-QRM8-003 and QRM8-004 can run in parallel in Phase 3 because they touch different codebases (agent app vs. MCP server) and QRM8-004 only needs the `branch` field from QRM8-002, not the commit/push mechanics.
+#12 and #13 can run in parallel in Phase 3 because they touch different codebases (agent app vs. MCP server) and #13 only needs the `branch` field from #11, not the commit/push mechanics.
 
 ## Carry-Forward Registry
 
@@ -673,18 +673,18 @@ Items carried into QRM8 from previous milestones:
 
 | Item | Origin | QRM8 Ticket |
 |------|--------|-------------|
-| FileSessionStore on named volume | `tickets/tmp/session-resume-investigation.md` Option A; QRM5-001 foundation | QRM8-001 |
-| Duplicate Invocation Prevention (branch-level) | ICEBOX #1 (partial resolution) | QRM8-004 |
+| FileSessionStore on named volume | `tickets/tmp/session-resume-investigation.md` Option A; QRM5-001 foundation | #10 |
+| Duplicate Invocation Prevention (branch-level) | ICEBOX #1 (partial resolution) | #13 |
 
 ## Cross-References
 
 ### QRM7-004 — Moderator cwd Alignment (Interaction)
 
-QRM7-004 moves the moderator's `WORKDIR` from `/app` to `/mnt/quorum/workspace`. QRM8-005 removes the workspace bind mount and replaces it with a git clone at the same path. The two are **compatible**: `WORKDIR /mnt/quorum/workspace` remains valid — it points to the clone location on the named volume instead of the host bind mount. QRM7-004 should land before QRM8-005 so the cwd fix is in place when the backing storage changes.
+QRM7-004 moves the moderator's `WORKDIR` from `/app` to `/mnt/quorum/workspace`. #14 removes the workspace bind mount and replaces it with a git clone at the same path. The two are **compatible**: `WORKDIR /mnt/quorum/workspace` remains valid — it points to the clone location on the named volume instead of the host bind mount. QRM7-004 should land before #14 so the cwd fix is in place when the backing storage changes.
 
 ### QRM5-001 — Agent Session Resume (Foundation)
 
-QRM8-001 builds directly on QRM5-001's session resume architecture. QRM5-001 surfaced `sessionId` in `InvokeResponse`, added `sessionId` to `InvokeRequest`, and established the moderator-driven resume model. QRM8-001 replaces the `InMemorySessionStore` that QRM5-001 acknowledged as insufficient for cross-restart persistence. D9 extends the model by making cross-turn resume the default behavior.
+#10 builds directly on QRM5-001's session resume architecture. QRM5-001 surfaced `sessionId` in `InvokeResponse`, added `sessionId` to `InvokeRequest`, and established the moderator-driven resume model. #10 replaces the `InMemorySessionStore` that QRM5-001 acknowledged as insufficient for cross-restart persistence. D9 extends the model by making cross-turn resume the default behavior.
 
 ### QRM6 D5/D6 — Correlation ID and Session Tracking (Interaction)
 
@@ -692,22 +692,22 @@ QRM6's D5 (`new_conversation` mints correlationId) and D6 (server-side session t
 
 ### ICEBOX #1 — Duplicate Invocation Prevention (Partial Resolution)
 
-QRM8-004's branch-in-flight guard prevents the most damaging form of duplicate invocation (two agents editing the same branch). Combined with `InvocationHandler.inflight` deduplication (per-correlationId, per-agent), the system has two-layer protection. ICEBOX #1 can be updated to reflect the partial resolution; the remaining gap (transport-error retries targeting different branches) is low-risk.
+#13's branch-in-flight guard prevents the most damaging form of duplicate invocation (two agents editing the same branch). Combined with `InvocationHandler.inflight` deduplication (per-correlationId, per-agent), the system has two-layer protection. ICEBOX #1 can be updated to reflect the partial resolution; the remaining gap (transport-error retries targeting different branches) is low-risk.
 
 ### ICEBOX #3 — Agent Session Resume via Correlation ID (Unchanged)
 
-The upstream SDK prompt-cache issues (#247, #192) remain open. QRM8-001 improves session **persistence** but does not address prompt-cache **efficiency**. ICEBOX #3 stays as-is — the SDK#247 angle is independent of QRM8's scope.
+The upstream SDK prompt-cache issues (#247, #192) remain open. #10 improves session **persistence** but does not address prompt-cache **efficiency**. ICEBOX #3 stays as-is — the SDK#247 angle is independent of QRM8's scope.
 
 ## Concerns and Open Questions
 
-### 1. Agent-side git clone initialization (hidden scope in QRM8-002)
+### 1. Agent-side git clone initialization (hidden scope in #11)
 
 The direction specifies that agents lose the workspace bind mount, but the ticket list doesn't explicitly call out the agent-side git clone infrastructure. Worktrees require a base repository. Each agent container needs:
 - A named Docker volume for the base repo (`/var/agent-repo/`)
 - First-boot clone logic (entrypoint or InvocationHandler)
 - `git fetch origin` before each `git worktree add`
 
-This is substantial infrastructure work — an agent entrypoint script (agents currently have none; they run `node dist/main.js` directly), a new volume per agent role in `docker-compose.yml`, and error handling for clone failures. It should be scoped explicitly in QRM8-002, not discovered during implementation.
+This is substantial infrastructure work — an agent entrypoint script (agents currently have none; they run `node dist/main.js` directly), a new volume per agent role in `docker-compose.yml`, and error handling for clone failures. It should be scoped explicitly in #11, not discovered during implementation.
 
 ### 2. `cwd` parameterization is a non-trivial refactor
 
@@ -723,19 +723,19 @@ This is substantial infrastructure work — an agent entrypoint script (agents c
 
 If `InvocationHandler.runInvocation()` crashes after creating a worktree but before the `finally` block executes (e.g., OOM kill, SIGKILL), the worktree persists as an orphan. The `git worktree` system tracks these as "prunable." Mitigation: add a startup sweep (`git worktree prune`) in the agent entrypoint, and consider periodic cleanup if long-running containers accumulate stale worktrees.
 
-### 5. MCP server bind mount — resolved, promoted to QRM8-008
+### 5. MCP server bind mount — resolved, promoted to #17
 
 **Original concern:** The MCP server mounts `${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw` and removing it might break workspace resource serving or other `MCP_WORKSPACE_DIR` consumers. Deferred to QRM9 pending audit.
 
-**Resolved:** Audit confirmed single consumer (`context-store.config.ts:14`), dead under OpenSearch. Promoted to QRM8-008. See Design Decisions D8.
+**Resolved:** Audit confirmed single consumer (`context-store.config.ts:14`), dead under OpenSearch. Promoted to #17. See Design Decisions D8.
 
 ### 6. Moderator git-pull is prompt-driven, not mechanical — resolved by D10
 
 ~~The plan to run `git fetch && git pull --ff-only` at every `new_conversation` call relies on the moderator's prompt compliance. The moderator could forget, resulting in stale reads.~~
 
-**Resolved:** D10 adds a `reminder` field to the `new_conversation` tool response instructing the moderator to run `git fetch origin && git pull --ff-only` before reading any workspace files. This fires at the only moment freshness matters (start of turn) and survives prompt drift better than relying on `docker/moderator/CLAUDE.md` discipline alone. Implementation lands in QRM8-001 (same function as D9's `agentSessions.clear()` removal).
+**Resolved:** D10 adds a `reminder` field to the `new_conversation` tool response instructing the moderator to run `git fetch origin && git pull --ff-only` before reading any workspace files. This fires at the only moment freshness matters (start of turn) and survives prompt drift better than relying on `docker/moderator/CLAUDE.md` discipline alone. Implementation lands in #10 (same function as D9's `agentSessions.clear()` removal).
 
-### 7. Tool-guard updates needed across all roles (QRM8-003 scope)
+### 7. Tool-guard updates needed across all roles (#12 scope)
 
 Currently, `deniedBashCommands` for git operations differ by role:
 - **developer**: denies `git push --force`, `git push -f` only
@@ -744,21 +744,21 @@ Currently, `deniedBashCommands` for git operations differ by role:
 - **qa**: denies `git push`, `git commit`
 - **productowner**: Bash fully disabled
 
-Under the "handler does git" model, **all roles** should deny `git commit`, `git push`, `git checkout -b`, and `git branch`. QRM8-003 must update all five role profiles in `role-tool-profiles.ts`, not just the developer. The architect's existing denials are already close to the target state.
+Under the "handler does git" model, **all roles** should deny `git commit`, `git push`, `git checkout -b`, and `git branch`. #12 must update all five role profiles in `role-tool-profiles.ts`, not just the developer. The architect's existing denials are already close to the target state.
 
 ## Icebox Items (Not Scheduled)
 
 The following items from `tickets/ICEBOX.md` are noted for awareness:
 
-- **Duplicate Invocation Prevention** — ICEBOX #1 is **partially resolved** by QRM8-004 (branch-in-flight guard). Update the icebox entry to reflect the remaining gap (retries targeting different branches). Do not promote further; the residual risk is low.
+- **Duplicate Invocation Prevention** — ICEBOX #1 is **partially resolved** by #13 (branch-in-flight guard). Update the icebox entry to reflect the remaining gap (retries targeting different branches). Do not promote further; the residual risk is low.
 - **Agent Session Resume via Correlation ID** — ICEBOX #3 remains unchanged. The upstream SDK prompt-cache issues (#247, #192) are independent of QRM8's scope.
 
 ## References
 
 - [QRM7-000-roadmap.md](QRM7-000-roadmap.md) — predecessor milestone; QRM8 builds on QRM7's stabilization
-- [QRM5-001-agent-session-resume.md](QRM5-001-agent-session-resume.md) — session resume architecture that QRM8-001 completes
+- [QRM5-001-agent-session-resume.md](QRM5-001-agent-session-resume.md) — session resume architecture that #10 completes
 - [tmp/session-resume-investigation.md](tmp/session-resume-investigation.md) — root cause analysis and FileSessionStore design
-- [QRM7-004-moderator-cwd-not-aligned-with-workspace.md](QRM7-004-moderator-cwd-not-aligned-with-workspace.md) — WORKDIR fix that QRM8-005 interacts with
+- [QRM7-004-moderator-cwd-not-aligned-with-workspace.md](QRM7-004-moderator-cwd-not-aligned-with-workspace.md) — WORKDIR fix that #14 interacts with
 - [QRM6-000-roadmap.md](QRM6-000-roadmap.md) — predecessor milestone; QRM6's D5/D6 session tracking pattern refined by QRM8 D9
 - [ICEBOX.md](ICEBOX.md) — unscheduled technical debt registry
 - [docs/system-design.md](../docs/system-design.md) — current system architecture
