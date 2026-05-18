@@ -6,6 +6,7 @@ x-git-identity: &git-identity
 
 x-shared-env: &shared-env
   <<: *git-identity
+  GH_TOKEN: ${GH_TOKEN}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
   ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
   ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-4096}
@@ -168,6 +169,7 @@ services:
       <<: *git-identity
       MCP_SERVER_URL: http://mcp-server:3000/mcp
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
+      GH_TOKEN: ${GH_TOKEN}
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
