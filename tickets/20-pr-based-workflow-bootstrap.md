@@ -164,7 +164,7 @@ The QRM8 roadmap (`tickets/8-workspace-isolation.md` on the `8-workspace-isolati
 ## Acceptance Criteria
 
 - [x] **Step 1 — GH_TOKEN wiring:** `GH_TOKEN: ${GH_TOKEN}` is present in the moderator service environment block and in the `x-shared-env` anchor (propagating to architect, teamlead, developer). `.env.example` includes a `GH_TOKEN` entry with explanatory comment. *(On staging branch via commit `3d07e03`.)*
-- [x] **Step 2 — gh CLI 2.92.0+ installed:** `gh --version` reports a version ≥ 2.92.0 from `https://cli.github.com/packages` (not Debian's `gh 2.23.0+dfsg1`) inside both the moderator container and an agent container after rebuild. Installation uses the official GitHub CLI apt repository, keyring, **and** an apt preferences pin at `/etc/apt/preferences.d/github-cli` so the upstream repo wins over Debian's package. *(Dockerfile change verified in PR; `gh --version` verification requires rebuild.)*
+- [x] **Step 2 — gh CLI 2.92.0+ installed:** `gh --version` reports a version ≥ 2.92.0 from `https://cli.github.com/packages` (not Debian's `gh 2.23.0+dfsg1`) inside both the moderator container and an agent container after rebuild. Installation uses the official GitHub CLI apt repository, keyring, **and** an apt preferences pin at `/etc/apt/preferences.d/github-cli` so the upstream repo wins over Debian's package. *(Original Dockerfile had two bugs — empty keyring from `curl|dd` pipeline + wrong pin Origin. Fixed in PR #22 commit `b4ab05d`. Empirical `gh --version` verification deferred to next rebuild — see amended AC2 below.)*
 - [x] **Step 3 — Skill discovery verified:** Inside the moderator's CC CLI session, `/gh-workflow` appears in autocomplete and the skill loads successfully when invoked. *(User-confirmed empirically; symlink chain intact.)*
 - [x] **Step 4 — GitHub Workflow section in quorum.md:** A new "GitHub Workflow" section exists in `quorum.md` covering: two lifecycles (epic/standalone), milestone convention, branch naming, PR conventions, `Resolves:` retarget trick, ticket file naming, issue content rules. References `docker/moderator/.claude/skills/gh-workflow/SKILL.md` as the canonical source.
 - [x] **Step 5 — Moderator persona / conventions split:** Moderator descriptive summary lives in `quorum.md` under `### Moderator`; operational Phase-1/Phase-2 rules live in `docker/moderator/CLAUDE.md` under `## Ticket Workflow Discipline`. Both files reference each other where appropriate.
@@ -233,9 +233,10 @@ No existing sub-tasks need scope changes or dependency adjustments beyond noting
 
 ## Implementation Notes
 
-**Status:** Complete — accepted at code review.
+**Status:** Complete — accepted at code review (PR #21 + follow-up PR #22).
 
-**PR:** #21 (base `8-workspace-isolation-staging`, head `20-pr-based-workflow-bootstrap`).
+**PR #21:** base `8-workspace-isolation-staging`, head `20-pr-based-workflow-bootstrap`.
+**PR #22:** base `8-workspace-isolation-staging`, head `20-bootstrap-followup-gh-and-renumber` — post-verification Dockerfile fix + QRM8 renumbering.
 
 **Commits (4 on branch):**
 
@@ -269,3 +270,36 @@ No existing sub-tasks need scope changes or dependency adjustments beyond noting
 - Steps 2-3 require container rebuild for full empirical verification (`gh --version`, skill discovery)
 
 **Phase-1 review amendment (commit 5):** User review surfaced two issues: (1) the moderator's `@quorum.md` import directive doesn't resolve because the workspace file is not alongside `~/.claude/CLAUDE.md`, so the moderator never loads the conventions; (2) operational Phase-1/Phase-2 lifecycle rules belong in the moderator persona (`docker/moderator/CLAUDE.md`), not in the shared `quorum.md` that all agents read. Fix: added `@quorum.md` symlink to `entrypoint.sh`, moved operational rules into a new `## Ticket Workflow Discipline` section in `docker/moderator/CLAUDE.md`, and trimmed `quorum.md`'s `### Moderator` to a brief descriptive summary with cross-reference.
+
+**Follow-up PR #22 review (commits `b4ab05d`, `cbe21ac`, `70598ef`):** Post-verification fix addressing two compounding Dockerfile bugs (empty keyring from `curl|dd` pipeline, wrong pin Origin) plus QRM8 roadmap renumbering from `QRM8-00X` to `#10`–`#17`. All three commits reviewed and accepted. Dockerfile fix applied identically to both agent and moderator stages; `curl -fsSL -o` + `chmod 0644` + `test -s` defense-in-depth is correct. `Pin: release o=gh` matches the upstream Release file's `Origin: gh` field. Roadmap renumbering is complete — zero `QRM8-00[0-9]` hits remain; all dependency arrows, tables, cross-references, and ticket file links use `#N` format. `QRM8` epic marker preserved. Verification: `npm run build` ✅ | `npm run lint` ✅ | `npm run test` ✅ (45 suites, 758 tests).
+
+---
+
+## Post-Verification Discovery and Follow-up Fix
+
+### Verification summary (post PR #21 merge)
+
+Acceptance Criteria 1, 3, 4, 5, 6, and the new symlink criterion verified passing inside the rebuilt moderator container. **AC2 (`gh --version` ≥ 2.92.0 from `cli.github.com`) failed** — installed gh is Debian's `2.23.0+dfsg1-1`.
+
+### Root cause (two compounding bugs)
+
+**Bug A — empty keyring.** The Dockerfile used `curl -fsSL <url> | dd of=<keyring>`. Without `pipefail`, curl silently emitting nothing (transient build-time hiccup) still let `dd` exit 0 with a 0-byte file. The signed-by keyring being empty made `apt-get update` silently drop the cli.github.com source. Only Debian's `gh` was visible at install time.
+
+**Bug B — wrong pin Origin.** Pin file declared `Pin: origin cli.github.com`. apt's `Pin: origin <X>` matches the **`Origin:` field** in the repo's Release file, not the URL hostname. The actual Origin at `https://cli.github.com/packages/dists/stable/Release` is `gh`. Result: the pin matched no repository, had no effect.
+
+Both bugs were introduced in the original spec (`| dd of=…`, `Pin: origin cli.github.com`), implemented faithfully, and missed in code review — only observable post-build, which is exactly the gap Phase-2 verification was designed to catch.
+
+### Fix
+
+Dockerfile (both stages): replaced the `curl|dd` pipeline with `curl -fsSL -o <file>`, added `chmod 0644` and `test -s` checks for defense-in-depth, and changed the pin from `Pin: origin cli.github.com` to `Pin: release o=gh` to match the actual Release Origin field.
+
+### Amended Acceptance Criteria
+
+- [ ] **AC2 (re-verified post-rebuild):** `gh --version` reports a version ≥ 2.92.0 from `https://cli.github.com/packages`. `/usr/share/keyrings/githubcli-archive-keyring.gpg` is ≥ 4500 bytes. `apt-cache policy gh` (run inside a fresh container with restored apt lists) shows `cli.github.com` in the version table.
+
+### QRM8 sub-issue renumbering executed
+
+Per Step 6 of this ticket (renumbering plan), the deferred execution is folded into this follow-up:
+
+- **GH issue titles** for `#10`–`#17` updated to drop the `QRM8-00X — ` prefix (driven separately by the moderator via `gh issue edit`).
+- **Roadmap file** `tickets/8-workspace-isolation.md` updated — sub-task IDs replaced with GH issue references (`#10`–`#17`), Dependency Graph and Recommended Sequencing cross-references rewritten.

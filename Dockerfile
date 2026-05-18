@@ -44,11 +44,13 @@ WORKDIR /app
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+RUN curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+      https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
-  && printf 'Package: gh\nPin: origin cli.github.com\nPin-Priority: 1000\n' \
+  && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
       > /etc/apt/preferences.d/github-cli
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -97,11 +99,13 @@ WORKDIR /mnt/quorum/workspace
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+RUN curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+      https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
-  && printf 'Package: gh\nPin: origin cli.github.com\nPin-Priority: 1000\n' \
+  && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
       > /etc/apt/preferences.d/github-cli
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
