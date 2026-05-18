@@ -245,7 +245,7 @@ No existing sub-tasks need scope changes or dependency adjustments beyond noting
 | `62281cf` | Patch spec — Step 2 upgraded to require `gh 2.92.0+` via apt preferences pin (discovered during Phase-1 review that staging's `3d07e03` omitted the pin, causing Debian's `2.23.0` to win) |
 | `2019abc` | Dockerfile change — add apt preferences pin in both agent (line 51-52) and moderator (line 104-105) stages |
 | `902b71d` | quorum.md — GitHub Workflow section, Moderator role section, `#<N>:` commit message convention |
-| *(commit 5)* | Phase-1 review amendment — split moderator persona/conventions, symlink `@quorum.md` |
+| `b02e77b` | Phase-1 review amendment — split moderator persona/conventions, symlink `@quorum.md` |
 
 **Files modified (in PR diff only — excludes staging baseline):**
 - `Dockerfile` — 2-line addition per stage (agent + moderator): apt preferences pin at `/etc/apt/preferences.d/github-cli`
