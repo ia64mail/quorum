@@ -442,37 +442,13 @@ Prefer reasonable assumptions for non-controversial decisions. Every `invoke_age
 
 ### Moderator
 
-You are the **orchestration hub** — the only agent that interfaces directly with the user. All tasks begin and end with you.
+The moderator is the **orchestration hub** — the only agent that interfaces directly with the user. All tasks begin and end with the moderator.
 
-#### Core Responsibility — Standard Ticket Lifecycle
+The moderator drives `/gh-workflow` to create GitHub issues, branches, and PRs for every ticket. It enforces a **two-phase user-review process**: Phase 1 pauses after the spec PR is open so the user can review the ticket before any implementation starts; Phase 2 pauses after implementation and code review are complete so the user can do a final review and merge.
 
-The moderator drives every ticket through a two-pause workflow:
+The moderator does not design (architect), decompose tasks (team lead), or implement code (developer). Write/Edit/NotebookEdit are mechanically denied to the moderator — it delegates all file modifications to other agents.
 
-1. **Clarify user inputs.** If the request is ambiguous, ask the user before proceeding. Settle scope: is this an epic (multi-step, staging branch, milestone) or a standalone issue?
-
-2. **Drive `/gh-workflow`** to create infrastructure: draft a ticket MD file in `tickets/`, create a GH issue (with milestone if epic-attached), cut a branch, open a PR (using the `Resolves:` two-step retarget trick for non-`main` targets).
-
-3. **Phase 1 — User Spec Review.** Pause after the ticket-only PR is open. The user reviews the spec MD in the PR. **No implementation begins** until the user gives the green light. This is the user's opportunity to refine requirements, adjust scope, or reject the approach.
-
-4. **Run the full dev flow.** Team lead authors implementation details in the ticket if needed. Optional architect review for design-heavy or cross-cutting tickets. Developer implements. Team lead `/code-review`. Developer addresses review feedback.
-
-5. **Phase 2 — User Final Review.** When implementation and reviews are complete, pause again. The user does final review in the PR and merges (to `main` for standalone issues, to the staging branch for sub-issues under an epic).
-
-#### Pre-Isolation Note
-
-In the current pre-workspace-isolation mode, the moderator runs `git`/`gh` inside the container against the shared workspace bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`). Operations land directly on the host filesystem. QRM8-005 (issue #14) will transition the moderator to its own git clone on a named volume.
-
-#### What You Produce
-
-- GH issues, branches, and PRs (via `/gh-workflow`)
-- Orchestration summaries and turn diagnostic tables
-- Session-level decisions stored in Context Store (`project` scope)
-
-#### What You Do NOT Do
-
-- Design systems — delegate to the **architect**
-- Decompose tasks — delegate to the **team lead**
-- Implement code or edit specs — delegate to the **developer** (Write/Edit/NotebookEdit are mechanically denied to the moderator)
+Operational rules for the moderator's ticket lifecycle — the 5-step workflow, gating conditions, and pre-isolation workspace notes — live in [`docker/moderator/CLAUDE.md`](docker/moderator/CLAUDE.md) under "Ticket Workflow Discipline". The summary here is for agents' shared understanding of what the moderator does and how it interacts with the rest of the team.
 
 ## Constraints
 

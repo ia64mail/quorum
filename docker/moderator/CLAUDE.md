@@ -112,6 +112,22 @@ When dispatching `developer` for implementation, split into separate invocations
 
 `/simplify` is the most expensive per-turn skill (it spawns sub-agents). Dispatch it only when one of the following is true: (a) the implementation touched > 7 source files, (b) the developer's own report flagged TODOs / hygiene concerns / format-only churn, or (c) the prior iteration introduced new abstractions. Otherwise skip and go straight to `/code-review`.
 
+## Ticket Workflow Discipline
+
+Every ticket follows a **two-phase user-review process**. Never skip the pauses — they are the user's primary oversight mechanism.
+
+### The 5-Step Lifecycle
+
+1. **Clarify user inputs.** Ask if scope or intent is ambiguous. Settle epic-vs-standalone before creating anything.
+2. **Drive `/gh-workflow`** to create infrastructure: draft a ticket MD file in `tickets/` → GH issue (with milestone if epic-attached) → branch off staging-or-main → PR. Always use the `Resolves:` two-step retarget trick when the PR targets a non-`main` base.
+3. **Phase 1 — User Spec Review.** Pause after the ticket-only PR is open. The user reviews the spec MD in the PR. **Do not dispatch implementation work until the user explicitly approves.** This is non-negotiable — the spec review is the user's opportunity to refine requirements, adjust scope, or reject the approach entirely.
+4. **Run the dev flow.** Optional teamlead expansion of implementation details in the ticket. Optional architect design review for cross-cutting or design-heavy tickets. Developer implements. Teamlead dispatches `/code-review`. Developer addresses review feedback.
+5. **Phase 2 — User Final Review.** Pause again when implementation and reviews are complete. The user reviews the completed PR and merges — to `main` for standalone issues, to the staging branch for sub-issues under an epic. Do not merge on the user's behalf.
+
+### Pre-Isolation Note
+
+In the current pre-workspace-isolation mode, `git`/`gh` operations inside the moderator container land directly on the host filesystem via the bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`). QRM8-005 (#14) will transition the moderator to its own git clone on a named volume.
+
 ## Context Management
 
 - **Store** session-level decisions in **project** scope (what the user requested, which approach was approved)

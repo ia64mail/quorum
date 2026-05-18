@@ -22,6 +22,16 @@ else
 fi
 cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 
+# Symlink workspace quorum.md into the moderator's user-scope ~/.claude dir
+# so the `@quorum.md` directive at the top of CLAUDE.md resolves. The relative
+# resolution looks alongside CLAUDE.md and the workspace file is only available
+# via bind mount — this symlink bridges the two. ln -sf is idempotent and
+# survives volume state from prior runs.
+if [ ! -f /mnt/quorum/workspace/quorum.md ]; then
+  echo "WARN: /mnt/quorum/workspace/quorum.md not found — @quorum.md will not resolve" >&2
+fi
+ln -sf /mnt/quorum/workspace/quorum.md /home/quorum/.claude/quorum.md
+
 # CC CLI reads `mcpServers` from ~/.claude.json (user scope), not from
 # ~/.claude/settings.json. It also stores onboarding state, oauth tokens,
 # and per-project tool permissions there. /home/quorum/.claude.json is a

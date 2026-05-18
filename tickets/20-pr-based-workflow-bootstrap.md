@@ -106,19 +106,33 @@ Content to cover:
 - **Issue content rule:** Issues contain summary, motivation, and problem statement only. Never include implementation details in issue descriptions.
 - **Canonical reference:** Point to `docker/moderator/.claude/skills/gh-workflow/SKILL.md` for the full workflow spec.
 
-### Step 5: Add "Moderator" role section to `quorum.md`
+### Step 5: Add Moderator persona — operational rules to `docker/moderator/CLAUDE.md`, descriptive summary to `quorum.md`
 
-Add a new role section under "Role Configurations" (after the Developer section). Content:
+The moderator's ticket lifecycle rules are split across two files based on audience:
 
-**Standard ticket lifecycle the moderator follows:**
+**`docker/moderator/CLAUDE.md` — operational rules (new `## Ticket Workflow Discipline` section):**
+The moderator persona file gets the full 5-step lifecycle in imperative-directive tone ("do X", "never Y"), including: Phase-1/Phase-2 pause enforcement, `/gh-workflow` infrastructure creation, `Resolves:` retarget trick, dev flow orchestration, and the pre-isolation workspace note. This is what the moderator reads and follows at runtime.
 
-1. **Clarify user inputs.** If the request is ambiguous, ask the user before proceeding. Settle scope: is this an epic or a standalone issue?
-2. **Drive `/gh-workflow`** to create the infrastructure: draft a ticket MD file, create a GH issue (with milestone if epic-attached), cut a branch, open a PR.
-3. **Phase 1 — User Spec Review.** Pause after the ticket-only PR is open. The user reviews the spec MD in the PR. No implementation starts until the user gives the green light. This is the user's opportunity to refine requirements, adjust scope, or reject the approach.
-4. **Run the full dev flow.** Team lead authors implementation details in the ticket if needed. Optional architect review for cross-cutting or design-heavy tickets. Developer implements. Team lead code-reviews. Developer addresses review feedback.
-5. **Phase 2 — User Final Review.** When implementation and reviews are complete, pause again. The user does final review in the PR and merges (to `main` for standalone issues, to the staging branch for sub-issues under an epic).
+**`quorum.md` — descriptive summary (trimmed `### Moderator` section under Role Configurations):**
+A brief (~10-line) summary for other agents' shared understanding: the moderator is the orchestration hub, drives `/gh-workflow`, enforces two-phase user review, does not design/decompose/implement, and cross-references `docker/moderator/CLAUDE.md` for the full operational spec. Mirrors the tone and depth of the existing Architect/TeamLead/Developer role intros.
 
-**Pre-isolation note:** In the current pre-workspace-isolation mode, the moderator runs `git`/`gh` inside the container against the shared workspace bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`). Operations land directly on the host filesystem. QRM8-005 will transition the moderator to its own git clone on a named volume.
+**Rationale for the split:** Operational workflow rules belong in the moderator persona (`docker/moderator/CLAUDE.md`) because only the moderator needs to follow them step-by-step. `quorum.md` is read by all agents and should describe *what* the moderator does, not *how* it does it — the same pattern used for every other role section.
+
+### Step 7: Symlink `quorum.md` into moderator's user-scope dir so `@quorum.md` resolves
+
+The moderator's `CLAUDE.md` opens with `@quorum.md`, which CC CLI resolves relative to the CLAUDE.md location (`/home/quorum/.claude/`). The workspace `quorum.md` lives at `/mnt/quorum/workspace/quorum.md` (bind mount), not alongside CLAUDE.md. Without a symlink, the `@quorum.md` directive silently fails and the moderator never loads the project conventions.
+
+**Fix:** Add to `docker/moderator/entrypoint.sh` (alongside the existing `~/.claude/` seeding logic, before any check that might depend on quorum.md):
+
+```bash
+# Symlink workspace quorum.md into the moderator's user-scope ~/.claude dir
+if [ ! -f /mnt/quorum/workspace/quorum.md ]; then
+  echo "WARN: /mnt/quorum/workspace/quorum.md not found — @quorum.md will not resolve" >&2
+fi
+ln -sf /mnt/quorum/workspace/quorum.md /home/quorum/.claude/quorum.md
+```
+
+`ln -sf` is idempotent and survives volume state from prior runs. The defensive warning catches workspace mount misconfigurations early.
 
 ### Step 6: Audit and renumber QRM8 roadmap
 
@@ -153,7 +167,8 @@ The QRM8 roadmap (`tickets/8-workspace-isolation.md` on the `8-workspace-isolati
 - [x] **Step 2 — gh CLI 2.92.0+ installed:** `gh --version` reports a version ≥ 2.92.0 from `https://cli.github.com/packages` (not Debian's `gh 2.23.0+dfsg1`) inside both the moderator container and an agent container after rebuild. Installation uses the official GitHub CLI apt repository, keyring, **and** an apt preferences pin at `/etc/apt/preferences.d/github-cli` so the upstream repo wins over Debian's package. *(Dockerfile change verified in PR; `gh --version` verification requires rebuild.)*
 - [x] **Step 3 — Skill discovery verified:** Inside the moderator's CC CLI session, `/gh-workflow` appears in autocomplete and the skill loads successfully when invoked. *(User-confirmed empirically; symlink chain intact.)*
 - [x] **Step 4 — GitHub Workflow section in quorum.md:** A new "GitHub Workflow" section exists in `quorum.md` covering: two lifecycles (epic/standalone), milestone convention, branch naming, PR conventions, `Resolves:` retarget trick, ticket file naming, issue content rules. References `docker/moderator/.claude/skills/gh-workflow/SKILL.md` as the canonical source.
-- [x] **Step 5 — Moderator role section in quorum.md:** A "Moderator" role section exists under "Role Configurations" describing: the 5-step ticket lifecycle (clarify, create infra, Phase 1 spec review pause, dev flow, Phase 2 final review pause), and the pre-isolation workspace note.
+- [x] **Step 5 — Moderator persona / conventions split:** Moderator descriptive summary lives in `quorum.md` under `### Moderator`; operational Phase-1/Phase-2 rules live in `docker/moderator/CLAUDE.md` under `## Ticket Workflow Discipline`. Both files reference each other where appropriate.
+- [x] **Step 7 — `@quorum.md` resolves in moderator container:** `docker/moderator/entrypoint.sh` creates `/home/quorum/.claude/quorum.md` as a symlink to `/mnt/quorum/workspace/quorum.md` on every container start. Post-rebuild verification: `ls -la /home/quorum/.claude/quorum.md` shows the expected symlink target.
 - [x] **Step 6 — Renumbering plan documented:** The renumbering approach is documented in this ticket (see Implementation Details Step 6) with: the current internal-to-GH-issue mapping table (TBD entries), the 5-step execution plan, and the roadmap file location. Actual renumbering execution deferred to post-rebuild moderator session.
 
 ## Dependencies and References
@@ -170,7 +185,7 @@ The QRM8 roadmap (`tickets/8-workspace-isolation.md` on the `8-workspace-isolati
 - `Dockerfile` — moderator stage (lines 86-121), agent stage (lines 40-83)
 - `.env.example` — environment variable template
 - `quorum.md` — project conventions read by all agents at runtime
-- `docker/moderator/entrypoint.sh` — moderator container startup script (will need `gh auth login` in QRM8-005; not modified by this ticket)
+- `docker/moderator/entrypoint.sh` — moderator container startup script (modified: `@quorum.md` symlink; will need `gh auth login` in QRM8-005)
 - `tickets/README.md` — ticket library conventions
 
 ### Roadmap Adjustments
@@ -230,18 +245,21 @@ No existing sub-tasks need scope changes or dependency adjustments beyond noting
 | `62281cf` | Patch spec — Step 2 upgraded to require `gh 2.92.0+` via apt preferences pin (discovered during Phase-1 review that staging's `3d07e03` omitted the pin, causing Debian's `2.23.0` to win) |
 | `2019abc` | Dockerfile change — add apt preferences pin in both agent (line 51-52) and moderator (line 104-105) stages |
 | `902b71d` | quorum.md — GitHub Workflow section, Moderator role section, `#<N>:` commit message convention |
+| *(commit 5)* | Phase-1 review amendment — split moderator persona/conventions, symlink `@quorum.md` |
 
 **Files modified (in PR diff only — excludes staging baseline):**
 - `Dockerfile` — 2-line addition per stage (agent + moderator): apt preferences pin at `/etc/apt/preferences.d/github-cli`
-- `quorum.md` — +130 lines: GitHub Workflow section (83 lines), Moderator role section (34 lines), commit message convention update (13 lines net)
-- `tickets/20-pr-based-workflow-bootstrap.md` — new file (215 lines)
+- `quorum.md` — GitHub Workflow section, trimmed Moderator summary, commit message convention update
+- `docker/moderator/CLAUDE.md` — new `## Ticket Workflow Discipline` section (operational 5-step lifecycle)
+- `docker/moderator/entrypoint.sh` — `@quorum.md` symlink creation + defensive warning
+- `tickets/20-pr-based-workflow-bootstrap.md` — new file, updated with persona/conventions split and symlink step
 
 **Files modified on staging baseline (commit `3d07e03`, not in PR diff):**
 - `docker-compose.yml` — `GH_TOKEN` wiring to moderator env block + `x-shared-env` anchor
 - `.env.example` — `GH_TOKEN` entry with explanatory comment
 - `Dockerfile` — GitHub CLI keyring + apt source setup (both stages) + `gh` added to install line
 
-**Deviations:** None. Implementation matches spec exactly.
+**Deviations:** None for commits 1–4. Commit 5 is a Phase-1 review amendment (see below).
 
 **Verification:**
 - `npm run build` ✅ | `npm run lint` ✅ | `npm run test` ✅ (45 suites, 758 tests)
@@ -249,3 +267,5 @@ No existing sub-tasks need scope changes or dependency adjustments beyond noting
 - quorum.md content verified as tight distillation of SKILL.md (not a copy)
 - Commit messages use the new `#<N>:` convention being introduced by this ticket
 - Steps 2-3 require container rebuild for full empirical verification (`gh --version`, skill discovery)
+
+**Phase-1 review amendment (commit 5):** User review surfaced two issues: (1) the moderator's `@quorum.md` import directive doesn't resolve because the workspace file is not alongside `~/.claude/CLAUDE.md`, so the moderator never loads the conventions; (2) operational Phase-1/Phase-2 lifecycle rules belong in the moderator persona (`docker/moderator/CLAUDE.md`), not in the shared `quorum.md` that all agents read. Fix: added `@quorum.md` symlink to `entrypoint.sh`, moved operational rules into a new `## Ticket Workflow Discipline` section in `docker/moderator/CLAUDE.md`, and trimmed `quorum.md`'s `### Moderator` to a brief descriptive summary with cross-reference.
