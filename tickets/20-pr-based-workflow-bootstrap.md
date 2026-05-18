@@ -303,3 +303,54 @@ Per Step 6 of this ticket (renumbering plan), the deferred execution is folded i
 
 - **GH issue titles** for `#10`–`#17` updated to drop the `QRM8-00X — ` prefix (driven separately by the moderator via `gh issue edit`).
 - **Roadmap file** `tickets/8-workspace-isolation.md` updated — sub-task IDs replaced with GH issue references (`#10`–`#17`), Dependency Graph and Recommended Sequencing cross-references rewritten.
+
+---
+
+## Second Post-Verification Discovery (post PR #22 merge)
+
+### Symptom
+
+After merging PR #22 into `8-workspace-isolation-staging`, `./scripts/start.sh` fails immediately during `docker compose build`:
+
+```
+[agent  3/11] RUN curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg ...
+0.186 /bin/sh: 1: curl: not found
+ERROR: ... did not complete successfully: exit code: 127
+```
+
+Both `agent` and `moderator` stages fail at the same step. No container image is produced — the system cannot start.
+
+### Root cause
+
+`node:24-bookworm-slim` ships with neither `curl` nor `ca-certificates`. The original Dockerfile (pre-#22) used `curl <url> | dd of=<file>`; even when curl was missing, the pipeline did not abort (no `pipefail`), `dd` exited 0 with a 0-byte file, and the `&&` chain continued. That masked the missing-curl problem at build time, but produced the empty-keyring bug (Bug A above) at runtime.
+
+PR #22's correct fix to `curl -fsSL -o <file>` removed the pipeline that was inadvertently swallowing curl's `127`, surfacing the underlying dependency gap as a hard build failure. **The fix was right; the prerequisite was missing.**
+
+### Fix
+
+Both Dockerfile stages: merge the two-RUN apt block into one `RUN` that first installs `curl` + `ca-certificates`, then downloads the keyring, then installs `gh` and the rest of the toolchain. Single `RUN` keeps the upstream-repo bootstrap atomic and minimizes layer count.
+
+```dockerfile
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+      https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+ && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [...] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
+      > /etc/apt/preferences.d/github-cli \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+    git gh bash ripgrep jq openssh-client \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+### Amended Acceptance Criteria (second amendment)
+
+- [x] **AC2 (re-verified):** `docker compose build` completes for both `agent` and `moderator`. `docker run --rm --entrypoint=sh quorum-architect -c 'gh --version'` reports `gh version 2.92.0 (2026-04-28)`. `apt-cache policy gh` (against the installed dpkg state) shows `Installed: 2.92.0`, `Candidate: 2.92.0`.
+
+### Lesson
+
+Both #20 follow-up bugs (this one and the PR #22 pair) trace back to the same root: `node:*-slim` does not ship `curl`, and the original `| dd` pipeline silently absorbed every curl failure. Future Dockerfile changes that depend on `curl` (or any other utility) before the package-install step must either declare the dependency explicitly in the same `RUN` or set `set -o pipefail` so a missing prerequisite fails loudly.

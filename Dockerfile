@@ -44,18 +44,23 @@ WORKDIR /app
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 
-RUN curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+# node:*-bookworm-slim has neither curl nor ca-certificates. Install them first
+# so the GitHub CLI keyring download can succeed; then add the upstream apt
+# source + pin and install gh ≥ 2.92.0 (Debian's 2.23.0 is too old).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
       https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-  && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
-  && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+ && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
-  && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
-      > /etc/apt/preferences.d/github-cli
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git gh bash ripgrep curl jq openssh-client ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+ && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
+      > /etc/apt/preferences.d/github-cli \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+    git gh bash ripgrep jq openssh-client \
+ && rm -rf /var/lib/apt/lists/*
 
 # Bookworm ships groupmod/usermod — rename default `node` user and adjust uid/gid to match host
 RUN groupmod -n quorum -g ${HOST_GID} node && \
@@ -99,18 +104,23 @@ WORKDIR /mnt/quorum/workspace
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 
-RUN curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+# node:*-bookworm-slim has neither curl nor ca-certificates. Install them first
+# so the GitHub CLI keyring download can succeed; then add the upstream apt
+# source + pin and install gh ≥ 2.92.0 (Debian's 2.23.0 is too old).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
       https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-  && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
-  && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+ && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
-  && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
-      > /etc/apt/preferences.d/github-cli
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git gh bash ripgrep curl jq openssh-client ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+ && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
+      > /etc/apt/preferences.d/github-cli \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+    git gh bash ripgrep jq openssh-client \
+ && rm -rf /var/lib/apt/lists/*
 
 # Bookworm ships groupmod/usermod — rename default `node` user and adjust uid/gid to match host
 RUN groupmod -n quorum -g ${HOST_GID} node && \
