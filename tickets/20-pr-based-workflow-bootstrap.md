@@ -269,3 +269,34 @@ No existing sub-tasks need scope changes or dependency adjustments beyond noting
 - Steps 2-3 require container rebuild for full empirical verification (`gh --version`, skill discovery)
 
 **Phase-1 review amendment (commit 5):** User review surfaced two issues: (1) the moderator's `@quorum.md` import directive doesn't resolve because the workspace file is not alongside `~/.claude/CLAUDE.md`, so the moderator never loads the conventions; (2) operational Phase-1/Phase-2 lifecycle rules belong in the moderator persona (`docker/moderator/CLAUDE.md`), not in the shared `quorum.md` that all agents read. Fix: added `@quorum.md` symlink to `entrypoint.sh`, moved operational rules into a new `## Ticket Workflow Discipline` section in `docker/moderator/CLAUDE.md`, and trimmed `quorum.md`'s `### Moderator` to a brief descriptive summary with cross-reference.
+
+---
+
+## Post-Verification Discovery and Follow-up Fix
+
+### Verification summary (post PR #21 merge)
+
+Acceptance Criteria 1, 3, 4, 5, 6, and the new symlink criterion verified passing inside the rebuilt moderator container. **AC2 (`gh --version` ≥ 2.92.0 from `cli.github.com`) failed** — installed gh is Debian's `2.23.0+dfsg1-1`.
+
+### Root cause (two compounding bugs)
+
+**Bug A — empty keyring.** The Dockerfile used `curl -fsSL <url> | dd of=<keyring>`. Without `pipefail`, curl silently emitting nothing (transient build-time hiccup) still let `dd` exit 0 with a 0-byte file. The signed-by keyring being empty made `apt-get update` silently drop the cli.github.com source. Only Debian's `gh` was visible at install time.
+
+**Bug B — wrong pin Origin.** Pin file declared `Pin: origin cli.github.com`. apt's `Pin: origin <X>` matches the **`Origin:` field** in the repo's Release file, not the URL hostname. The actual Origin at `https://cli.github.com/packages/dists/stable/Release` is `gh`. Result: the pin matched no repository, had no effect.
+
+Both bugs were introduced in the original spec (`| dd of=…`, `Pin: origin cli.github.com`), implemented faithfully, and missed in code review — only observable post-build, which is exactly the gap Phase-2 verification was designed to catch.
+
+### Fix
+
+Dockerfile (both stages): replaced the `curl|dd` pipeline with `curl -fsSL -o <file>`, added `chmod 0644` and `test -s` checks for defense-in-depth, and changed the pin from `Pin: origin cli.github.com` to `Pin: release o=gh` to match the actual Release Origin field.
+
+### Amended Acceptance Criteria
+
+- [ ] **AC2 (re-verified post-rebuild):** `gh --version` reports a version ≥ 2.92.0 from `https://cli.github.com/packages`. `/usr/share/keyrings/githubcli-archive-keyring.gpg` is ≥ 4500 bytes. `apt-cache policy gh` (run inside a fresh container with restored apt lists) shows `cli.github.com` in the version table.
+
+### QRM8 sub-issue renumbering executed
+
+Per Step 6 of this ticket (renumbering plan), the deferred execution is folded into this follow-up:
+
+- **GH issue titles** for `#10`–`#17` updated to drop the `QRM8-00X — ` prefix (driven separately by the moderator via `gh issue edit`).
+- **Roadmap file** `tickets/8-workspace-isolation.md` updated — sub-task IDs replaced with GH issue references (`#10`–`#17`), Dependency Graph and Recommended Sequencing cross-references rewritten.
