@@ -1,0 +1,211 @@
+# #20: PR-based Ticket Workflow Bootstrap
+
+## Summary
+
+Bootstrap the GitHub PR-based development workflow that QRM8 and all future milestones will use. This is a process-infrastructure ticket: it wires `GH_TOKEN` into all containers, installs the `gh` CLI where missing, adds GitHub workflow and Moderator role sections to `quorum.md`, and lays out the plan for renumbering the QRM8 roadmap to use GitHub issue numbers. No application code changes — only Docker config, environment plumbing, prompt/convention updates, and a skill-discovery verification step.
+
+This ticket is ordered first in QRM8 because the moderator needs `gh` auth before it can drive the PR-based workflow for all subsequent tickets. The user will rebuild and restart the moderator container immediately after this ticket lands, giving the moderator GitHub auth to orchestrate the rest of the milestone.
+
+## Problem Statement
+
+**Current situation:** The Quorum system has no GitHub CLI integration in any container. The `gh-workflow` skill (`docker/moderator/.claude/skills/gh-workflow/SKILL.md`) defines a comprehensive PR-based process — epic and standalone lifecycles, milestone conventions, branch naming, PR linking — but the moderator cannot execute it because:
+
+1. **No `gh` CLI installed.** The moderator Dockerfile stage (lines 93-95) installs `git`, `bash`, `ripgrep`, `curl`, `jq`, `openssh-client` — but not `gh`. The agent stage (lines 47-49) has the same package list and also lacks `gh`.
+2. **No `GH_TOKEN` in any container.** `docker-compose.yml` does not pass a GitHub token to any service. Without auth, even if `gh` were installed, it couldn't create issues, PRs, or milestones.
+3. **No GitHub workflow section in `quorum.md`.** Agents (architect, team lead, developer, QA) have no shared mental model of the PR-based process. Only the moderator has access to the full skill doc via `/gh-workflow`.
+4. **No Moderator role section in `quorum.md`.** The moderator's ticket lifecycle — spec review pause, implementation, final review pause — is undefined in the shared conventions file. Agents don't know the moderator's workflow.
+5. **QRM8 roadmap uses internal `QRM8-00X` IDs.** The roadmap on the `8-workspace-isolation-staging` branch references `QRM8-001` through `QRM8-008`, but GH issues for these sub-tasks may already exist with their own numbers. The ticket library and roadmap should use GH issue numbers, not internal IDs, once the PR workflow is active.
+
+**Why now:** This is the entry point for QRM8. Every subsequent ticket in the milestone will be created, branched, PR'd, reviewed, and merged using the workflow this ticket establishes. Deferring it means QRM8 work would follow the old ad-hoc commit-to-staging pattern, which contradicts the gh-workflow skill the project has already adopted.
+
+**Risk of not doing it:** QRM8 implementation proceeds without standardized PR workflow. Tickets are committed directly to the staging branch without issue tracking, PRs, or review gates. The spec-review and final-review pause points — critical for user oversight — don't exist. The transition to PR-based workflow happens mid-milestone, creating inconsistency.
+
+## Design Context
+
+The gh-workflow skill (`docker/moderator/.claude/skills/gh-workflow/SKILL.md`) is the canonical reference. It defines two lifecycles (epic and standalone), milestone conventions, branch naming (`{issue-number}-{slug}`), PR conventions (`Resolves:` linking, the two-step retarget trick for non-default-branch PRs), and ticket file naming (`draft-{slug}.md` promoted to `{issue-number}-{slug}.md`).
+
+The QRM8 epic already has a GitHub issue (#8) and a staging branch (`8-workspace-isolation-staging`). The roadmap at `tickets/8-workspace-isolation.md` on that branch lists 8 sub-tasks (QRM8-001 through QRM8-008). These sub-tasks reference the gh-workflow convention of GH-issue-numbered tickets but currently use internal `QRM8-00X` identifiers. The renumbering step (Step 6) brings them into alignment.
+
+The moderator container mounts `${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw` (pre-isolation — bind mount still active), so `git`/`gh` operations inside the container land directly on the host workspace. This is acceptable for now; QRM8-005 will transition the moderator to its own git clone.
+
+**Token sharing:** User confirmed it's fine to share the same `GH_TOKEN` between moderator and agents. The token is a fine-grained PAT scoped to the quorum repo only. The QRM8 roadmap (D5) plans env-filtering for the agent SDK subprocess in QRM8-006; for this bootstrap ticket, the token simply needs to be present in the container environment so `gh` can authenticate.
+
+## Implementation Details
+
+**ORDER MATTERS** — Step 1 must land first because the user will rebuild/restart containers immediately after this ticket merges. The moderator needs `gh` auth on its very first post-rebuild session to drive the PR workflow for remaining QRM8 tickets.
+
+### Step 1: Thread `GH_TOKEN` env var into all services
+
+Add `GH_TOKEN: ${GH_TOKEN}` to the environment blocks of every service that needs GitHub access:
+
+- **moderator** — add alongside existing `CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}`. Note: the moderator deliberately does NOT inherit `*shared-env` (see QRM7-007 comment at line 159), so `GH_TOKEN` must be added explicitly to the moderator's environment block.
+- **x-shared-env anchor** — add `GH_TOKEN: ${GH_TOKEN}` to the `x-shared-env` block (line 7-16), which propagates to architect, teamlead, developer services automatically.
+- **qa and productowner** — these services are not currently defined in `docker-compose.yml`. If they are added before this ticket merges, include `GH_TOKEN` via `*shared-env`. Otherwise, note the gap for when they're defined.
+
+Update `.env.example` to include:
+
+```
+# === GitHub CLI Auth (all containers, QRM8) ===
+# Fine-grained PAT scoped to the Quorum repo. Required for gh CLI operations
+# (issues, PRs, milestones). Agents receive it in process.env for handler-level
+# git operations; the moderator uses it for gh auth login in entrypoint.sh.
+# See tickets/8-workspace-isolation.md D5 for the full PAT flow design.
+GH_TOKEN=ghp_...
+```
+
+### Step 2: Install `gh` CLI in Dockerfile stages
+
+**Moderator stage** (line ~93-95): Add `gh` to the `apt-get install` line. On Debian Bookworm, `gh` is not in the default repos. Use the official GitHub CLI keyring approach:
+
+```dockerfile
+# Before the existing apt-get install block:
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list
+```
+
+Then include `gh` in the subsequent `apt-get update && apt-get install` block.
+
+**Agent stage** (line ~47-49): Same approach. Although QRM8-006 (D5) plans to filter `GH_TOKEN` out of the SDK subprocess env, the `gh` binary is still useful for handler-level operations in `InvocationHandler` and for future agent-side PR/issue queries.
+
+**Audit finding:** `gh` is **not** currently available in either the agent or moderator stage. Both stages install the same package set: `git bash ripgrep curl jq openssh-client ca-certificates`. The agent container I'm running in confirms: `which gh` returns empty.
+
+### Step 3: Verify `/gh-workflow` skill discovery in moderator
+
+After rebuild, verify inside the moderator's CC CLI session:
+
+1. Type `/gh` and confirm autocomplete shows `/gh-workflow`
+2. Run `/gh-workflow check the deploy workflow` (or any invocation) and confirm the skill loads without error
+
+**Empirical verification already performed by the user:** The user confirmed `/gh-workflow` is discoverable in the moderator's autocomplete. This step is an acceptance check, not a code change. The skill symlink chain is:
+
+```
+.claude/skills/gh-workflow/SKILL.md (workspace root)
+  -> docker/moderator/.claude/skills/gh-workflow/SKILL.md (canonical)
+```
+
+The moderator's `WORKDIR /mnt/quorum/workspace` ensures CC CLI discovers `.claude/skills/` at the workspace root.
+
+### Step 4: Add "GitHub Workflow" section to `quorum.md`
+
+Add a new top-level section after "Development Workflow" and before "Codebase Conventions". This is a **tight summary** of the full skill doc — agents need the shared mental model but the canonical reference stays in `SKILL.md`.
+
+Content to cover:
+
+- **Two lifecycles:** Epic (multi-step initiative with staging branch, sub-issues, milestone) and Standalone (single branch off `main`, no staging).
+- **Milestone convention:** One milestone per epic, title format `{Marker} - {Title}`, epic + all sub-issues attach to the same milestone.
+- **Branch naming:** `{issue-number}-{slug}` for feature branches; `{issue-number}-{slug}-staging` for epic integration branches. No `feature/` or `bugfix/` prefixes.
+- **PR conventions:** Title `#{issue-number}: {Issue title}`. Body starts with `Resolves: https://github.com/ia64mail/quorum/issues/{issue-number}`. Implementation details in PR body, never in issue description.
+- **The `Resolves:` two-step retarget trick:** For PRs targeting non-default branches, create targeting `main` first (triggers auto-link), then immediately `gh pr edit` to retarget to the staging branch. The link survives the base change.
+- **Ticket file naming:** Draft as `draft-{slug}.md`, promote to `{issue-number}-{slug}.md` after GH issue creation. Update the H1 inside to `# #{issue-number}: {Title}`.
+- **Issue content rule:** Issues contain summary, motivation, and problem statement only. Never include implementation details in issue descriptions.
+- **Canonical reference:** Point to `docker/moderator/.claude/skills/gh-workflow/SKILL.md` for the full workflow spec.
+
+### Step 5: Add "Moderator" role section to `quorum.md`
+
+Add a new role section under "Role Configurations" (after the Developer section). Content:
+
+**Standard ticket lifecycle the moderator follows:**
+
+1. **Clarify user inputs.** If the request is ambiguous, ask the user before proceeding. Settle scope: is this an epic or a standalone issue?
+2. **Drive `/gh-workflow`** to create the infrastructure: draft a ticket MD file, create a GH issue (with milestone if epic-attached), cut a branch, open a PR.
+3. **Phase 1 — User Spec Review.** Pause after the ticket-only PR is open. The user reviews the spec MD in the PR. No implementation starts until the user gives the green light. This is the user's opportunity to refine requirements, adjust scope, or reject the approach.
+4. **Run the full dev flow.** Team lead authors implementation details in the ticket if needed. Optional architect review for cross-cutting or design-heavy tickets. Developer implements. Team lead code-reviews. Developer addresses review feedback.
+5. **Phase 2 — User Final Review.** When implementation and reviews are complete, pause again. The user does final review in the PR and merges (to `main` for standalone issues, to the staging branch for sub-issues under an epic).
+
+**Pre-isolation note:** In the current pre-workspace-isolation mode, the moderator runs `git`/`gh` inside the container against the shared workspace bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`). Operations land directly on the host filesystem. QRM8-005 will transition the moderator to its own git clone on a named volume.
+
+### Step 6: Audit and renumber QRM8 roadmap
+
+The QRM8 roadmap (`tickets/8-workspace-isolation.md` on the `8-workspace-isolation-staging` branch) uses internal `QRM8-001` through `QRM8-008` identifiers for sub-tasks. These map to the following planned work:
+
+| Internal ID | Title | GH Issue # |
+|-------------|-------|------------|
+| QRM8-001 | FileSessionStore on Named Volume | TBD |
+| QRM8-002 | Git Worktree Per Invocation | TBD |
+| QRM8-003 | Handler-Controlled Commit and Push | TBD |
+| QRM8-004 | Branch-in-Flight Guard in MessageBroker | TBD |
+| QRM8-005 | Moderator Becomes Standalone Git Client | TBD |
+| QRM8-006 | PAT Wiring and SDK Environment Filtering | TBD |
+| QRM8-007 | Redirect Agent Memory to Context Store | TBD |
+| QRM8-008 | MCP Server Bind Mount Removal | TBD |
+
+**Renumbering approach** (to be executed by the moderator once it has `gh` auth):
+
+1. **Create GH sub-issues** for each of the 8 sub-tasks under the #8 epic, using the gh-workflow skill. Attach each to the `QRM8 - Workspace Isolation` milestone. Wire parent-child links via the GraphQL `addSubIssue` mutation.
+2. **Record the GH-to-internal mapping.** As each sub-issue gets a real GH number (e.g., `#19`, `#20`, ...), build the mapping table.
+3. **Rename ticket files** from `QRM8-00X-{slug}.md` to `{issue-number}-{slug}.md` per gh-workflow convention. (Currently only the roadmap file `8-workspace-isolation.md` exists on the staging branch; sub-task ticket files will be created as work begins.)
+4. **Update cross-references** in the roadmap: replace `QRM8-001` etc. with `#{issue-number}` throughout the roadmap's Milestone Scope, Dependency Graph, and Recommended Sequencing sections.
+5. **Update `quorum.md` commit message convention** if needed — the current `QRMX-NNN:` prefix convention may need to accommodate GH-issue-numbered commits (e.g., `#19:` or `8-001:` or keep `QRM8-001:` as an alias). This is a convention decision for the architect and user to settle during renumbering.
+
+**Important:** This ticket does NOT execute the renumbering — it defines the approach. The moderator, once restarted with `gh` auth, will execute Steps 1-5 above as part of its first workflow-driven turn. The execution may happen as a standalone follow-up task or as part of the moderator's orientation after rebuild.
+
+**Roadmap file location:** `tickets/8-workspace-isolation.md` on branch `8-workspace-isolation-staging`. The file was moved from `main` in commit `fae141a` ("remove QRM8 roadmap - moved to QRM8 staging branch") and renamed in `77a9735` ("rename roadmap to issue-numbered ticket and update H1").
+
+## Acceptance Criteria
+
+- [ ] **Step 1 — GH_TOKEN wiring:** `GH_TOKEN: ${GH_TOKEN}` is present in the moderator service environment block and in the `x-shared-env` anchor (propagating to architect, teamlead, developer). `.env.example` includes a `GH_TOKEN` entry with explanatory comment.
+- [ ] **Step 2 — gh CLI installed:** `gh --version` succeeds inside both the moderator container and an agent container after rebuild. Installation uses the official GitHub CLI apt repository and keyring.
+- [ ] **Step 3 — Skill discovery verified:** Inside the moderator's CC CLI session, `/gh-workflow` appears in autocomplete and the skill loads successfully when invoked.
+- [ ] **Step 4 — GitHub Workflow section in quorum.md:** A new "GitHub Workflow" section exists in `quorum.md` covering: two lifecycles (epic/standalone), milestone convention, branch naming, PR conventions, `Resolves:` retarget trick, ticket file naming, issue content rules. References `docker/moderator/.claude/skills/gh-workflow/SKILL.md` as the canonical source.
+- [ ] **Step 5 — Moderator role section in quorum.md:** A "Moderator" role section exists under "Role Configurations" describing: the 5-step ticket lifecycle (clarify, create infra, Phase 1 spec review pause, dev flow, Phase 2 final review pause), and the pre-isolation workspace note.
+- [ ] **Step 6 — Renumbering plan documented:** The renumbering approach is documented in this ticket (see Implementation Details Step 6) with: the current internal-to-GH-issue mapping table (TBD entries), the 5-step execution plan, and the roadmap file location. Actual renumbering execution deferred to post-rebuild moderator session.
+
+## Dependencies and References
+
+### Dependencies
+- **Blocks all QRM8 sub-tasks.** This ticket establishes the PR-based workflow every subsequent ticket will use. Must land before any other QRM8 implementation work begins.
+- **No code dependencies.** This ticket modifies only Docker config (`Dockerfile`, `docker-compose.yml`, `.env.example`) and convention files (`quorum.md`). No application source code is touched.
+
+### References
+- `docker/moderator/.claude/skills/gh-workflow/SKILL.md` — canonical GitHub workflow spec
+- `.claude/skills/gh-workflow/SKILL.md` — host-side symlink to the above (workspace root)
+- `tickets/8-workspace-isolation.md` (on `8-workspace-isolation-staging`) — QRM8 roadmap with sub-task list
+- `docker-compose.yml` — service definitions, environment blocks
+- `Dockerfile` — moderator stage (lines 86-121), agent stage (lines 40-83)
+- `.env.example` — environment variable template
+- `quorum.md` — project conventions read by all agents at runtime
+- `docker/moderator/entrypoint.sh` — moderator container startup script (will need `gh auth login` in QRM8-005; not modified by this ticket)
+- `tickets/README.md` — ticket library conventions
+
+### Roadmap Adjustments
+
+See the companion "QRM8 Roadmap Audit" section below for analysis of how this ticket interacts with existing QRM8 sub-tasks.
+
+---
+
+## QRM8 Roadmap Audit
+
+This section captures the audit of how inserting this PR-bootstrap ticket as QRM8's first work item affects the existing roadmap.
+
+### Existing Sub-Tasks (from `8-workspace-isolation-staging:tickets/8-workspace-isolation.md`)
+
+| Internal ID | Title | Phase | Dependencies |
+|-------------|-------|-------|--------------|
+| QRM8-001 | FileSessionStore on Named Volume | 1 (foundations) | Independent |
+| QRM8-002 | Git Worktree Per Invocation | 2 (core isolation) | QRM8-006 |
+| QRM8-003 | Handler-Controlled Commit and Push | 3 (hardening) | QRM8-002, QRM8-006 |
+| QRM8-004 | Branch-in-Flight Guard in MessageBroker | 3 (hardening) | QRM8-002 |
+| QRM8-005 | Moderator Becomes Standalone Git Client | 3 (hardening) | QRM8-006 |
+| QRM8-006 | PAT Wiring and SDK Environment Filtering | 1 (foundations) | Independent |
+| QRM8-007 | Redirect Agent Memory to Context Store | 1 (foundations) | Independent |
+| QRM8-008 | MCP Server Bind Mount Removal | 1 (foundations) | Independent |
+
+### Impact Analysis
+
+1. **QRM8-006 (PAT Wiring) overlap.** This bootstrap ticket wires `GH_TOKEN` into `docker-compose.yml` and `.env.example` — which is a subset of QRM8-006's scope. QRM8-006 goes further: it implements SDK env-filtering (allowlist instead of `...process.env`), moderator `gh auth login` in `entrypoint.sh`, and tool-guard deny rules for credential paths. **Recommendation:** QRM8-006's Docker Compose and `.env.example` changes are subsumed by this ticket. When QRM8-006 is picked up, its scope should note that `GH_TOKEN` env wiring is already done and focus on the remaining items: SDK env allowlist, entrypoint auth bootstrap, and credential path deny rules.
+
+2. **QRM8-005 (Moderator Git Client) interaction.** QRM8-005 plans `gh auth login --with-token` in `entrypoint.sh` and tool-guard deny rules. This bootstrap ticket does NOT modify `entrypoint.sh` — the moderator will use `GH_TOKEN` directly from its environment (e.g., `echo $GH_TOKEN | gh auth login --with-token` manually or via prompt guidance) until QRM8-005 automates it. **No conflict.**
+
+3. **`gh` installation not anticipated in roadmap.** Neither QRM8-005 nor QRM8-006 explicitly calls out installing the `gh` binary in the Dockerfile. QRM8-005 lists "Dockerfile moderator stage (ensure git/gh CLI available)" in its Touches section, suggesting it was expected to handle installation. This bootstrap ticket front-loads the installation. **Recommendation:** QRM8-005 Touches should be updated to note `gh` is already installed.
+
+4. **No dependency on FileSessionStore (QRM8-001).** This ticket is purely process infrastructure. QRM8-001 can proceed independently.
+
+5. **Phase 1 independence preserved.** The four independent Phase 1 tickets (QRM8-001, QRM8-006, QRM8-007, QRM8-008) remain independent of each other and of this bootstrap ticket. However, they should all be driven through the new PR workflow once the moderator has `gh` auth.
+
+6. **Renumbering creates a one-time disruption.** Renaming from `QRM8-00X` to GH issue numbers affects the roadmap file, cross-references, and the commit message convention. This is a known, bounded disruption that should happen early — ideally as the moderator's first action after rebuild — before any sub-task implementation generates commits with the old numbering scheme.
+
+### Conclusion
+
+No existing sub-tasks need scope changes or dependency adjustments beyond noting that `GH_TOKEN` Docker Compose wiring and `gh` CLI installation are subsumed by this bootstrap ticket. The insertion is clean — it's purely additive process infrastructure with no code-level conflicts.
