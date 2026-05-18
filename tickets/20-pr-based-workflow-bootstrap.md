@@ -53,16 +53,18 @@ Update `.env.example` to include:
 GH_TOKEN=ghp_...
 ```
 
-### Step 2: Install `gh` CLI in Dockerfile stages
+### Step 2: Install `gh` CLI 2.92.0+ in Dockerfile stages
 
-**Moderator stage** (line ~93-95): Add `gh` to the `apt-get install` line. On Debian Bookworm, `gh` is not in the default repos. Use the official GitHub CLI keyring approach:
+**Moderator stage** (line ~93-95): Add `gh` to the `apt-get install` line. Debian Bookworm **does** ship a `gh` package (`gh 2.23.0+dfsg1-1`, from the Debian Go Packaging Team, 2023) and apt will prefer it over a third-party source unless explicitly pinned. Add the official GitHub CLI keyring + apt source **and** an apt preferences pin so `apt-get install gh` resolves to the upstream release (≥ 2.92.0):
 
 ```dockerfile
 # Before the existing apt-get install block:
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      > /etc/apt/sources.list.d/github-cli.list
+      > /etc/apt/sources.list.d/github-cli.list \
+  && printf 'Package: gh\nPin: origin cli.github.com\nPin-Priority: 1000\n' \
+      > /etc/apt/preferences.d/github-cli
 ```
 
 Then include `gh` in the subsequent `apt-get update && apt-get install` block.
@@ -70,6 +72,8 @@ Then include `gh` in the subsequent `apt-get update && apt-get install` block.
 **Agent stage** (line ~47-49): Same approach. Although QRM8-006 (D5) plans to filter `GH_TOKEN` out of the SDK subprocess env, the `gh` binary is still useful for handler-level operations in `InvocationHandler` and for future agent-side PR/issue queries.
 
 **Audit finding:** `gh` is **not** currently available in either the agent or moderator stage. Both stages install the same package set: `git bash ripgrep curl jq openssh-client ca-certificates`. The agent container I'm running in confirms: `which gh` returns empty.
+
+**Phase-1 review finding (this PR):** The pre-PR implementation already on staging (commit `3d07e03`) adds the keyring and apt source but **omits** the apt preferences pin. Result: `apt-get install gh` resolves to Debian's `gh 2.23.0+dfsg1-1`, which is too old to drive the workflow reliably — `gh pr edit --base` fails silently on the Projects-classic GraphQL deprecation (observed while opening PR #21). Phase-2 implementation must add the apt preferences pin shown above so the upstream `gh` ≥ 2.92.0 wins, then rebuild.
 
 ### Step 3: Verify `/gh-workflow` skill discovery in moderator
 
@@ -146,7 +150,7 @@ The QRM8 roadmap (`tickets/8-workspace-isolation.md` on the `8-workspace-isolati
 ## Acceptance Criteria
 
 - [ ] **Step 1 — GH_TOKEN wiring:** `GH_TOKEN: ${GH_TOKEN}` is present in the moderator service environment block and in the `x-shared-env` anchor (propagating to architect, teamlead, developer). `.env.example` includes a `GH_TOKEN` entry with explanatory comment.
-- [ ] **Step 2 — gh CLI installed:** `gh --version` succeeds inside both the moderator container and an agent container after rebuild. Installation uses the official GitHub CLI apt repository and keyring.
+- [ ] **Step 2 — gh CLI 2.92.0+ installed:** `gh --version` reports a version ≥ 2.92.0 from `https://cli.github.com/packages` (not Debian's `gh 2.23.0+dfsg1`) inside both the moderator container and an agent container after rebuild. Installation uses the official GitHub CLI apt repository, keyring, **and** an apt preferences pin at `/etc/apt/preferences.d/github-cli` so the upstream repo wins over Debian's package.
 - [ ] **Step 3 — Skill discovery verified:** Inside the moderator's CC CLI session, `/gh-workflow` appears in autocomplete and the skill loads successfully when invoked.
 - [ ] **Step 4 — GitHub Workflow section in quorum.md:** A new "GitHub Workflow" section exists in `quorum.md` covering: two lifecycles (epic/standalone), milestone convention, branch naming, PR conventions, `Resolves:` retarget trick, ticket file naming, issue content rules. References `docker/moderator/.claude/skills/gh-workflow/SKILL.md` as the canonical source.
 - [ ] **Step 5 — Moderator role section in quorum.md:** A "Moderator" role section exists under "Role Configurations" describing: the 5-step ticket lifecycle (clarify, create infra, Phase 1 spec review pause, dev flow, Phase 2 final review pause), and the pre-isolation workspace note.
