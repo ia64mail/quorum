@@ -1075,8 +1075,8 @@ export class McpService implements OnModuleInit {
       'new_conversation',
       {
         description:
-          'Start a new conversation scope. Mints a fresh correlation ID for the current user turn ' +
-          'and clears cached agent sessions so subsequent invocations start fresh. ' +
+          'Start a new conversation scope. Mints a fresh correlation ID for the current user turn. ' +
+          'Cached agent session IDs persist across calls for cross-turn resume; pass `sessionId: ""` to `invoke_agent` to force a fresh session. ' +
           'Call this at the beginning of each new user turn.',
         inputSchema: {
           description: z
@@ -1096,31 +1096,35 @@ export class McpService implements OnModuleInit {
             `new_conversation: no session state found — returning correlationId=${correlationId} ` +
               'but it will not be auto-injected into subsequent calls',
           );
+          const reminder =
+            'Run git fetch origin && git pull --ff-only before reading any workspace files — agent commits since your last turn may not be in your local clone.';
+
           return {
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({ correlationId }),
+                text: JSON.stringify({ correlationId, reminder }),
               },
             ],
           };
         }
 
-        const clearedSessions = state.agentSessions.size;
         state.correlationId = correlationId;
-        state.agentSessions.clear();
 
         this.logger.log(
           `new_conversation: correlationId=${correlationId}` +
             `${args.description ? ` description="${args.description}"` : ''}` +
-            ` clearedSessions=${clearedSessions}`,
+            ` cachedSessions=${state.agentSessions.size}`,
         );
+
+        const reminder =
+          'Run git fetch origin && git pull --ff-only before reading any workspace files — agent commits since your last turn may not be in your local clone.';
 
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ correlationId }),
+              text: JSON.stringify({ correlationId, reminder }),
             },
           ],
         };

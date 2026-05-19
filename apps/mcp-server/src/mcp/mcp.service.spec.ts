@@ -1847,4 +1847,92 @@ describe('McpService', () => {
       expect(result.isError).toBe(true);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // new_conversation tool (D9 + D10)
+  // -------------------------------------------------------------------------
+
+  describe('new_conversation', () => {
+    function makeMockTransport() {
+      return {
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: jest.fn().mockResolvedValue(undefined),
+        send: jest.fn().mockResolvedValue(undefined),
+        start: jest.fn().mockResolvedValue(undefined),
+        sessionId: undefined,
+      };
+    }
+
+    function getSessionToolHandler(server: object, toolName: string) {
+      const tools = (
+        server as unknown as {
+          _registeredTools: Record<string, { handler: ToolHandler }>;
+        }
+      )._registeredTools;
+      return (args: Record<string, unknown>) => tools[toolName].handler(args);
+    }
+
+    it('should include reminder field in response (D10)', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      const handler = getSessionToolHandler(server, 'new_conversation');
+      const result = await handler({});
+
+      const parsed = JSON.parse(textContent(result)) as {
+        correlationId: string;
+        reminder: string;
+      };
+      expect(parsed.correlationId).toBeDefined();
+      expect(parsed.reminder).toBe(
+        'Run git fetch origin && git pull --ff-only before reading any workspace files — agent commits since your last turn may not be in your local clone.',
+      );
+    });
+
+    it('should include reminder field in no-state fallback response (D10)', async () => {
+      // Use the singleton server which has no session state
+      const handler = getToolHandler(service, 'new_conversation');
+      const result = await handler({});
+
+      const parsed = JSON.parse(textContent(result)) as {
+        correlationId: string;
+        reminder: string;
+      };
+      expect(parsed.correlationId).toBeDefined();
+      expect(parsed.reminder).toBe(
+        'Run git fetch origin && git pull --ff-only before reading any workspace files — agent commits since your last turn may not be in your local clone.',
+      );
+    });
+
+    it('should preserve agentSessions cache across calls (D9)', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+
+      // Simulate an invoke_agent that caches a sessionId
+      const state = service.peekSessionState(server);
+      state!.agentSessions.set(AgentRole.architect, 'sess-arch-1');
+
+      // Call new_conversation
+      const handler = getSessionToolHandler(server, 'new_conversation');
+      await handler({});
+
+      // Session cache should survive — D9 removed agentSessions.clear()
+      expect(state!.agentSessions.get(AgentRole.architect)).toBe('sess-arch-1');
+    });
+
+    it('should mint a fresh correlationId on each call', async () => {
+      const server = await service.connect(makeMockTransport() as never);
+      const handler = getSessionToolHandler(server, 'new_conversation');
+
+      const result1 = await handler({});
+      const result2 = await handler({});
+
+      const parsed1 = JSON.parse(textContent(result1)) as {
+        correlationId: string;
+      };
+      const parsed2 = JSON.parse(textContent(result2)) as {
+        correlationId: string;
+      };
+      expect(parsed1.correlationId).not.toBe(parsed2.correlationId);
+    });
+  });
 });
