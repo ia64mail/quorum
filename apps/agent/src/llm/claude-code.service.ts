@@ -1,13 +1,13 @@
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import {
   query,
-  InMemorySessionStore,
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import { AgentConfigService } from '../config';
 import type { ExecuteParams, ExecuteResult } from './claude-code.types';
+import { FileSessionStore } from './file-session-store';
 import { createObservabilityHooks } from './sdk-hooks.factory';
 
 // QRM6-BUG-012 follow-up: bypass the SDK's broken binary picker (sdk.mjs `N7`
@@ -21,9 +21,11 @@ const CLAUDE_BINARY_PATH = `/app/node_modules/@anthropic-ai/claude-agent-sdk-lin
 export class ClaudeCodeService implements OnApplicationShutdown {
   private readonly logger = new Logger(ClaudeCodeService.name);
   private readonly activeControllers = new Set<AbortController>();
-  private readonly sessionStore = new InMemorySessionStore();
 
-  constructor(private readonly config: AgentConfigService) {}
+  constructor(
+    private readonly config: AgentConfigService,
+    private readonly sessionStore: FileSessionStore,
+  ) {}
 
   async execute(params: ExecuteParams): Promise<ExecuteResult> {
     const controller = params.abortController ?? new AbortController();

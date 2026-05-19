@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AgentConfigService } from '../config';
 import { ClaudeCodeService } from './claude-code.service';
 import type { ExecuteParams } from './claude-code.types';
+import { FileSessionStore } from './file-session-store';
 
 // ---------------------------------------------------------------------------
 // SDK mock
@@ -135,6 +136,14 @@ describe('ClaudeCodeService', () => {
       providers: [
         ClaudeCodeService,
         { provide: AgentConfigService, useValue: mockConfig },
+        {
+          provide: FileSessionStore,
+          useValue: {
+            append: jest.fn(),
+            load: jest.fn().mockResolvedValue(null),
+            listSubkeys: jest.fn().mockResolvedValue([]),
+          },
+        },
       ],
     }).compile();
 
