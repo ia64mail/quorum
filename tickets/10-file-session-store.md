@@ -183,3 +183,33 @@ Note: `qa` and `productowner` services are not currently defined in `docker-comp
 - [QRM5-001: Agent Session Resume](QRM5-001-agent-session-resume.md) — Original session resume architecture; surfaced `sessionId` in `InvokeRequest`/`InvokeResponse`
 - QRM6 D5/D6 — Correlation ID and session tracking; established `agentSessions` cache and `new_conversation` reset pattern (D9 refines this)
 - SDK `SessionStore` interface — `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:3604-3681` (marked `@alpha`)
+
+## Implementation Notes
+
+**Status:** Complete (AC #6 deferred)
+
+**Files modified:**
+- `apps/agent/src/llm/file-session-store.ts` — new `FileSessionStore` class implementing SDK `SessionStore` interface with JSONL persistence, `append()`, `load()`, and `listSubkeys()`
+- `apps/agent/src/llm/claude-code.service.ts` — replaced inline `InMemorySessionStore` with injected `FileSessionStore` via constructor DI
+- `apps/agent/src/llm/llm.module.ts` — added factory provider for `FileSessionStore` with base dir `/var/agent-sessions/`
+- `apps/agent/src/llm/index.ts` — barrel export for `FileSessionStore`
+- `apps/agent/src/llm/claude-code.service.spec.ts` — updated test module to provide mock `FileSessionStore`
+- `apps/mcp-server/src/mcp/mcp.service.ts` — removed `agentSessions.clear()` (D9), updated tool description, added `reminder` field to both response paths (D10), changed log from `clearedSessions=` to `cachedSessions=`
+- `apps/agent/src/connection/invocation-handler.service.ts` — added silent-fallback WARN in `logResult()` when `result.sessionId !== request.sessionId`
+- `docker-compose.yml` — added `architect-sessions`, `teamlead-sessions`, `developer-sessions` named volumes mounted at `/var/agent-sessions`
+
+**New test files:**
+- `apps/agent/src/llm/file-session-store.spec.ts` — 14 tests covering append, load, listSubkeys, round-trip, concurrent access, corrupt JSONL handling
+
+**Tests added to existing files:**
+- `apps/mcp-server/src/mcp/mcp.service.spec.ts` — 4 tests for D9 (session cache persistence) and D10 (reminder field in both response paths)
+- `apps/agent/src/connection/invocation-handler.service.spec.ts` — 3 tests for silent-fallback WARN detection
+
+**Deviations:** None — implementation follows ticket spec exactly.
+
+**AC #6 (Optional):** Deferred to QRM9. The `latest-session:<role>` context_store persistence is not implemented; the `agentSessions` in-process cache is lost on MCP restart but FileSessionStore data on the named volume survives.
+
+**Verification:**
+- `npm run build` — PASS (3 webpack bundles compiled successfully)
+- `npm run lint` — PASS (0 errors, 0 warnings)
+- `npm run test` — PASS (781 tests, 46 suites)
