@@ -199,7 +199,7 @@ Note: `qa` and `productowner` services are not currently defined in `docker-comp
 - `docker-compose.yml` — added `architect-sessions`, `teamlead-sessions`, `developer-sessions` named volumes mounted at `/var/agent-sessions`
 
 **New test files:**
-- `apps/agent/src/llm/file-session-store.spec.ts` — 14 tests covering append, load, listSubkeys, round-trip, concurrent access, corrupt JSONL handling
+- `apps/agent/src/llm/file-session-store.spec.ts` — 16 tests covering append, load, listSubkeys, round-trip, concurrent access, corrupt JSONL handling
 
 **Tests added to existing files:**
 - `apps/mcp-server/src/mcp/mcp.service.spec.ts` — 4 tests for D9 (session cache persistence) and D10 (reminder field in both response paths)
