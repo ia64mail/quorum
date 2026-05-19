@@ -199,6 +199,7 @@ services:
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
+      - architect-sessions:/var/agent-sessions
     networks:
       - quorum-net
 
@@ -223,6 +224,7 @@ services:
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
+      - teamlead-sessions:/var/agent-sessions
     networks:
       - quorum-net
 
@@ -247,6 +249,7 @@ services:
     volumes:
       - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
       - ./logs:/app/logs
+      - developer-sessions:/var/agent-sessions
     networks:
       - quorum-net
 
@@ -254,6 +257,9 @@ volumes:
   ollama-data:
   opensearch-data:
   moderator-claude-data:
+  architect-sessions:
+  teamlead-sessions:
+  developer-sessions:
 
 networks:
   quorum-net:

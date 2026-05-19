@@ -432,6 +432,69 @@ describe('InvocationHandler', () => {
       expect(warnMessage).toBeDefined();
       expect(warnMessage).toContain('turns=?');
     });
+
+    it('should WARN when result.sessionId differs from request.sessionId (silent-fallback detection)', async () => {
+      const resumeResult: ExecuteResult = {
+        success: true,
+        result: 'Done',
+        sessionId: 'sess-new-xyz',
+        durationMs: 3000,
+        totalCostUsd: 0.01,
+        numTurns: 2,
+      };
+      mockExecute.mockResolvedValue(resumeResult);
+
+      await handler.handle({
+        ...baseRequest,
+        sessionId: 'sess-old-abc',
+      });
+
+      const fallbackWarn = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Session resume silent fallback'),
+      )?.[0] as string;
+      expect(fallbackWarn).toBeDefined();
+      expect(fallbackWarn).toContain('requested=sess-old-abc');
+      expect(fallbackWarn).toContain('got=sess-new-xyz');
+    });
+
+    it('should NOT warn when result.sessionId matches request.sessionId', async () => {
+      const resumeResult: ExecuteResult = {
+        success: true,
+        result: 'Done',
+        sessionId: 'sess-same',
+        durationMs: 3000,
+        totalCostUsd: 0.01,
+        numTurns: 2,
+      };
+      mockExecute.mockResolvedValue(resumeResult);
+
+      await handler.handle({
+        ...baseRequest,
+        sessionId: 'sess-same',
+      });
+
+      const fallbackWarn = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Session resume silent fallback'),
+      );
+      expect(fallbackWarn).toBeUndefined();
+    });
+
+    it('should NOT warn on success when no sessionId was requested', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const fallbackWarn = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Session resume silent fallback'),
+      );
+      expect(fallbackWarn).toBeUndefined();
+    });
   });
 
   describe('session resume forwarding', () => {
