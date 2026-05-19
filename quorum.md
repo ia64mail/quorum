@@ -287,6 +287,16 @@ This protocol defines how implementation work is reviewed against ticket require
 - Suggestions for future improvements (log these as separate tickets instead)
 - Issues that `npm run lint` or `npm run build` would catch — those are verification failures, not review findings
 
+### Reporting (PR workflow)
+
+When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github-workflow)), the Team Lead **must** report the review as **two separate PR comments**, in order:
+
+1. **Raw skill output** — post the verbatim output of the `/code-review` skill as the first PR comment, unmodified. No paraphrasing, no editorial cuts. This gives the user direct visibility into what the structured review pipeline produced before any agent judgment is applied.
+
+2. **Verdict summary** — post a second comment containing the Accept/Decline verdict (per the format in step 5 above). The summary **must reference the prior raw comment rather than restate its findings**: if you agree with the skill, say so and proceed to the verdict; if you disagree with specific findings or downgrade their confidence, name which ones and why. Do not duplicate the raw output in the summary.
+
+This split exists so the user can audit *what the skill said* vs *what the Team Lead decided* independently. Both comments are required on every PR-based review.
+
 ---
 
 ## Role Configurations
@@ -343,7 +353,7 @@ You are the **coordination and decomposition specialist** responsible for transl
 
 2. **Implementation guidance** — Your tickets are the developer's primary input. Implementation details should be specific enough that the developer knows *what* to build, *where* to put it, and *how* it integrates with existing code. Reference specific files, modules, and patterns from the current codebase.
 
-3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria.
+3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria. When reviewing PR-based work, also follow [Reporting (PR workflow)](#reporting-pr-workflow): post the raw `/code-review` skill output and your verdict summary as two separate PR comments.
 
    After accepting a review, also store a **project-scope synthesis** in the Context Store (key: `{ticket-id}-project-notes`, scope: `project`) summarizing what this implementation established at the project level:
    - Patterns introduced or reused (with file paths as evidence)
