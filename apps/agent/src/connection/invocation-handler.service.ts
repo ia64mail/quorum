@@ -245,6 +245,14 @@ export class InvocationHandler {
           `turns=${result.numTurns} cost=$${result.totalCostUsd.toFixed(4)} ` +
           `duration=${result.durationMs}ms`,
       );
+      // Silent-fallback detection: resume was requested but the SDK started
+      // a fresh session instead of resuming the prior one.
+      if (request.sessionId && result.sessionId !== request.sessionId) {
+        this.logger.warn(
+          `Session resume silent fallback: correlationId=${request.correlationId} ` +
+            `requested=${request.sessionId} got=${result.sessionId}`,
+        );
+      }
     } else {
       this.logger.warn(
         `Invocation failed: ${base} error="${result.error}" ` +
