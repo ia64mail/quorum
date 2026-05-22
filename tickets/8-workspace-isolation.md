@@ -465,7 +465,7 @@ Replace `InMemorySessionStore` with a `FileSessionStore` that persists SDK sessi
 Each invocation creates an isolated git worktree at `/var/agent-worktrees/<correlationId>` and the SDK subprocess runs there instead of the shared workspace. This is the central deliverable of QRM8 — it eliminates the shared-working-tree concurrency problem.
 
 **Infrastructure changes:**
-- **Agent git clone**: Each agent container needs a persistent base repository to create worktrees from. Replace the `${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw` bind mount with a named volume at `/var/agent-repo/` containing a git clone. First-boot initialization (`git clone`) runs in the container entrypoint or on first invocation.
+- **Agent git clone**: Each agent container needs a persistent base repository to create worktrees from. Replace the `${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw` bind mount with a named volume at `/var/agent-repo/` containing a git clone. First-boot initialization (`git clone`) runs in the container entrypoint. **Note:** #15 creates the agent entrypoint (`docker/agent/entrypoint.sh`) with `gh auth login` + `gh auth setup-git` + `unset GH_TOKEN`; #11 extends this existing entrypoint with `git clone` initialization — the git credential helper is already configured by #15, so `git clone https://github.com/...` authenticates transparently.
 - **Branch param**: Add `branch` (required string) to `invokeRequestSchema` in `libs/common/src/messaging/invoke.types.ts`. Every caller must specify the target branch; zod validation rejects requests without `branch` with a descriptive error. The handler checks out the specified branch via `git worktree add`.
 - **Worktree lifecycle**: `InvocationHandler.runInvocation()` creates the worktree before `claudeCode.execute()` and removes it in `finally`. The worktree path becomes the per-invocation cwd.
 - **cwd parameterization**: `ClaudeCodeService.execute()` currently reads cwd from `this.config.agent.workspaceDir` (line 90). Add `cwd` to `ExecuteParams` so the handler can inject the worktree path per invocation. The config-based default becomes the fallback for non-worktree execution (e.g., tests).
@@ -476,7 +476,7 @@ Each invocation creates an isolated git worktree at `/var/agent-worktrees/<corre
 - The base repo volume (`/var/agent-repo/`) is persistent (named volume) — survives container restarts, avoids re-cloning
 - `AGENT_WORKSPACE_DIR` env var semantics change: it now points to the base repo, not the workspace; the actual SDK cwd is the worktree path
 
-**Touches:** `libs/common/src/messaging/invoke.types.ts` (add `branch` field), `apps/agent/src/connection/invocation-handler.service.ts` (worktree lifecycle), `apps/agent/src/llm/claude-code.service.ts` (accept cwd in params), `apps/agent/src/llm/claude-code.types.ts` (add cwd to ExecuteParams), `apps/agent/src/config/agent.config.ts` (redefine workspaceDir semantics), `docker-compose.yml` (remove bind mount, add repo + worktree volumes, add agent entrypoint), `Dockerfile` (agent stage: add entrypoint for clone init, create `/var/agent-worktrees/` dir)
+**Touches:** `libs/common/src/messaging/invoke.types.ts` (add `branch` field), `apps/agent/src/connection/invocation-handler.service.ts` (worktree lifecycle), `apps/agent/src/llm/claude-code.service.ts` (accept cwd in params), `apps/agent/src/llm/claude-code.types.ts` (add cwd to ExecuteParams), `apps/agent/src/config/agent.config.ts` (redefine workspaceDir semantics), `docker-compose.yml` (remove bind mount, add repo + worktree volumes), `docker/agent/entrypoint.sh` (extend with clone init — file created by #15), `Dockerfile` (agent stage: create `/var/agent-worktrees/` dir; ENTRYPOINT already set by #15)
 
 **Depends on:** #15 (PAT wiring — the clone and fetch operations need git auth)
 
@@ -490,7 +490,7 @@ Move `git add`, `git commit`, and `git push` out of the SDK loop and into `Invoc
 
 1. After `claudeCode.execute()` completes, the handler runs `git status --porcelain` in the worktree
 2. If changes exist: `git add -A && git commit -m "QRM8-NNN: <ticket-derived message>"` with a structured commit message
-3. `git push origin <branch>` pushes the branch to the remote
+3. `git push origin <branch>` pushes the branch to the remote (auth: the gh credential helper configured by #15's agent entrypoint handles HTTPS authentication transparently — the handler does NOT need to read `GH_TOKEN` or inject credentials into the push command)
 4. All agent roles get `git commit` and `git push` added to `deniedBashCommands` in `role-tool-profiles.ts`
 5. `git checkout -b` also denied for all roles (the handler controls branching via worktrees)
 
@@ -554,20 +554,21 @@ Wire a fine-grained GitHub Personal Access Token (PAT) through the system. The P
 
 **PAT scope:** Contents (read-write), Pull Requests (read-write), Metadata (read). Scoped to the Quorum repository only.
 
-**Agent side (SDK env filtering):**
+**Agent side (SDK env filtering + entrypoint auth bootstrap):**
 - `claude-code.service.ts:103-106` currently spreads `...process.env` into the SDK subprocess env, which would leak `GH_TOKEN`. Replace with an **allowlist** of env vars: `ANTHROPIC_API_KEY`, `HOME`, `PATH`, `NODE_ENV`, `TERM`, `LANG`, `USER`, `SHELL`, and other benign vars. Everything else is excluded.
-- `GH_TOKEN` is available to the NestJS process (for `InvocationHandler` git operations) but filtered out of the SDK subprocess environment.
+- New `docker/agent/entrypoint.sh` runs `gh auth login --with-token` + `gh auth setup-git` + `unset GH_TOKEN` before starting the NestJS process. After this, `GH_TOKEN` is absent from `process.env` (defense layer 1) and the env allowlist filters it from the SDK subprocess (defense layer 2). Git operations from `InvocationHandler` authenticate via the gh credential helper — the handler never reads `GH_TOKEN` directly.
+- #11 extends this entrypoint with `git clone` initialization; #12's `git push` authenticates via the credential helper.
 
 **Moderator side (gh CLI bootstrap):**
-- `entrypoint.sh` reads `GH_TOKEN`, runs `gh auth login --with-token`, then `unset GH_TOKEN` before starting CC CLI
-- Token persists to `~/.config/gh/hosts.yml` on the `moderator-claude-data` volume
+- `entrypoint.sh` reads `GH_TOKEN`, runs `gh auth login --with-token` + `gh auth setup-git`, then `unset GH_TOKEN` before starting CC CLI
+- Token persists to `~/.config/gh/hosts.yml` on tmpfs (`~/.config` is tmpfs from `x-base-security`, not the named volume — re-created from `GH_TOKEN` on each container start)
 - Residual risk: model can `cat ~/.config/gh/hosts.yml` — mitigated by tool-guard deny on `~/.config/gh/**` + prompt-level prohibition
 
-**Docker Compose:**
-- `GH_TOKEN: ${GH_TOKEN}` added to agent services and moderator service environment
-- `.env.example` updated with `GH_TOKEN=ghp_...` placeholder
+**Docker Compose (already done by #20):**
+- `GH_TOKEN: ${GH_TOKEN}` already in agent services (via `x-shared-env`) and moderator service environment
+- `.env.example` already has `GH_TOKEN` placeholder
 
-**Touches:** `apps/agent/src/llm/claude-code.service.ts` (env allowlist), `docker/moderator/entrypoint.sh` (gh auth bootstrap), `docker-compose.yml` (GH_TOKEN env), `.env.example` (new var), `docker/moderator/settings.json` (deny rules for gh credential paths)
+**Touches:** `apps/agent/src/llm/claude-code.service.ts` (env allowlist), `docker/agent/entrypoint.sh` (new: agent gh auth + credential helper), `Dockerfile` agent stage (COPY entrypoint, set ENTRYPOINT), `docker/moderator/entrypoint.sh` (add gh auth + setup-git block), `docker/moderator/settings.json` (deny rules for gh credential paths)
 
 **Depends on:** —
 

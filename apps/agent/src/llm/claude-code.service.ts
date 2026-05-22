@@ -17,6 +17,45 @@ import { createObservabilityHooks } from './sdk-hooks.factory';
 // in the Dockerfile.
 const CLAUDE_BINARY_PATH = `/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-${process.arch}/claude`;
 
+/**
+ * Allowlist of env vars forwarded to the CC CLI subprocess.
+ * Everything NOT on this list is excluded — this is the primary defense
+ * against leaking secrets (GH_TOKEN, ANTHROPIC_API_KEY from env, etc.)
+ * into the model-visible subprocess environment.
+ */
+const SDK_ENV_ALLOWLIST: readonly string[] = [
+  // System essentials
+  'HOME',
+  'PATH',
+  'USER',
+  'SHELL',
+  'HOSTNAME',
+  // Locale & terminal
+  'TERM',
+  'LANG',
+  'LC_ALL',
+  // Runtime
+  'NODE_ENV',
+  'TMPDIR',
+  'TZ',
+  // Git identity
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+] as const;
+
+/** Pick only allowlisted keys from process.env, skipping undefined values. */
+function buildSdkEnv(allowlist: readonly string[]): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of allowlist) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key]!;
+    }
+  }
+  return env;
+}
+
 @Injectable()
 export class ClaudeCodeService implements OnApplicationShutdown {
   private readonly logger = new Logger(ClaudeCodeService.name);
@@ -103,7 +142,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         settingSources: ['project'],
         includePartialMessages: false,
         env: {
-          ...process.env,
+          ...buildSdkEnv(SDK_ENV_ALLOWLIST),
           ANTHROPIC_API_KEY: this.config.anthropic.apiKey,
         },
         ...(params.maxTurns !== undefined ? { maxTurns: params.maxTurns } : {}),
