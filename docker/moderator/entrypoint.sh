@@ -32,6 +32,19 @@ if [ ! -f /mnt/quorum/workspace/quorum.md ]; then
 fi
 ln -sf /mnt/quorum/workspace/quorum.md /home/quorum/.claude/quorum.md
 
+# Authenticate gh CLI with the PAT and configure git's credential helper,
+# then strip the raw token from the env so the CC CLI session cannot
+# exfiltrate it via $GH_TOKEN. The token persists on disk at
+# ~/.config/gh/hosts.yml (tmpfs — re-created on each container start).
+if [ -n "${GH_TOKEN:-}" ]; then
+  echo "$GH_TOKEN" | gh auth login --with-token
+  gh auth setup-git          # configures git credential helper → gh
+  unset GH_TOKEN
+  echo "gh auth: logged in, credential helper configured, GH_TOKEN unset"
+else
+  echo "WARN: GH_TOKEN not set — gh CLI will not be authenticated" >&2
+fi
+
 # CC CLI reads `mcpServers` from ~/.claude.json (user scope), not from
 # ~/.claude/settings.json. It also stores onboarding state, oauth tokens,
 # and per-project tool permissions there. /home/quorum/.claude.json is a
