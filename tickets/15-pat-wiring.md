@@ -232,18 +232,52 @@ These were already handled by ticket #20 and must NOT be modified:
 
 ## Acceptance Criteria
 
-- [ ] **SDK env allowlist implemented:** `claude-code.service.ts` uses an allowlist (not `...process.env`) to construct the `env` option for the SDK `query()` call. The allowlist is defined as a named constant, not inline.
-- [ ] **GH_TOKEN excluded from SDK subprocess:** With `GH_TOKEN` set in the NestJS process env, `callArgs.options.env.GH_TOKEN` is `undefined` in the test suite. A new test case explicitly verifies this security property.
-- [ ] **NestJS-internal vars excluded from SDK subprocess:** `MCP_SERVER_URL`, `AGENT_ROLE`, `AGENT_CALLBACK_URL`, `LOG_LEVEL`, `LOG_JSON_DIR` are not present in the SDK env. At least one of these is asserted in a test.
-- [ ] **Allowlisted vars forwarded correctly:** `HOME`, `PATH`, `USER`, `SHELL`, `TERM`, `LANG`, git identity vars — all present in SDK env when set in host process. Existing test assertions for `PATH` and `ANTHROPIC_API_KEY` still pass.
-- [ ] **Moderator gh auth bootstrap:** `docker/moderator/entrypoint.sh` runs `gh auth login --with-token` from `$GH_TOKEN` and then `unset GH_TOKEN` before the CC CLI session starts. Guarded by `[ -n "${GH_TOKEN:-}" ]` so missing token doesn't abort startup.
-- [ ] **Moderator credential path deny rules:** `docker/moderator/settings.json` includes deny patterns that block `Read` and `Bash` access to `~/.config/gh/**` paths. Existing deny rules (`Write`, `Edit`, `NotebookEdit`) are preserved.
-- [ ] **Agent entrypoint created:** `docker/agent/entrypoint.sh` exists and runs `gh auth login --with-token` + `gh auth setup-git` + `unset GH_TOKEN` before `exec node dist/main.js`. Guarded by `[ -n "${GH_TOKEN:-}" ]`.
-- [ ] **Dockerfile agent stage updated:** Agent stage uses `ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]` instead of the bare `CMD`. The old `mkdir -p /home/quorum/.claude/debug` logic is preserved inside the entrypoint script.
-- [ ] **Git credential helper configured:** After agent container startup, `git config --global credential.helper` reports the gh-managed helper (verifiable via `docker exec`). Direct `git ls-remote https://github.com/ia64mail/quorum.git` succeeds inside the container.
-- [ ] **Moderator also runs `gh auth setup-git`:** The moderator entrypoint's auth block includes `gh auth setup-git` so direct git commands (not just `gh` commands) authenticate via the credential helper.
-- [ ] **No changes to docker-compose.yml or .env.example:** These files are untouched (already complete from #20).
-- [ ] **Build/lint/test pass:** `npm run build`, `npm run lint`, and `npm run test` all pass with zero errors and zero warnings.
+- [x] **SDK env allowlist implemented:** `claude-code.service.ts` uses an allowlist (not `...process.env`) to construct the `env` option for the SDK `query()` call. The allowlist is defined as a named constant, not inline.
+- [x] **GH_TOKEN excluded from SDK subprocess:** With `GH_TOKEN` set in the NestJS process env, `callArgs.options.env.GH_TOKEN` is `undefined` in the test suite. A new test case explicitly verifies this security property.
+- [x] **NestJS-internal vars excluded from SDK subprocess:** `MCP_SERVER_URL`, `AGENT_ROLE`, `AGENT_CALLBACK_URL`, `LOG_LEVEL`, `LOG_JSON_DIR` are not present in the SDK env. At least one of these is asserted in a test.
+- [x] **Allowlisted vars forwarded correctly:** `HOME`, `PATH`, `USER`, `SHELL`, `TERM`, `LANG`, git identity vars — all present in SDK env when set in host process. Existing test assertions for `PATH` and `ANTHROPIC_API_KEY` still pass.
+- [x] **Moderator gh auth bootstrap:** `docker/moderator/entrypoint.sh` runs `gh auth login --with-token` from `$GH_TOKEN` and then `unset GH_TOKEN` before the CC CLI session starts. Guarded by `[ -n "${GH_TOKEN:-}" ]` so missing token doesn't abort startup.
+- [x] **Moderator credential path deny rules:** `docker/moderator/settings.json` includes deny patterns that block `Read` and `Bash` access to `~/.config/gh/**` paths. Existing deny rules (`Write`, `Edit`, `NotebookEdit`) are preserved.
+- [x] **Agent entrypoint created:** `docker/agent/entrypoint.sh` exists and runs `gh auth login --with-token` + `gh auth setup-git` + `unset GH_TOKEN` before `exec node dist/main.js`. Guarded by `[ -n "${GH_TOKEN:-}" ]`.
+- [x] **Dockerfile agent stage updated:** Agent stage uses `ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]` instead of the bare `CMD`. The old `mkdir -p /home/quorum/.claude/debug` logic is preserved inside the entrypoint script.
+- [x] **Git credential helper configured:** After agent container startup, `git config --global credential.helper` reports the gh-managed helper (verifiable via `docker exec`). Direct `git ls-remote https://github.com/ia64mail/quorum.git` succeeds inside the container.
+- [x] **Moderator also runs `gh auth setup-git`:** The moderator entrypoint's auth block includes `gh auth setup-git` so direct git commands (not just `gh` commands) authenticate via the credential helper.
+- [x] **No changes to docker-compose.yml or .env.example:** These files are untouched (already complete from #20).
+- [x] **Build/lint/test pass:** `npm run build`, `npm run lint`, and `npm run test` all pass with zero errors and zero warnings.
+
+## Implementation Notes
+
+**Status:** Accepted
+
+**Date:** 2026-05-22
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/agent/src/llm/claude-code.service.ts` | Modified | Added `SDK_ENV_ALLOWLIST` constant and `buildSdkEnv()` helper; replaced `...process.env` spread with filtered env composition |
+| `apps/agent/src/llm/claude-code.service.spec.ts` | Modified | Added 3 new tests (5a: GH_TOKEN exclusion, 5b: NestJS-internal var exclusion, 5c: allowlisted var forwarding) |
+| `docker/moderator/entrypoint.sh` | Modified | Inserted gh auth bootstrap block (login + setup-git + unset) after config merge, before claude mcp list self-verify |
+| `docker/moderator/settings.json` | Modified | Expanded deny list with 7 credential-path deny patterns (1 Read + 6 Bash variants) |
+| `docker/agent/entrypoint.sh` | Created | Agent entrypoint with gh auth bootstrap + mkdir + exec node |
+| `Dockerfile` | Modified | Agent stage: added COPY + chmod for entrypoint, replaced bare CMD with ENTRYPOINT |
+| `tickets/8-workspace-isolation.md` | Modified | Updated D5/D11/D12 descriptions to reference agent entrypoint created by #15 |
+
+### Deviations from Ticket Spec
+
+- None. Implementation matches ticket spec verbatim across all four components.
+
+### Verification
+
+- `npm run build` — compiles successfully (webpack compiled, all 3 apps)
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 784 tests passing (3 new + 781 existing), 46 suites, 0 failures
+- Scope discipline confirmed: zero diff on `docker-compose.yml` and `.env.example`
+- Dockerfile changes confined to agent stage only (lines 92-101)
+
+### Review
+
+PR #26 — raw skill output + verdict summary posted as review comments. Accepted with no high-confidence issues.
 
 ## Dependencies and References
 
