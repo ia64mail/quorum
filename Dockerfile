@@ -92,9 +92,13 @@ COPY --chown=quorum:quorum docker/plugins/code-review /mnt/quorum/workspace/.cla
 
 ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"
 
+# Bake the agent entrypoint (gh auth bootstrap).
+COPY --chown=quorum:quorum docker/agent/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 USER quorum
 
-CMD ["sh", "-c", "mkdir -p /home/quorum/.claude/debug && exec node dist/main.js"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # --- Runtime: moderator (Claude Code CLI + MCP client config) ---
 FROM node:24-bookworm-slim AS moderator
