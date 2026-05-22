@@ -345,6 +345,116 @@ describe('ClaudeCodeService', () => {
     expect(typeof callArgs.options.stderr).toBe('function');
   });
 
+  // 5a. SDK env allowlist — GH_TOKEN must NOT reach the subprocess (#15)
+  it('should exclude GH_TOKEN from the SDK subprocess env', async () => {
+    const originalGhToken = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = 'ghp_test_secret_token';
+
+    try {
+      mockQuery.mockReturnValue(
+        generateMessages([initMessage(), successResult()]),
+      );
+
+      await service.execute(baseParams);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: Record<string, string | undefined> };
+      };
+      expect(callArgs.options.env.GH_TOKEN).toBeUndefined();
+    } finally {
+      if (originalGhToken !== undefined) {
+        process.env.GH_TOKEN = originalGhToken;
+      } else {
+        delete process.env.GH_TOKEN;
+      }
+    }
+  });
+
+  // 5b. SDK env allowlist — NestJS-internal vars must NOT reach the subprocess (#15)
+  it('should exclude NestJS-internal vars from the SDK subprocess env', async () => {
+    const saved: Record<string, string | undefined> = {};
+    const internalVars = [
+      'MCP_SERVER_URL',
+      'AGENT_ROLE',
+      'AGENT_CALLBACK_URL',
+      'LOG_LEVEL',
+      'LOG_JSON_DIR',
+    ];
+    for (const key of internalVars) {
+      saved[key] = process.env[key];
+      process.env[key] = 'test-value';
+    }
+
+    try {
+      mockQuery.mockReturnValue(
+        generateMessages([initMessage(), successResult()]),
+      );
+
+      await service.execute(baseParams);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: Record<string, string | undefined> };
+      };
+      for (const key of internalVars) {
+        expect(callArgs.options.env[key]).toBeUndefined();
+      }
+    } finally {
+      for (const key of internalVars) {
+        if (saved[key] !== undefined) {
+          process.env[key] = saved[key];
+        } else {
+          delete process.env[key];
+        }
+      }
+    }
+  });
+
+  // 5c. SDK env allowlist — allowlisted vars are forwarded when set (#15)
+  it('should forward allowlisted env vars to the SDK subprocess', async () => {
+    const saved: Record<string, string | undefined> = {};
+    const allowedVars: Record<string, string> = {
+      HOME: '/home/quorum',
+      USER: 'quorum',
+      SHELL: '/bin/bash',
+      TERM: 'xterm-256color',
+      LANG: 'en_US.UTF-8',
+      GIT_AUTHOR_NAME: 'Test Author',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'Test Committer',
+      GIT_COMMITTER_EMAIL: 'committer@example.com',
+    };
+    for (const [key, value] of Object.entries(allowedVars)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+
+    try {
+      mockQuery.mockReturnValue(
+        generateMessages([initMessage(), successResult()]),
+      );
+
+      await service.execute(baseParams);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: Record<string, string | undefined> };
+      };
+      for (const [key, value] of Object.entries(allowedVars)) {
+        expect(callArgs.options.env[key]).toBe(value);
+      }
+    } finally {
+      for (const key of Object.keys(allowedVars)) {
+        if (saved[key] !== undefined) {
+          process.env[key] = saved[key];
+        } else {
+          delete process.env[key];
+        }
+      }
+    }
+  });
+
   // 6. MCP servers → streaming input
   it('should wrap prompt as AsyncIterable when mcpServers provided', async () => {
     mockQuery.mockReturnValue(
