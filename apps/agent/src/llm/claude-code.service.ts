@@ -25,14 +25,24 @@ const CLAUDE_BINARY_PATH = `/app/node_modules/@anthropic-ai/claude-agent-sdk-lin
  */
 const SDK_ENV_ALLOWLIST: readonly string[] = [
   // System essentials
-  'HOME', 'PATH', 'USER', 'SHELL', 'HOSTNAME',
+  'HOME',
+  'PATH',
+  'USER',
+  'SHELL',
+  'HOSTNAME',
   // Locale & terminal
-  'TERM', 'LANG', 'LC_ALL',
+  'TERM',
+  'LANG',
+  'LC_ALL',
   // Runtime
-  'NODE_ENV', 'TMPDIR', 'TZ',
+  'NODE_ENV',
+  'TMPDIR',
+  'TZ',
   // Git identity
-  'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL',
-  'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL',
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
 ] as const;
 
 /** Pick only allowlisted keys from process.env, skipping undefined values. */
