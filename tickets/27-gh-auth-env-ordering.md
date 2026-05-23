@@ -109,7 +109,7 @@ The chosen path `/home/quorum/.config/git/config` lives on the existing `/home/q
 2. `docker/moderator/entrypoint.sh` applies the same pattern. *(Defect 1)*
 3. Both entrypoints `mkdir -p /home/quorum/.config/git` and `export GIT_CONFIG_GLOBAL=/home/quorum/.config/git/config` before calling `gh auth setup-git`. *(Defect 2)*
 4. `./scripts/start.sh` against staging brings all three agents + moderator + mcp-server up; `docker ps` shows no `Exited (1)` rows for quorum services.
-5. Inside a running agent container, `gh auth status` reports the PAT user as logged in to `github.com`, and `printenv GH_TOKEN` produces an empty line (env var is gone).
+5. Inside a running agent container, `gh auth status` reports the PAT user as logged in to `github.com`, and the **PID 1 process** has no `GH_TOKEN` in its env: `cat /proc/1/environ | tr "\0" "\n" | grep -E "^GH_TOKEN="` returns empty. (See the note below on `docker exec` — `printenv GH_TOKEN` from a `docker exec` shell is misleading here; it reflects the static `Config.Env`, not PID 1's filtered env.)
 6. Inside the running moderator container, `gh auth status` reports the same, and the existing MCP self-verify (`claude mcp list | grep quorum:`) at `docker/moderator/entrypoint.sh:93` still passes.
 7. Inside a running container, `git config --global --get credential.https://github.com.helper` returns the gh helper string (confirms `gh auth setup-git` wrote successfully to the tmpfs path).
 8. No changes outside the two `entrypoint.sh` files — `Dockerfile`, `docker-compose.yml`, `settings.json`, and the SDK env allowlist are not touched.
@@ -120,3 +120,15 @@ The chosen path `/home/quorum/.config/git/config` lives on the existing `/home/q
 - The fix does not invalidate the #15 security review; it only enforces the assumption "the entrypoint actually runs to completion."
 - Once merged into `8-workspace-isolation-staging`, this unblocks #11 (worktrees), #12 (handler commit/push), #13 (branch-in-flight guard), and #14 (moderator git client). No other tickets are affected.
 - `GIT_CONFIG_GLOBAL` is not currently in the SDK env allowlist; that's intentional — the SDK subprocess does not perform git operations (handler-controlled per #12 design). If a future ticket exposes git to the SDK subprocess, the allowlist will need updating then.
+
+### Out-of-scope finding — moderator `docker exec` env exposure (#15 follow-up, not addressed here)
+
+During smoke verification of this ticket, a separate pre-existing #15 issue surfaced and is documented here for awareness — **no fix in this ticket**.
+
+**Observation.** `docker exec quorum-moderator-1 printenv GH_TOKEN` returns the PAT value, even though the moderator entrypoint runs `unset GH_TOKEN`. `cat /proc/1/environ` for PID 1 (the `tail -f /dev/null` process) confirms `GH_TOKEN` is correctly absent from the running process env.
+
+**Mechanism.** `docker exec` does not inherit env from the live PID 1 environ; it derives the new process's env from the container's static `Config.Env` (the merged result of image `ENV`, compose-file `environment:`, and `--env` flags at create time). `unset` in the entrypoint shell only affects what the entrypoint shell's exec'd child (PID 1) sees — not subsequent `docker exec` invocations.
+
+**Implication.** When the user attaches via `./scripts/moderator.sh` (which runs `docker compose exec -it moderator claude`), the CC CLI session inherits `Config.Env` — so the model running in that session can read `$GH_TOKEN` via `printenv`, `env`, or `echo $GH_TOKEN`. This contradicts the threat-model assumption in #15 ("entrypoint `unset` prevents model exfiltration"). The agent SDK subprocess is unaffected — it's a child of PID 1, sees PID 1's filtered env, and is further gated by the env allowlist.
+
+**Why deferred.** This is a #15 design issue, not a #27 bootstrap defect. Fix options span several surfaces (drop `GH_TOKEN` from the moderator service's `environment:` in `docker-compose.yml` and source it inside the entrypoint via a mounted file, use Docker secrets, or override `Config.Env` at exec time with `docker exec --env GH_TOKEN= …`), each with a different security and operability tradeoff. Out of scope for this ticket per user decision; tracked here for future scheduling.
