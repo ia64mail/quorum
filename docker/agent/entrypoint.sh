@@ -14,6 +14,12 @@ if [ -n "${GH_TOKEN:-}" ]; then
   unset GH_TOKEN
   echo "$_token" | gh auth login --with-token
   unset _token
+  # gh auth setup-git writes the credential helper to ~/.gitconfig by default,
+  # but the rootfs is read_only. Redirect git's global config to a tmpfs path
+  # declared in x-base-security so the write succeeds. The export propagates
+  # to descendant processes (NestJS, InvocationHandler git ops) automatically.
+  mkdir -p /home/quorum/.config/git
+  export GIT_CONFIG_GLOBAL=/home/quorum/.config/git/config
   gh auth setup-git          # configures git credential helper → gh
   echo "gh auth: logged in, credential helper configured, GH_TOKEN unset"
 else
