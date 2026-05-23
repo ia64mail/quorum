@@ -47,7 +47,9 @@ if [ -n "${GH_TOKEN:-}" ]; then
   # gh auth setup-git writes the credential helper to ~/.gitconfig by default,
   # but the rootfs is read_only. Redirect git's global config to a tmpfs path
   # declared in x-base-security so the write succeeds. The export propagates
-  # to the moderator CC CLI session (docker exec inherits container env).
+  # to descendant processes of this entrypoint (gh auth setup-git below).
+  # Moderator CC CLI sessions (docker exec) get the credential helper via
+  # git's XDG fallback at ~/.config/git/config — see ticket #27 out-of-scope.
   mkdir -p /home/quorum/.config/git
   export GIT_CONFIG_GLOBAL=/home/quorum/.config/git/config
   gh auth setup-git          # configures git credential helper → gh
