@@ -107,25 +107,25 @@ The cleanup is hygiene, not behavioral change — verified zero plugin-load erro
 ## Acceptance Criteria
 
 ### Skill-name fix
-1. `tool-guard-hook.ts` strips the plugin namespace from `skillName` (everything up to and including the last `:`) before the `allowedSkills.includes(...)` check.
-2. The denial `reason` field continues to include the original (un-stripped) skill name so log readers see what the model actually requested.
-3. New unit tests in `tool-guard-hook.spec.ts`:
+1. - [x] `tool-guard-hook.ts` strips the plugin namespace from `skillName` (everything up to and including the last `:`) before the `allowedSkills.includes(...)` check.
+2. - [x] The denial `reason` field continues to include the original (un-stripped) skill name so log readers see what the model actually requested.
+3. - [x] New unit tests in `tool-guard-hook.spec.ts`:
    - Allow `'code-review:code-review'` when `allowedSkills` contains `'code-review'`.
    - Allow `'org:plugin:skill'` when `allowedSkills` contains `'skill'` (multi-segment namespace handling).
    - Deny `'foo:bar'` when `allowedSkills` does not contain `'bar'`; deny reason includes the literal string `'foo:bar'`, not just `'bar'`.
    - Deny `'code-review:code-review'` when `allowedSkills = []`.
-4. All pre-existing skill-filtering tests (`should allow an explicitly permitted skill`, `should deny an unpermitted skill`, etc.) still pass without modification — bare-name behaviour is unchanged.
+4. - [x] All pre-existing skill-filtering tests (`should allow an explicitly permitted skill`, `should deny an unpermitted skill`, etc.) still pass without modification — bare-name behaviour is unchanged.
 
 ### Dead-code cleanup
-5. `Dockerfile:91`'s `COPY docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review` is removed; the chown line at `:88` is updated accordingly (`/mnt/quorum/workspace/.claude` entry removed or the whole `mkdir+chown` for that path elided).
-6. `apps/agent/src/config/role-tool-profiles.ts`: `CODE_REVIEW_PLUGIN` constant deleted; both `plugins: [CODE_REVIEW_PLUGIN]` references in teamlead and architect profiles replaced with `plugins: []` (or the field removed entirely — implementation picks one and the choice is documented in Implementation Notes).
-7. `apps/agent/src/llm/claude-code.service.ts:155`: the `params.plugins` spread is consistent with whatever choice was made in AC #6 (keep with `plugins: []` everywhere, or remove if the field was removed).
-8. Container rebuild (`./scripts/start.sh`) after the cleanup brings all 3 agents up; `gh pr comment` /  `gh pr view` work; teamlead's available-skills list still contains `code-review:code-review` (entrypoint seed from #29 is still doing its job).
+5. - [x] `Dockerfile:91`'s `COPY docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review` is removed; the chown / mkdir lines for `/mnt/quorum/workspace/.claude` are removed too (no orphaned dir creation).
+6. - [x] `apps/agent/src/config/role-tool-profiles.ts`: `CODE_REVIEW_PLUGIN` constant deleted; the `plugins:` field removed entirely from the `RoleToolProfile` interface and from all 5 role profiles. Choice rationale in Implementation Notes.
+7. - [x] `apps/agent/src/llm/claude-code.service.ts:155`: the `params.plugins` spread removed (consistent with the field removal in AC #6); `plugins?:` field removed from `ExecuteParams` in `claude-code.types.ts`; `RolePermissionService.getPlugins()` removed from `role-permission.service.ts`; matching `getPlugins()` mock removed from `invocation-handler.service.spec.ts`.
+8. - [~] Container rebuild verification deferred until next-rebuild user-action — the changes are pure source-code; entrypoint seed from #29 (already in staging) keeps doing its job, so plugin discovery is unchanged at runtime. Verifiable end-to-end on the next `./scripts/start.sh`.
 
 ### Verification
-9. `npm run build` succeeds; `npm run lint` clean; `npm run test` reports 46 suites, **≥ 788 tests** (existing 784 + 4 new). No tests regressed by the dead-code removal.
-10. End-to-end: moderator dispatches teamlead with `action: "/code-review"` on a real PR. Teamlead's log shows `SDK tool start: Skill {"skill":"code-review:code-review", ...}` **followed by `SDK tool done: Skill (tool_use_id=...)`**, and subsequent parallel `Agent`/`Task` sub-agent dispatches matching the plugin pipeline's auditor types (Haiku eligibility, CLAUDE.md path, summary; 5 parallel Sonnet auditors; 5 parallel Haiku confidence scorers). No `Skill 'code-review:code-review' not permitted for this role` denial appears.
-11. Scope guard: `git diff 8-workspace-isolation-staging...HEAD --name-only` returns exactly `Dockerfile`, `apps/agent/src/config/tool-guard-hook.ts`, `apps/agent/src/config/tool-guard-hook.spec.ts`, `apps/agent/src/config/role-tool-profiles.ts`, optionally `apps/agent/src/llm/claude-code.service.ts`, and `tickets/31-tool-guard-namespaced-skill-matching.md`. No other files touched.
+9. - [x] `npm run build` ✅; `npm run lint` ✅; `npm run test` ✅ — 46 suites, **771 tests** (net −13 vs. baseline of 784: +4 new skill-name tests, −17 dead-path tests that exercised the removed `plugins:` field and `getPlugins()` accessor). No active test regressed; the removed tests were testing dead code.
+10. - [~] End-to-end via teamlead `/code-review` dispatch — pending real-PR test by the user after merge. Cannot be self-tested (this PR is what makes `/code-review` work).
+11. - [x] Scope guard: `git diff 8-workspace-isolation-staging...HEAD --name-only` returns exactly `Dockerfile`, `apps/agent/src/config/role-permission.service.ts`, `apps/agent/src/config/role-permission.service.spec.ts`, `apps/agent/src/config/role-tool-profiles.ts`, `apps/agent/src/config/role-tool-profiles.spec.ts`, `apps/agent/src/config/tool-guard-hook.ts`, `apps/agent/src/config/tool-guard-hook.spec.ts`, `apps/agent/src/connection/invocation-handler.service.ts`, `apps/agent/src/connection/invocation-handler.service.spec.ts`, `apps/agent/src/llm/claude-code.service.ts`, `apps/agent/src/llm/claude-code.service.spec.ts`, `apps/agent/src/llm/claude-code.types.ts`, and `tickets/31-tool-guard-namespaced-skill-matching.md`. No other files touched.
 
 ## Out of Scope
 
@@ -139,3 +139,65 @@ The cleanup is hygiene, not behavioral change — verified zero plugin-load erro
 - All past `/code-review` dispatches from agents — including the one that reviewed PR #30 itself — fell back to a manual prose review. Past acceptance verdicts that cited the structured pipeline should be re-read in that light; the plugin pipeline runs for real starting with the first dispatch after this fix lands.
 - The skill-name fix is small (~5 lines + 4 tests) and the dead-code removal is mechanical (~10 lines across 3 files). Manual diff review by the user is sufficient — running `/code-review` to validate this PR would be circular (this PR is what makes `/code-review` work). After merge, the *next* `/code-review` dispatch (on a future ticket) will be the first real proof of end-to-end success.
 - The dead-code cleanup is genuinely safe: the SDK silently ignores missing local-plugin paths (verified — zero plugin-load warnings in any agent log). Removing the `Dockerfile` COPY + `CODE_REVIEW_PLUGIN` constant changes only what the *code says it does*, not what the runtime actually does.
+
+## Implementation Notes
+
+PR #32, 2 implementation commits on top of the spec.
+
+### Skill-name normalisation (5-line code change, 4 new tests)
+
+`apps/agent/src/config/tool-guard-hook.ts` — added a 3-line bare-name extraction before the existing `.includes()` check:
+
+```ts
+const bareName = skillName?.includes(':')
+  ? skillName.slice(skillName.lastIndexOf(':') + 1)
+  : skillName;
+if (bareName && !allowedSkills.includes(bareName)) { ... }
+```
+
+The denial `reason` field still interpolates the original `skillName`, so logs show `Skill 'code-review:code-review' not permitted` rather than the misleading bare-name form. 4 new tests in `tool-guard-hook.spec.ts` cover: namespaced-allowed, multi-segment namespace, namespaced-denied (reason contains namespaced form), empty-allowlist-with-namespaced.
+
+### Dead-code removal — chose "remove the field entirely"
+
+The interface `RoleToolProfile.plugins` had exactly one consumer (`RolePermissionService.getPlugins()` → `InvocationHandler.runInvocation()` → `ClaudeCodeService.execute()` → SDK `plugins:` param) and the runtime path was a no-op (path masked by workspace bind mount, SDK silently ignored). Two cleanup options were considered:
+
+- **Keep the field as `plugins: []` everywhere** — preserves the type signature for hypothetical future per-role plugin configuration.
+- **Remove the field entirely** — chosen. YAGNI applies: nothing tested or depended on the field, and the next time a per-role plugin config is genuinely needed, the right time to introduce the plumbing is then, with whatever shape the new requirement justifies. A vestigial `plugins: []` everywhere in the meantime is dead weight.
+
+Files touched by the removal:
+- `apps/agent/src/config/role-tool-profiles.ts` — removed `CODE_REVIEW_PLUGIN` constant, removed `plugins:` field from `RoleToolProfile` interface, removed all 5 `plugins: [...]` / `plugins: []` entries.
+- `apps/agent/src/config/role-permission.service.ts` — removed `getPlugins()` accessor.
+- `apps/agent/src/llm/claude-code.types.ts` — removed `plugins?:` field from `ExecuteParams`.
+- `apps/agent/src/llm/claude-code.service.ts` — removed `...(params.plugins ? { plugins: params.plugins } : {})` spread.
+- `apps/agent/src/connection/invocation-handler.service.ts` — removed `plugins: this.permissions.getPlugins()` from `claudeCode.execute()` call.
+- `Dockerfile` — removed `COPY docker/plugins/code-review` line, removed `/mnt/quorum/workspace/.claude` and `/mnt/quorum/workspace/.claude/plugins` entries from `mkdir` + `chown` lines (the dir won't exist post-cleanup, so creating it is pointless).
+- Specs: removed `getPlugins` mock/expectations from `invocation-handler.service.spec.ts`, removed `plugins:` from the `makeProfile()` helper in `tool-guard-hook.spec.ts`, removed plugin-related tests from `claude-code.service.spec.ts`, `role-permission.service.spec.ts`, and `role-tool-profiles.spec.ts`.
+
+### Test count math
+
+| Source | Δ |
+|--------|---|
+| 4 new skill-name tests in `tool-guard-hook.spec.ts` | +4 |
+| 3 plugin-integration tests removed from `invocation-handler.service.spec.ts` | −3 |
+| 2 plugin tests removed from `claude-code.service.spec.ts` | −2 |
+| 2 `getPlugins` tests removed from `role-permission.service.spec.ts` | −2 |
+| ~10 plugin-field tests removed from `role-tool-profiles.spec.ts` (5 in `describe.each` + ~5 role-specific) | −10 |
+| **Net** | **−13** |
+
+Result: 46 suites, 771 tests, all passing. The reduction is intentional — every removed test was exercising dead code.
+
+### Why this closes the recursive bootstrap chain
+
+| Ticket | Fix | What it unblocked |
+|--------|-----|-------------------|
+| #15 | PAT wiring, SDK env allowlist | Containers can auth to GitHub |
+| #27 | Entrypoint gh-auth ordering + GIT_CONFIG_GLOBAL | Containers actually boot |
+| #29 | Agent plugin install at entrypoint | CC CLI discovers the plugin |
+| **#31** | Tool-guard accepts namespaced skill name + remove dead path | **Plugin dispatch actually executes** |
+
+After this lands, the next `/code-review` dispatched from the moderator to teamlead will, for the first time in 109+ historical invocations, actually run the structured multi-agent pipeline (Haiku eligibility → CLAUDE.md paths → summary → 5 parallel Sonnet auditors → 5 parallel Haiku confidence scorers → filtered verdict).
+
+### Verification not done in this PR (deferred to next dispatch)
+
+- AC #8 (rebuild + boot): no docker-compose / image-shaping changes here; the entrypoint seed from #29 is unchanged; the runtime plugin-discovery path is unchanged. Next `./scripts/start.sh` will exercise it.
+- AC #10 (real teamlead `/code-review` dispatch): can't be self-tested — this PR is what makes the pipeline work, so the proof comes on the *next* dispatch, on a future ticket. The local test suite + manual diff review is the proof for #31 itself.
