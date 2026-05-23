@@ -105,14 +105,14 @@ The chosen path `/home/quorum/.config/git/config` lives on the existing `/home/q
 
 ## Acceptance Criteria
 
-1. `docker/agent/entrypoint.sh` captures `GH_TOKEN` into a local variable, unsets `GH_TOKEN`, then pipes the saved value into `gh auth login --with-token`; the local variable is unset after the pipeline. *(Defect 1)*
-2. `docker/moderator/entrypoint.sh` applies the same pattern. *(Defect 1)*
-3. Both entrypoints `mkdir -p /home/quorum/.config/git` and `export GIT_CONFIG_GLOBAL=/home/quorum/.config/git/config` before calling `gh auth setup-git`. *(Defect 2)*
-4. `./scripts/start.sh` against staging brings all three agents + moderator + mcp-server up; `docker ps` shows no `Exited (1)` rows for quorum services.
-5. Inside a running agent container, `gh auth status` reports the PAT user as logged in to `github.com`, and the **PID 1 process** has no `GH_TOKEN` in its env: `cat /proc/1/environ | tr "\0" "\n" | grep -E "^GH_TOKEN="` returns empty. (See the note below on `docker exec` — `printenv GH_TOKEN` from a `docker exec` shell is misleading here; it reflects the static `Config.Env`, not PID 1's filtered env.)
-6. Inside the running moderator container, `gh auth status` reports the same, and the existing MCP self-verify (`claude mcp list | grep quorum:`) at `docker/moderator/entrypoint.sh:93` still passes.
-7. Inside a running container, `git config --global --get credential.https://github.com.helper` returns the gh helper string (confirms `gh auth setup-git` wrote successfully to the tmpfs path).
-8. No changes outside the two `entrypoint.sh` files — `Dockerfile`, `docker-compose.yml`, `settings.json`, and the SDK env allowlist are not touched.
+1. - [x] `docker/agent/entrypoint.sh` captures `GH_TOKEN` into a local variable, unsets `GH_TOKEN`, then pipes the saved value into `gh auth login --with-token`; the local variable is unset after the pipeline. *(Defect 1)*
+2. - [x] `docker/moderator/entrypoint.sh` applies the same pattern. *(Defect 1)*
+3. - [x] Both entrypoints `mkdir -p /home/quorum/.config/git` and `export GIT_CONFIG_GLOBAL=/home/quorum/.config/git/config` before calling `gh auth setup-git`. *(Defect 2)*
+4. - [x] `./scripts/start.sh` against staging brings all three agents + moderator + mcp-server up; `docker ps` shows no `Exited (1)` rows for quorum services.
+5. - [x] Inside a running agent container, `gh auth status` reports the PAT user as logged in to `github.com`, and the **PID 1 process** has no `GH_TOKEN` in its env: `cat /proc/1/environ | tr "\0" "\n" | grep -E "^GH_TOKEN="` returns empty. (See the note below on `docker exec` — `printenv GH_TOKEN` from a `docker exec` shell is misleading here; it reflects the static `Config.Env`, not PID 1's filtered env.)
+6. - [x] Inside the running moderator container, `gh auth status` reports the same, and the existing MCP self-verify (`claude mcp list | grep quorum:`) at `docker/moderator/entrypoint.sh:93` still passes.
+7. - [x] Inside a running container, `git config --global --get credential.https://github.com.helper` returns the gh helper string (confirms `gh auth setup-git` wrote successfully to the tmpfs path).
+8. - [x] No changes outside the two `entrypoint.sh` files — `Dockerfile`, `docker-compose.yml`, `settings.json`, and the SDK env allowlist are not touched.
 
 ## Notes
 
@@ -132,3 +132,28 @@ During smoke verification of this ticket, a separate pre-existing #15 issue surf
 **Implication.** When the user attaches via `./scripts/moderator.sh` (which runs `docker compose exec -it moderator claude`), the CC CLI session inherits `Config.Env` — so the model running in that session can read `$GH_TOKEN` via `printenv`, `env`, or `echo $GH_TOKEN`. This contradicts the threat-model assumption in #15 ("entrypoint `unset` prevents model exfiltration"). The agent SDK subprocess is unaffected — it's a child of PID 1, sees PID 1's filtered env, and is further gated by the env allowlist.
 
 **Why deferred.** This is a #15 design issue, not a #27 bootstrap defect. Fix options span several surfaces (drop `GH_TOKEN` from the moderator service's `environment:` in `docker-compose.yml` and source it inside the entrypoint via a mounted file, use Docker secrets, or override `Config.Env` at exec time with `docker exec --env GH_TOKEN= …`), each with a different security and operability tradeoff. Out of scope for this ticket per user decision; tracked here for future scheduling.
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-05-23
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `docker/agent/entrypoint.sh` | Modified | Capture-unset-pipe pattern for GH_TOKEN (Defect 1); mkdir + GIT_CONFIG_GLOBAL redirect for gh auth setup-git (Defect 2) |
+| `docker/moderator/entrypoint.sh` | Modified | Same two fixes applied symmetrically |
+| `tickets/27-gh-auth-env-ordering.md` | Created | Ticket spec with root cause analysis, design, 8 ACs, out-of-scope finding |
+
+### Verification
+
+- `npm run build` — 3 webpack compilations successful (no source code changed)
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 784 tests passing, 46 suites (unchanged baseline)
+- `./scripts/start.sh` — all containers Up, no Exited rows, gh auth warnings eliminated, git credential helper functional
+
+### Review Observations
+
+- Moderator entrypoint comment (line 49-50) describes GIT_CONFIG_GLOBAL propagation to docker exec as "docker exec inherits container env" — technically imprecise (docker exec uses Config.Env, not PID 1's runtime env). The credential helper works regardless via git's XDG fallback at `~/.config/git/config`. Low confidence, not actionable.
