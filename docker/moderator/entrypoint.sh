@@ -37,9 +37,22 @@ ln -sf /mnt/quorum/workspace/quorum.md /home/quorum/.claude/quorum.md
 # exfiltrate it via $GH_TOKEN. The token persists on disk at
 # ~/.config/gh/hosts.yml (tmpfs — re-created on each container start).
 if [ -n "${GH_TOKEN:-}" ]; then
-  echo "$GH_TOKEN" | gh auth login --with-token
-  gh auth setup-git          # configures git credential helper → gh
+  # gh refuses to persist credentials while GH_TOKEN is in env (it treats the
+  # env var as authoritative). Capture, unset, then pipe — otherwise gh exits
+  # non-zero and `set -euo pipefail` aborts the entrypoint.
+  _token="$GH_TOKEN"
   unset GH_TOKEN
+  echo "$_token" | gh auth login --with-token
+  unset _token
+  # gh auth setup-git writes the credential helper to ~/.gitconfig by default,
+  # but the rootfs is read_only. Redirect git's global config to a tmpfs path
+  # declared in x-base-security so the write succeeds. The export propagates
+  # to descendant processes of this entrypoint (gh auth setup-git below).
+  # Moderator CC CLI sessions (docker exec) get the credential helper via
+  # git's XDG fallback at ~/.config/git/config — see ticket #27 out-of-scope.
+  mkdir -p /home/quorum/.config/git
+  export GIT_CONFIG_GLOBAL=/home/quorum/.config/git/config
+  gh auth setup-git          # configures git credential helper → gh
   echo "gh auth: logged in, credential helper configured, GH_TOKEN unset"
 else
   echo "WARN: GH_TOKEN not set — gh CLI will not be authenticated" >&2
