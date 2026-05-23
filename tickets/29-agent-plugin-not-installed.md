@@ -69,15 +69,15 @@ The moderator entrypoint is unchanged — it already has the plugin installed on
 
 ## Acceptance Criteria
 
-1. `docker/agent/entrypoint.sh` seeds `~/.claude/plugins/cache/claude-plugins-official/code-review/unknown/` from `/mnt/quorum/workspace/docker/plugins/code-review/` on every boot.
-2. `docker/agent/entrypoint.sh` writes `~/.claude/plugins/installed_plugins.json` with the same JSON shape the moderator volume already uses (same plugin name, same install path).
-3. Boot log includes a confirmation line ("`code-review plugin installed for agent session`") before `exec node dist/main.js`.
-4. Inside a running agent container (e.g. teamlead), `ls /home/quorum/.claude/plugins/cache/claude-plugins-official/code-review/unknown/.claude-plugin/plugin.json` succeeds and `cat /home/quorum/.claude/plugins/installed_plugins.json` returns the expected JSON.
-5. End-to-end: moderator dispatches teamlead with `action: "/code-review"` on a real PR; teamlead's log shows `SDK tool start: Skill {"skill":"code-review:code-review", ...}` **followed by** `SDK tool done: Skill (tool_use_id=...)`. Manual prose-review fallback or `Skill {"skill":"review"}` substitution does not appear.
-6. End-to-end: the teamlead's review output structure matches the plugin pipeline shape — parallel auditor agent dispatches (visible via `SDK tool start: Agent` / `Task` calls with `subagent_type` matching the plugin's auditor types), bug detector pass, confidence-scored verdict.
-7. Plugin updates: changing a file under `docker/plugins/code-review/` and restarting the agent container picks up the new content automatically — no image rebuild needed.
-8. No changes outside `docker/agent/entrypoint.sh` (no `Dockerfile`, no `docker-compose.yml`, no `apps/agent/**`, no `libs/common/**`).
-9. The moderator side is **not** modified — the existing named-volume install continues to work; #15 / #27 entrypoint changes on the moderator are not regressed.
+1. - [x] `docker/agent/entrypoint.sh` seeds `~/.claude/plugins/cache/claude-plugins-official/code-review/unknown/` from `/mnt/quorum/workspace/docker/plugins/code-review/` on every boot.
+2. - [x] `docker/agent/entrypoint.sh` writes `~/.claude/plugins/installed_plugins.json` with the same JSON shape the moderator volume already uses (same plugin name, same install path).
+3. - [x] Boot log includes a confirmation line ("`code-review plugin installed for agent session`") before `exec node dist/main.js`.
+4. - [x] Inside a running agent container (e.g. teamlead), `ls /home/quorum/.claude/plugins/cache/claude-plugins-official/code-review/unknown/.claude-plugin/plugin.json` succeeds and `cat /home/quorum/.claude/plugins/installed_plugins.json` returns the expected JSON.
+5. - [~] End-to-end: moderator dispatches teamlead with `action: "/code-review"` on a real PR; teamlead's log shows `SDK tool start: Skill {"skill":"code-review:code-review", ...}` **followed by** `SDK tool done: Skill (tool_use_id=...)`. Manual prose-review fallback or `Skill {"skill":"review"}` substitution does not appear. **Partially verified:** the namespaced skill resolves and appears in teamlead's available-skills list (proven by teamlead's verdict comment on PR #30 — first time in 109 historical invocations); end-to-end dispatch then fails at a *separate* pre-existing tool-guard gate. Tracked as a follow-up ticket — see Implementation Notes.
+6. - [~] End-to-end: the teamlead's review output structure matches the plugin pipeline shape — parallel auditor agent dispatches (visible via `SDK tool start: Agent` / `Task` calls with `subagent_type` matching the plugin's auditor types), bug detector pass, confidence-scored verdict. **Blocked by the same gate as #5;** see Implementation Notes.
+7. - [x] Plugin updates: changing a file under `docker/plugins/code-review/` and restarting the agent container picks up the new content automatically — no image rebuild needed.
+8. - [x] No changes outside `docker/agent/entrypoint.sh` (no `Dockerfile`, no `docker-compose.yml`, no `apps/agent/**`, no `libs/common/**`).
+9. - [x] The moderator side is **not** modified — the existing named-volume install continues to work; #15 / #27 entrypoint changes on the moderator are not regressed.
 
 ## Out of Scope
 
@@ -91,3 +91,24 @@ The moderator entrypoint is unchanged — it already has the plugin installed on
 - Once this lands, prior teamlead reviews dispatched as `/code-review` should be **interpreted with caution** in retrospect: the structured pipeline did not actually run. Past PR approvals that cited "teamlead `/code-review` accepted" reflect manual prose review of variable rigor, not the plugin's confidence-scored multi-auditor output.
 - Discovered during smoke-verification of #27 (`tickets/27-gh-auth-env-ordering.md`). The two findings are unrelated — #27 fixes container boot, this ticket fixes review fidelity — but the moment of discovery was the same teamlead invocation.
 - Depends on the workspace bind mount being present on agent containers (it is, today). When workspace-isolation tickets #11 / #14 remove that bind mount, the source path for the copy will need to change — either to a baked-into-image location or a dedicated plugin bind mount. Flagged for sequencing.
+
+## Implementation Notes
+
+PR #30, 2 commits — `7c83d91` (spec) and `e8813f3` (fix). Reviewed by teamlead on 2026-05-23; verdict **Accept ✅** (two comments on PR #30: raw `/code-review` skill output + verdict summary).
+
+### What landed
+
+Added a `mkdir -p` + `cp -r "$PLUGIN_SRC/." "$PLUGIN_DIR/"` block followed by an `installed_plugins.json` heredoc to `docker/agent/entrypoint.sh`, after the existing gh-auth bootstrap and before `exec node dist/main.js`. Identical seed runs in every agent container on every boot. The seeded JSON is byte-for-byte structurally identical to the moderator's volume-persisted copy (same plugin name `code-review@claude-plugins-official`, same `installPath`, same `scope`, same `projectPath`); only `installedAt` / `lastUpdated` are dynamic (`date -u +%Y-%m-%dT%H:%M:%S.000Z`).
+
+### Verification
+
+- Host-side: all three agents print `code-review plugin installed for agent session`; `~/.claude/plugins/cache/claude-plugins-official/code-review/unknown/.claude-plugin/plugin.json` is reachable inside the architect container; `~/.claude/plugins/installed_plugins.json` parses as expected.
+- Build / lint / test: 3 webpack compilations clean, 0 lint warnings, **784 tests across 46 suites — unchanged from baseline** (no source code touched).
+- Scope guard: `git diff 8-workspace-isolation-staging...HEAD --name-only` → exactly `docker/agent/entrypoint.sh` + `tickets/29-agent-plugin-not-installed.md`.
+- Skill resolution: teamlead's review log shows `code-review:code-review` present in available-skills list — the first proof in this system's history that an agent's CC CLI sees the plugin.
+
+### Findings surfaced during review (out of #29 scope)
+
+1. **Tool-guard skill-name mismatch — blocks plugin dispatch end-to-end.** `apps/agent/src/config/tool-guard-hook.ts:32` runs `allowedSkills.includes(skillName)` with `skillName = "code-review:code-review"` (plugin-namespaced form CC CLI emits) against `allowedSkills = ["code-review", "simplify"]` (bare-name form in `role-tool-profiles.ts:66`). Strict equality fails and the guard rejects the dispatch with `"Skill 'code-review:code-review' not permitted for this role"`. This is QRM5-BUG-002-vintage code that was dormant — no agent had ever resolved a namespaced plugin skill before #29 made it possible — and is the reason ACs #5 / #6 are marked `[~]`. Fix is small (normalize namespaced names to bare before the `includes()` check, or accept both forms); to be tracked in a separate sub-issue under #8.
+2. **Dockerfile + SDK-plugins-param machinery is dead code.** `Dockerfile:91` bakes the plugin into the image at `/mnt/quorum/workspace/.claude/plugins/code-review/`, and `CODE_REVIEW_PLUGIN` in `role-tool-profiles.ts:31` references that path for the SDK's `plugins:` parameter (`claude-code.service.ts:155`). But that path is **masked at runtime by the workspace bind mount** — `ls` confirms the path doesn't exist inside the running container. The entrypoint seed introduced by this PR is therefore the only working install mechanism. No action required for #29; cleanup of the dead code is bundled with the upcoming tool-guard fix or deferred to the workspace-isolation cleanup pass.
+3. **Historical revision.** Past teamlead "code reviews" dispatched as `/code-review` were manual prose framed as the skill — not the structured plugin pipeline. 109 historical teamlead invocations, 0 successful `code-review:code-review` Skill calls. PR approvals that cited "teamlead `/code-review` accepted" should be re-read with that understanding. The pipeline will run for real once the follow-up tool-guard ticket lands.
