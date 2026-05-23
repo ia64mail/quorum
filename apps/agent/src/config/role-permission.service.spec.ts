@@ -64,20 +64,6 @@ describe('RolePermissionService', () => {
     });
   });
 
-  describe('getPlugins', () => {
-    it('should return plugins from the profile', async () => {
-      const service = await createService(AgentRole.architect);
-      const plugins = service.getPlugins();
-      expect(plugins).toBe(ROLE_TOOL_PROFILES.architect.plugins);
-      expect(plugins.length).toBeGreaterThan(0);
-    });
-
-    it('should return empty array for roles without plugins', async () => {
-      const service = await createService(AgentRole.qa);
-      expect(service.getPlugins()).toHaveLength(0);
-    });
-  });
-
   describe('getToolGuardHook', () => {
     it('should return a function', async () => {
       const service = await createService(AgentRole.architect);

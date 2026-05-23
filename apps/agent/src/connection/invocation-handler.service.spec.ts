@@ -20,7 +20,6 @@ const mockExec = childProcess.exec as unknown as jest.Mock;
 const mockExecute = jest.fn<Promise<ExecuteResult>, [unknown]>();
 const mockCreateBridge = jest.fn();
 const mockGetDisallowedTools = jest.fn();
-const mockGetPlugins = jest.fn();
 const mockGetToolGuardHook = jest.fn();
 const mockGetSystemPrompt = jest.fn();
 
@@ -69,7 +68,6 @@ describe('InvocationHandler', () => {
     mockGetSystemPrompt.mockReturnValue('Mocked system prompt');
     mockCreateBridge.mockReturnValue({ quorum: { name: 'quorum' } });
     mockGetDisallowedTools.mockReturnValue(['AskUserQuestion']);
-    mockGetPlugins.mockReturnValue([]);
     mockGetToolGuardHook.mockReturnValue(() => ({ allowed: true }));
 
     // Default: git status returns clean (no uncommitted changes)
@@ -102,7 +100,6 @@ describe('InvocationHandler', () => {
           provide: RolePermissionService,
           useValue: {
             getDisallowedTools: mockGetDisallowedTools,
-            getPlugins: mockGetPlugins,
             getToolGuardHook: mockGetToolGuardHook,
           },
         },
@@ -293,44 +290,6 @@ describe('InvocationHandler', () => {
         expect.objectContaining({
           mcpServers: bridgeResult,
         }),
-      );
-    });
-  });
-
-  describe('plugin integration (BUG-002)', () => {
-    it('should call RolePermissionService.getPlugins()', async () => {
-      mockExecute.mockResolvedValue(successResult);
-
-      await handler.handle(baseRequest);
-
-      expect(mockGetPlugins).toHaveBeenCalled();
-    });
-
-    it('should pass plugins to execute()', async () => {
-      const plugins = [
-        {
-          type: 'local' as const,
-          path: '/mnt/quorum/workspace/.claude/plugins/code-review',
-        },
-      ];
-      mockGetPlugins.mockReturnValue(plugins);
-      mockExecute.mockResolvedValue(successResult);
-
-      await handler.handle(baseRequest);
-
-      expect(mockExecute).toHaveBeenCalledWith(
-        expect.objectContaining({ plugins }),
-      );
-    });
-
-    it('should pass empty plugins array for roles without plugins', async () => {
-      mockGetPlugins.mockReturnValue([]);
-      mockExecute.mockResolvedValue(successResult);
-
-      await handler.handle(baseRequest);
-
-      expect(mockExecute).toHaveBeenCalledWith(
-        expect.objectContaining({ plugins: [] }),
       );
     });
   });

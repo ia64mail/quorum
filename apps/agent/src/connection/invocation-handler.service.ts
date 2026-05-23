@@ -102,7 +102,6 @@ export class InvocationHandler {
         prompt,
         systemPrompt,
         mcpServers: this.bridge.createBridge(request),
-        plugins: this.permissions.getPlugins(),
         disallowedTools: this.permissions.getDisallowedTools(),
         canUseTool: toCanUseTool(this.permissions.getToolGuardHook()),
         resume: request.sessionId,

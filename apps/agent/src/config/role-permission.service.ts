@@ -32,11 +32,6 @@ export class RolePermissionService {
     return this.getProfile().disallowedTools;
   }
 
-  /** Returns the SDK plugins configured for the agent's role. */
-  getPlugins(): Array<{ type: 'local'; path: string }> {
-    return this.getProfile().plugins;
-  }
-
   /**
    * Returns the pre-built tool guard hook for the agent's role.
    * Lazy-initialised singleton — created once on first call.

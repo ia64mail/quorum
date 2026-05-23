@@ -81,14 +81,8 @@ COPY --from=builder --chown=quorum:quorum /app/package*.json ./
 RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
-    /mnt/quorum/workspace/.claude/plugins \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
-    /mnt/quorum/workspace/.claude \
  && ln -s /tmp/.claude.json /home/quorum/.claude.json
-
-# Vendor code-review plugin (read-only rootfs prevents runtime installs).
-# Source: https://github.com/anthropics/claude-plugins-official/tree/main/plugins/code-review
-COPY --chown=quorum:quorum docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review
 
 ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"
 
