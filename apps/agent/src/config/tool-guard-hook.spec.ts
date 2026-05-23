@@ -10,7 +10,6 @@ function makeProfile(
     disallowedTools: [],
     deniedBashCommands: [],
     allowedSkills: [],
-    plugins: [],
     ...overrides,
   };
 }
@@ -52,6 +51,40 @@ describe('createToolGuardHook', () => {
       );
       const result = noSkillsHook('Skill', { skill: 'simplify' });
       expect(result.allowed).toBe(false);
+    });
+
+    it('should allow a plugin-namespaced skill that matches the bare allowlist entry', () => {
+      const result = hook('Skill', { skill: 'code-review:code-review' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow a multi-segment namespaced skill by matching the trailing bare name', () => {
+      const multiHook = createToolGuardHook(
+        makeProfile({ allowedSkills: ['skill'] }),
+        WORKSPACE,
+      );
+      const result = multiHook('Skill', { skill: 'org:plugin:skill' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should deny a plugin-namespaced skill whose bare name is not in the allowlist', () => {
+      const result = hook('Skill', { skill: 'foo:bar' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("Skill 'foo:bar' not permitted");
+    });
+
+    it('should deny a plugin-namespaced skill when allowedSkills is empty', () => {
+      const noSkillsHook = createToolGuardHook(
+        makeProfile({ allowedSkills: [] }),
+        WORKSPACE,
+      );
+      const result = noSkillsHook('Skill', {
+        skill: 'code-review:code-review',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain(
+        "Skill 'code-review:code-review' not permitted",
+      );
     });
   });
 

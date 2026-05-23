@@ -29,7 +29,13 @@ export function createToolGuardHook(
     // --- Skill filtering ---
     if (toolName === 'Skill') {
       const skillName = toolInput.skill as string | undefined;
-      if (skillName && !allowedSkills.includes(skillName)) {
+      // CC CLI emits plugin-provided skills as "<plugin>:<skill>" — strip the
+      // namespace before checking against the role's bare-name allowlist so
+      // role profiles don't have to mirror plugin internals.
+      const bareName = skillName?.includes(':')
+        ? skillName.slice(skillName.lastIndexOf(':') + 1)
+        : skillName;
+      if (bareName && !allowedSkills.includes(bareName)) {
         return {
           allowed: false,
           reason: `Skill '${skillName}' not permitted for this role`,
