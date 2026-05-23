@@ -37,9 +37,14 @@ ln -sf /mnt/quorum/workspace/quorum.md /home/quorum/.claude/quorum.md
 # exfiltrate it via $GH_TOKEN. The token persists on disk at
 # ~/.config/gh/hosts.yml (tmpfs — re-created on each container start).
 if [ -n "${GH_TOKEN:-}" ]; then
-  echo "$GH_TOKEN" | gh auth login --with-token
-  gh auth setup-git          # configures git credential helper → gh
+  # gh refuses to persist credentials while GH_TOKEN is in env (it treats the
+  # env var as authoritative). Capture, unset, then pipe — otherwise gh exits
+  # non-zero and `set -euo pipefail` aborts the entrypoint.
+  _token="$GH_TOKEN"
   unset GH_TOKEN
+  echo "$_token" | gh auth login --with-token
+  unset _token
+  gh auth setup-git          # configures git credential helper → gh
   echo "gh auth: logged in, credential helper configured, GH_TOKEN unset"
 else
   echo "WARN: GH_TOKEN not set — gh CLI will not be authenticated" >&2
