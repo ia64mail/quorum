@@ -27,7 +27,9 @@ Use `.min(1)` with a descriptive error message (e.g., `"branch is required -- sp
 
 The `branch` field sits alongside `correlationId`, `caller`, `target`, `action` as a core routing parameter. Every caller (moderator via MCP tool, agents via nested invocations) must provide it.
 
-**MCP server side:** The `invoke_agent` MCP tool schema (in `apps/mcp-server/src/mcp/mcp.service.ts`) must also accept `branch` as a required input parameter and pass it through when constructing the `InvokeRequest` for the broker. The developer should trace the `invoke_agent` tool registration to identify the exact insertion point -- the tool's zod input schema and the request construction both need updating.
+**MCP server side:** The `invoke_agent` MCP tool schema (in `apps/mcp-server/src/mcp/mcp.service.ts`) must also accept `branch` as a required input parameter and pass it through when constructing the `InvokeRequest` for the broker. Two insertion points:
+1. **Tool input schema** (~line 282): Add `branch` as a required string in the zod schema for the `invoke_agent` tool registration.
+2. **Request construction** (~line 368): Include `branch` from the parsed input when building the `InvokeRequest` object sent to the broker.
 
 ### 2. ExecuteParams.cwd Parameterization
 
@@ -96,7 +98,7 @@ runInvocation(request):
   - Ref is ambiguous -- `fatal: ambiguous argument`
   - Directory already exists (correlationId collision, should never happen) -- `fatal: '<path>' already exists`
   - Catch the `execAsync` rejection, extract stderr, and return `{ success: false, error: "Worktree creation failed: <stderr>" }`.
-- **`checkUncommittedChanges()` (line 220) stays as-is.** It currently runs against `this.config.agent.workspaceDir`, which after this ticket points to the base repo. It should instead run against the worktree path. However, #12 replaces `checkUncommittedChanges()` entirely with `commitAndPush()`. Updating the cwd in #11 is a minor alignment that avoids a stale check -- the developer should update its `cwd` to the worktree path while they're in this code. This is NOT the #12 commit/push behavior -- just fixing the check's target directory.
+- **`checkUncommittedChanges()` (line 220): update to accept worktree path as a parameter.** It currently runs against `this.config.agent.workspaceDir`, which after this ticket points to the base repo (not the worktree where the agent actually worked). The developer must update this method to accept a `cwd` parameter and pass the worktree path from `runInvocation()`. #12 replaces `checkUncommittedChanges()` entirely with `commitAndPush()`, so this is a minor alignment -- just fixing the check's target directory, NOT implementing #12's commit/push behavior.
 - **Logging:** Log worktree creation and removal at `log` level for observability. Include the branch, correlationId, and worktree path.
 
 ### 4. Agent Entrypoint Extension
@@ -109,9 +111,10 @@ Extend the existing entrypoint (created by #15, extended by #29) with git clone 
 1. gh auth bootstrap       (#15 -- configures credential helper, unsets GH_TOKEN)
 2. mkdir debug             (existing)
 3. git clone               (NEW -- needs credential helper from step 1)
-4. plugin seed             (#29 -- NOW reads from /var/agent-repo/ instead of /mnt/quorum/workspace/)
-5. git worktree prune      (NEW -- needs repo from step 3)
-6. exec node dist/main.js  (existing)
+4. git checkout --detach   (NEW -- frees all branch refs for worktree use; see below)
+5. plugin seed             (#29 -- global scope, reads from /var/agent-repo/)
+6. git worktree prune      (NEW -- needs repo from step 3)
+7. exec node dist/main.js  (existing)
 ```
 
 **Git clone (first-boot only):**
@@ -128,6 +131,20 @@ fi
 
 `REPO_URL` is a new env var (same value used by the moderator in #14). The clone authenticates transparently via the gh credential helper configured in step 1.
 
+**Detach HEAD (immediately after clone, every boot):**
+
+```bash
+# Free all branch refs for worktree use -- a regular clone checks out the
+# default branch (main), so `git worktree add ... main` would fail with
+# "fatal: 'main' is already checked out at '/var/agent-repo'".
+# Detaching HEAD releases all branch refs while keeping the working tree
+# and .git structure intact. The idempotency check is unaffected.
+cd /var/agent-repo && git checkout --detach && cd /app
+echo "HEAD detached -- branch refs freed for worktree use"
+```
+
+This runs on every boot (not just first-boot) because `git fetch` or other operations could leave HEAD on a branch. The `git checkout --detach` is safe when HEAD is already detached (it's a no-op).
+
 **Git worktree prune (every boot):**
 
 ```bash
@@ -138,7 +155,7 @@ echo "git worktree prune complete"
 
 This addresses **Concern #4** (orphan worktrees on SIGKILL). If `runInvocation()` crashes after creating a worktree but before the `finally` block, the worktree tracking entry persists in `/var/agent-repo/.git/worktrees/`. On restart, the tmpfs-backed worktree files are gone, so `git worktree prune` cleanly removes the stale entries.
 
-**Plugin seed path update (side-effect of bind mount removal):**
+**Plugin seed path and scope update (side-effect of bind mount removal + worktree cwd):**
 
 The current `PLUGIN_SRC` path is `/mnt/quorum/workspace/docker/plugins/code-review`. With the workspace bind mount removed, this path no longer exists. Update to read from the cloned repo:
 
@@ -146,7 +163,21 @@ The current `PLUGIN_SRC` path is `/mnt/quorum/workspace/docker/plugins/code-revi
 PLUGIN_SRC=/var/agent-repo/docker/plugins/code-review
 ```
 
-This is why git clone must precede the plugin seed step. The developer should verify that CC CLI's plugin resolution works with the new `projectPath`. Under worktrees, the SDK cwd is `/var/agent-worktrees/<correlationId>`, not the `projectPath` recorded in `installed_plugins.json`. If plugin scope resolution fails, the `projectPath` may need updating or the `scope` changed to `"global"` -- verify empirically.
+This is why git clone must precede the plugin seed step.
+
+**Plugin scope: change from `"project"` to `"global"`.**  The current plugin manifest (from #29) uses `scope: "project"` with `projectPath: "/mnt/quorum/workspace"`. Under worktrees, the SDK cwd is `/var/agent-worktrees/<correlationId>` — CC CLI may not match a project-scoped plugin whose `projectPath` doesn't match the current cwd. Changing to `scope: "global"` makes the plugin available regardless of cwd, which is the correct behavior for agents that always need the code-review skill. Remove the `projectPath` field entirely — global-scoped plugins don't need it.
+
+The `installed_plugins.json` write in the entrypoint should produce:
+
+```json
+{
+  "plugins": [{
+    "name": "code-review",
+    "scope": "global",
+    "source": "<PLUGIN_SRC path>"
+  }]
+}
+```
 
 **Volume-seed bug warning (from #14):** The entrypoint must NOT create files inside `/var/agent-repo/` or `/var/agent-worktrees/` at build time. Docker seeds empty named volumes from image layers on first use. If the Dockerfile creates content at the volume mount point, that content appears in the volume and breaks `git clone` (which requires an empty directory). This was the exact bug found in #14's code review -- see `14-project-notes` in Context Store.
 
@@ -220,11 +251,7 @@ RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
 
 **CRITICAL: Do NOT create any sub-content inside `/var/agent-repo/` or `/var/agent-worktrees/`.** These are empty mount points. Docker seeds named volumes from image layers on first use -- if there's content at the mount path in the image, it appears in the volume. An empty directory is fine (Docker treats it as "nothing to seed"); any file or subdirectory inside would break `git clone` (which requires an empty target). This is the same class of bug caught in #14's code review (`14-project-notes`).
 
-**PATH env var update:** The current `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` references a path that won't exist under the new volume layout (the workspace bind mount is removed). Evaluate whether to:
-- Update to `/var/agent-repo/node_modules/.bin:$PATH` (if agents need project devDependencies)
-- Remove entirely (if the base `node` image PATH is sufficient)
-
-The developer should assess which agent commands depend on workspace `node_modules/.bin` tools and decide accordingly.
+**PATH env var update: REMOVE the stale entry.** The current `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` references a path that won't exist under the new volume layout (the workspace bind mount is removed). Decision: **remove the PATH entry entirely** rather than updating to `/var/agent-repo/node_modules/.bin`. Rationale: (1) `git clone` does not produce `node_modules` — `npm install` would need to run in the entrypoint for the path to be useful, adding ~30s startup time. (2) Agents primarily use CC CLI's built-in tools, not project devDependency binaries. (3) The base `node` image PATH already includes the global `npm` and `node` binaries. If a future ticket needs project scripts in agents, it can add `npm install` to the entrypoint and restore the PATH at that time.
 
 ### 7. agent.config.ts Semantics
 
@@ -264,11 +291,11 @@ Minimal moderator-side update: add a brief note to `docker/moderator/CLAUDE.md` 
 
 2. **Orphan worktrees on SIGKILL (Concern #4):** If `runInvocation()` is killed after `git worktree add` but before `finally`, the worktree tracking entry persists. Mitigation: `git worktree prune` in the entrypoint on every startup. With tmpfs-backed worktrees, the files are already gone on restart -- prune only cleans the tracking metadata.
 
-3. **Plugin resolution under worktree cwd:** The plugin seed writes `projectPath: "/mnt/quorum/workspace"` in `installed_plugins.json`. Under worktrees, the SDK cwd is `/var/agent-worktrees/<correlationId>`. CC CLI may not match the plugin to the current "project" if resolution is path-based. The developer should verify plugin availability in the worktree context and adjust `projectPath` or scope if needed.
+3. **Plugin resolution under worktree cwd (MITIGATED):** The plugin seed previously wrote `scope: "project"` with `projectPath: "/mnt/quorum/workspace"`. Under worktrees, the SDK cwd is `/var/agent-worktrees/<correlationId>`, which wouldn't match. **Mitigation:** This ticket changes the plugin to `scope: "global"` (no `projectPath`), making it available regardless of cwd. The developer should verify empirically that the global-scoped plugin is resolved correctly when the SDK subprocess runs in a worktree directory.
 
 4. **Volume-seed bug (#14 pattern):** Any content created inside `/var/agent-repo/` in the Dockerfile will be seeded into the named volume on first use, breaking `git clone`. The Dockerfile must only create the empty mount-point directory.
 
-5. **PATH env var staleness:** `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` references a path that won't exist. Agents running `npx`, `tsc`, or other project devDependency binaries may fail silently. Evaluate and update.
+5. **PATH env var staleness (RESOLVED):** The stale `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` is removed entirely (see Section 6). Agents don't need project devDependency binaries — they use CC CLI's built-in tools. If a future ticket requires project scripts, it can add `npm install` to the entrypoint and restore the PATH entry.
 
 6. **Concurrent worktree creation:** If two invocations for the same agent target the same branch simultaneously, `git worktree add` will fail (git does not allow two worktrees on the same branch). This is by design -- #13's branch-in-flight guard prevents this at the broker level. Until #13 lands, the `git worktree add` error handling (section 3) will surface a clear error.
 
@@ -283,10 +310,15 @@ Minimal moderator-side update: add a brief note to `docker/moderator/CLAUDE.md` 
 - [ ] `runInvocation()` removes worktree in `finally` block -- cleanup runs on success, failure, and thrown exceptions
 - [ ] `git worktree add` failures (branch not found, ref ambiguous, dir exists) return clear error in `InvokeResponse`
 - [ ] Agent entrypoint: first-boot `git clone $REPO_URL /var/agent-repo` is idempotent (skips if `.git` exists); existing #15/#29 behavior preserved without regression
+- [ ] Agent entrypoint: `git checkout --detach` runs immediately after clone (every boot) — HEAD is detached so all branch refs are free for `git worktree add` (fixes blocker: regular clone checks out `main`, blocking `git worktree add ... main`)
 - [ ] Agent entrypoint: `git worktree prune` runs on every container start in `/var/agent-repo` (orphan cleanup for Concern #4)
-- [ ] Entrypoint order: gh auth (#15) -> git clone -> plugin seed (#29, updated path) -> worktree prune -> exec node
+- [ ] Entrypoint order: gh auth (#15) -> git clone -> git checkout --detach -> plugin seed (#29, updated path + global scope) -> worktree prune -> exec node
+- [ ] Agent entrypoint plugin seed: `installed_plugins.json` uses `scope: "global"` (not `"project"`) with no `projectPath` field — ensures plugin availability regardless of SDK cwd under worktrees
+- [ ] Agent entrypoint plugin seed: `PLUGIN_SRC` updated to `/var/agent-repo/docker/plugins/code-review` (reads from cloned repo, not removed bind mount)
 - [ ] Dockerfile agent stage: `/var/agent-repo` and `/var/agent-worktrees` created as empty mount-point dirs with `quorum` ownership -- NO sub-content inside (volume-seed bug prevention)
-- [ ] Docker compose: workspace bind mount removed from agent services; per-role `<role>-agent-repo` named volumes; `/var/agent-worktrees` on tmpfs via `x-agent-security`; `REPO_URL` in agent env; new volumes in top-level declaration
+- [ ] Dockerfile agent stage: stale `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` removed entirely (no `node_modules` in clone; agents use CC CLI tools, not project devDeps)
+- [ ] Docker compose: workspace bind mount removed from agent services; per-role `<role>-agent-repo` named volumes; `/var/agent-worktrees` on tmpfs (`size=1g`) via `x-agent-security`; `REPO_URL` in agent env; new volumes in top-level declaration
+- [ ] `checkUncommittedChanges()` updated to accept worktree path as a `cwd` parameter — runs against the worktree, not the base repo
 - [ ] `agent.config.ts`: `workspaceDir` default changed to `/var/agent-repo`
 - [ ] Happy-path manual E2E after container rebuild: invoke agent with a branch -> worktree created at expected path, SDK runs in worktree, worktree removed after completion
 
