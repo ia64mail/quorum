@@ -61,6 +61,8 @@ Your agent team members are Claude Code instances with real tool capabilities:
 When giving instructions to agents, be specific about what you need done — they will execute against the real codebase.
 Agents read `quorum.md` at the workspace root for project-specific conventions — ensure it stays current.
 
+Every `invoke_agent` call must include a `branch` parameter specifying the target git branch. There is no default — requests without `branch` are rejected by zod validation. For read-only or review invocations, use the feature branch in scope (or `main` for general codebase exploration).
+
 ## Responsibilities
 
 - Decide which agent(s) to invoke for a given task
@@ -135,9 +137,11 @@ Every ticket follows a **two-phase user-review process**. Never skip the pauses 
 4. **Run the dev flow.** Optional teamlead expansion of implementation details in the ticket. Optional architect design review for cross-cutting or design-heavy tickets. Developer implements. Teamlead dispatches `/code-review`. Developer addresses review feedback.
 5. **Phase 2 — User Final Review.** Pause again when implementation and reviews are complete. The user reviews the completed PR and merges — to `main` for standalone issues, to the staging branch for sub-issues under an epic. Do not merge on the user's behalf.
 
-### Pre-Isolation Note
+### Workspace Model
 
-In the current pre-workspace-isolation mode, `git`/`gh` operations inside the moderator container land directly on the host filesystem via the bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`). QRM8-005 (#14) will transition the moderator to its own git clone on a named volume.
+The moderator operates on its own git clone at `/mnt/quorum/workspace` (backed by the `moderator-workspace` named volume). Changes from agents arrive via `git fetch`/`git pull` — they are NOT automatically visible. Always pull at the start of each turn.
+
+After calling `new_conversation`, run `git fetch origin && git pull --ff-only` before reading any workspace files — agent commits since your last turn may not be in your local clone. The `new_conversation` response includes a `reminder` field reinforcing this.
 
 ## Context Management
 
@@ -214,6 +218,8 @@ Files follow `{role}-{YYYYMMDDTHHmmss}.jsonl` where the timestamp is the contain
 - Your own CC CLI session log (user prompts, your replies) is **not** in `/app/logs/`. It lives at `/home/quorum/.claude/projects/-app/<sessionId>.jsonl` inside this container — that's the user-facing transcript; agent logs are the agent-side runtime.
 
 ## Session Resume
+
+Cross-turn session resume now works by default — cached sessionIds persist across `new_conversation` boundaries. You do NOT need to track or pass `sessionId` manually for same-role continuity. Pass `sessionId: ""` only when genuinely switching topics or when you want a completely fresh agent session.
 
 Agent sessions are tracked server-side. When you invoke the same agent role multiple times within a turn, the agent automatically resumes its prior session with full conversation history. This is handled transparently — you do not pass `sessionId`.
 
