@@ -12,6 +12,7 @@ describe('McpElicitationConnection', () => {
     action: 'push or pull?',
     wait: true,
     depth: 1,
+    branch: 'feature-branch',
   };
 
   function buildServer(elicitInput: jest.Mock): McpServer {

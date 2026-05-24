@@ -27,6 +27,7 @@ describe('TestController', () => {
     action: 'ping',
     wait: true,
     depth: 0,
+    branch: 'main',
   };
 
   it('should pass valid request to broker and return response', async () => {

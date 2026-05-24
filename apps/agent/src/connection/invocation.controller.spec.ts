@@ -19,6 +19,7 @@ describe('InvocationController', () => {
     action: 'design API',
     wait: true,
     depth: 0,
+    branch: 'main',
   };
 
   beforeEach(async () => {

@@ -192,6 +192,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'test-corr-1',
+        branch: 'main',
       });
 
       expect(mockBroker.invoke).toHaveBeenCalledWith(
@@ -202,6 +203,7 @@ describe('McpService', () => {
           action: 'design API',
           wait: true,
           depth: 0,
+          branch: 'main',
         }),
       );
 
@@ -220,6 +222,7 @@ describe('McpService', () => {
         action: 'implement feature',
         wait: true,
         depth: 0,
+        branch: 'feature-branch',
       });
 
       const call = mockBroker.invoke.mock.calls[0][0];
@@ -239,6 +242,7 @@ describe('McpService', () => {
         wait: true,
         depth: 1,
         correlationId: 'chain-1',
+        branch: 'feature-branch',
       });
 
       const call = mockBroker.invoke.mock.calls[0][0];
@@ -256,6 +260,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'root-1',
+        branch: 'main',
       });
 
       const call = mockBroker.invoke.mock.calls[0][0];
@@ -278,6 +283,7 @@ describe('McpService', () => {
         depth: 0,
         correlationId: 'test-corr-1',
         sessionId: 'sess-123',
+        branch: 'main',
       });
 
       const call = mockBroker.invoke.mock.calls[0][0];
@@ -295,6 +301,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'test-corr-2',
+        branch: 'feature-branch',
       });
 
       const call = mockBroker.invoke.mock.calls[0][0];
@@ -316,6 +323,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'test-corr-3',
+        branch: 'main',
       });
 
       const parsed = JSON.parse(textContent(result)) as InvokeResponse;
@@ -334,6 +342,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'ctx-1',
+        branch: 'feature-branch',
       });
 
       const call = mockBroker.invoke.mock.calls[0][0];
@@ -1446,6 +1455,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'test-lp-sync',
+        branch: 'feature-branch',
       });
 
       // Resolve microtasks so the broker promise settles
@@ -1476,6 +1486,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'test-lp-pending',
+        branch: 'feature-branch',
       });
 
       // Advance past the long-poll ceiling
@@ -1524,6 +1535,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'test-lp-update',
+        branch: 'feature-branch',
       });
 
       // Advance past the ceiling so we get a pending response
@@ -1578,6 +1590,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'caller-aware-1',
+        branch: 'feature-branch',
       });
 
       await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
@@ -1601,6 +1614,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'caller-aware-2',
+        branch: 'main',
       });
 
       await jest.advanceTimersByTimeAsync(0);
@@ -1626,6 +1640,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'caller-aware-3',
+        branch: 'main',
       });
 
       await jest.advanceTimersByTimeAsync(0);
@@ -1650,6 +1665,7 @@ describe('McpService', () => {
         wait: true,
         depth: 0,
         correlationId: 'caller-aware-4',
+        branch: 'feature-branch',
       });
 
       await jest.advanceTimersByTimeAsync(0);

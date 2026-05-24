@@ -322,6 +322,12 @@ export class McpService implements OnModuleInit {
             .describe(
               'Resume a prior SDK session. Auto-injected from session cache if omitted. Pass empty string to force a fresh session.',
             ),
+          branch: z
+            .string()
+            .min(1)
+            .describe(
+              'Target git branch for this invocation. The agent will work in a dedicated worktree checked out to this branch.',
+            ),
         },
       },
       async (args) => {
@@ -375,6 +381,7 @@ export class McpService implements OnModuleInit {
           wait: args.wait,
           depth: args.depth,
           sessionId,
+          branch: args.branch,
         };
 
         const handlerStart = Date.now();

@@ -38,6 +38,7 @@ const baseRequest: InvokeRequest = {
   action: 'design auth system',
   wait: true,
   depth: 0,
+  branch: 'main',
 };
 
 const successResult: ExecuteResult = {
