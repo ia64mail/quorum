@@ -109,7 +109,6 @@ services:
       PORT: 3000
       LOG_LEVEL: debug
       ENABLE_TEST_ENDPOINTS: "true"
-      MCP_WORKSPACE_DIR: /mnt/quorum/workspace
       # Bootstrap context injection (QRM4)
       BOOTSTRAP_ENABLED: ${BOOTSTRAP_ENABLED:-true}
       BOOTSTRAP_MAX_TOKENS: ${BOOTSTRAP_MAX_TOKENS:-1000}
@@ -132,7 +131,7 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/app/logs
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
+      # - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw  # mount only needed if switching back to inmemory backend for debug
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
       interval: 5s
