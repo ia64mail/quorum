@@ -152,6 +152,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         stderr: (data: string) => {
           this.logger.warn(`[subprocess stderr] ${data.trimEnd()}`);
         },
+        ...(params.plugins ? { plugins: params.plugins } : {}),
         ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
         ...(params.allowedTools ? { allowedTools: params.allowedTools } : {}),
         ...(params.disallowedTools

@@ -481,6 +481,42 @@ describe('ClaudeCodeService', () => {
     expect(callArgs.options.mcpServers).toBe(mcpServers);
   });
 
+  // 6a. Plugins passthrough (BUG-002)
+  it('should pass plugins to SDK when provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    const plugins = [
+      {
+        type: 'local' as const,
+        path: '/mnt/quorum/workspace/.claude/plugins/code-review',
+      },
+    ];
+
+    await service.execute({ ...baseParams, plugins });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.plugins).toBe(plugins);
+  });
+
+  it('should not pass plugins to SDK when not provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options).not.toHaveProperty('plugins');
+  });
+
   // 7. maxTurns omitted when undefined (BUG-010)
   it('should not pass maxTurns to the SDK when not specified', async () => {
     mockQuery.mockReturnValue(

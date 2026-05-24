@@ -1,5 +1,9 @@
 import { DEPLOYABLE_AGENT_ROLES, AgentRole } from '@app/common';
-import { ROLE_TOOL_PROFILES, WRITE_TOOLS } from './role-tool-profiles';
+import {
+  ROLE_TOOL_PROFILES,
+  WRITE_TOOLS,
+  CODE_REVIEW_PLUGIN,
+} from './role-tool-profiles';
 import type { RoleToolProfile } from './role-tool-profiles';
 
 describe('ROLE_TOOL_PROFILES', () => {
@@ -52,6 +56,10 @@ describe('ROLE_TOOL_PROFILES', () => {
     it('should have an allowedSkills array', () => {
       expect(Array.isArray(profile.allowedSkills)).toBe(true);
     });
+
+    it('should have a plugins array', () => {
+      expect(Array.isArray(profile.plugins)).toBe(true);
+    });
   });
 
   // ── Role-specific tests ────────────────────────────────────────────
@@ -71,6 +79,10 @@ describe('ROLE_TOOL_PROFILES', () => {
     it('should allow simplify but not code-review (BUG-002)', () => {
       expect(profile.allowedSkills).toContain('simplify');
       expect(profile.allowedSkills).not.toContain('code-review');
+    });
+
+    it('should have no plugins', () => {
+      expect(profile.plugins).toHaveLength(0);
     });
   });
 
@@ -95,6 +107,10 @@ describe('ROLE_TOOL_PROFILES', () => {
         expect.arrayContaining(['code-review', 'simplify']),
       );
     });
+
+    it('should include the code-review plugin (BUG-002)', () => {
+      expect(profile.plugins).toContainEqual(CODE_REVIEW_PLUGIN);
+    });
   });
 
   describe('teamlead', () => {
@@ -113,6 +129,10 @@ describe('ROLE_TOOL_PROFILES', () => {
         expect.arrayContaining(['code-review', 'simplify']),
       );
     });
+
+    it('should include the code-review plugin (BUG-002)', () => {
+      expect(profile.plugins).toContainEqual(CODE_REVIEW_PLUGIN);
+    });
   });
 
   describe('qa', () => {
@@ -128,6 +148,10 @@ describe('ROLE_TOOL_PROFILES', () => {
 
     it('should have no allowed skills (BUG-002)', () => {
       expect(profile.allowedSkills).toHaveLength(0);
+    });
+
+    it('should have no plugins (BUG-002)', () => {
+      expect(profile.plugins).toHaveLength(0);
     });
   });
 
@@ -165,6 +189,10 @@ describe('ROLE_TOOL_PROFILES', () => {
 
     it('should have no allowed skills (BUG-002)', () => {
       expect(profile.allowedSkills).toHaveLength(0);
+    });
+
+    it('should have no plugins (BUG-002)', () => {
+      expect(profile.plugins).toHaveLength(0);
     });
   });
 
