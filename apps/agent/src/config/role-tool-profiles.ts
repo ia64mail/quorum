@@ -25,10 +25,18 @@ export interface RoleToolProfile {
   plugins: Array<{ type: 'local'; path: string }>;
 }
 
-/** Pre-installed code-review plugin path (baked into agent image at build time). */
+/**
+ * Path to the code-review plugin's runtime install location.
+ *
+ * The agent entrypoint (`docker/agent/entrypoint.sh`, added in #29) seeds the
+ * plugin into this path on tmpfs at every container boot. The SDK reads
+ * `plugin.json` from this location when `plugins: [CODE_REVIEW_PLUGIN]` is
+ * passed to `query()` — that's what makes `code-review:code-review` appear
+ * in the agent's available-skills list.
+ */
 export const CODE_REVIEW_PLUGIN = {
   type: 'local' as const,
-  path: '/mnt/quorum/workspace/.claude/plugins/code-review',
+  path: '/home/quorum/.claude/plugins/cache/claude-plugins-official/code-review/unknown',
 };
 
 /** Tools universally denied for all agent roles. */
