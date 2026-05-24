@@ -73,7 +73,7 @@ describe('InvocationHandler', () => {
     mockGetPlugins.mockReturnValue([]);
     mockGetToolGuardHook.mockReturnValue(() => ({ allowed: true }));
 
-    // Default: git status returns clean (no uncommitted changes)
+    // Default: all git commands succeed (fetch, worktree add/remove, status)
     mockExec.mockImplementation(
       (
         _cmd: string,
@@ -131,6 +131,18 @@ describe('InvocationHandler', () => {
         durationMs: 5000,
         sessionId: 'sess-abc',
       });
+    });
+
+    it('should pass worktree cwd to execute()', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: `/var/agent-worktrees/${baseRequest.correlationId}`,
+        }),
+      );
     });
   });
 
@@ -906,30 +918,41 @@ describe('InvocationHandler', () => {
   });
 
   describe('uncommitted changes check', () => {
-    it('should run git status --porcelain after execution completes', async () => {
+    it('should run git status --porcelain in the worktree after execution', async () => {
       mockExecute.mockResolvedValue(successResult);
 
       await handler.handle(baseRequest);
 
-      expect(mockExec).toHaveBeenCalledWith(
-        'git status --porcelain',
-        { cwd: '/mnt/quorum/workspace' },
-        expect.any(Function),
+      // Find the git status call (there are also fetch, worktree add/remove calls)
+      const statusCall = (mockExec.mock.calls as unknown[][]).find(
+        (call) => call[0] === 'git status --porcelain',
       );
+      expect(statusCall).toBeDefined();
+      expect(statusCall![1]).toEqual({
+        cwd: `/var/agent-worktrees/${baseRequest.correlationId}`,
+      });
     });
 
     it('should log a warning when uncommitted changes exist', async () => {
       mockExecute.mockResolvedValue(successResult);
+      // Command-aware mock: git status reports dirty, everything else succeeds
       mockExec.mockImplementation(
         (
-          _cmd: string,
+          cmd: string,
           _opts: unknown,
           cb: (
             err: Error | null,
             result: { stdout: string; stderr: string },
           ) => void,
         ) => {
-          cb(null, { stdout: ' M src/app.ts\n?? new-file.ts\n', stderr: '' });
+          if (cmd === 'git status --porcelain') {
+            cb(null, {
+              stdout: ' M src/app.ts\n?? new-file.ts\n',
+              stderr: '',
+            });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
         },
       );
 
@@ -948,7 +971,7 @@ describe('InvocationHandler', () => {
 
     it('should not log a warning when workspace is clean', async () => {
       mockExecute.mockResolvedValue(successResult);
-      // Default mock returns empty stdout
+      // Default mock returns empty stdout for all commands
 
       await handler.handle(baseRequest);
 
@@ -960,56 +983,22 @@ describe('InvocationHandler', () => {
       expect(warnMessage).toBeUndefined();
     });
 
-    it('should not fail or block the invocation when git is unavailable', async () => {
-      mockExecute.mockResolvedValue(successResult);
-      mockExec.mockImplementation(
-        (_cmd: string, _opts: unknown, cb: (err: Error | null) => void) => {
-          cb(new Error('git: command not found'));
-        },
-      );
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result).toEqual({
-        success: true,
-        result: 'Here is my design.',
-        totalCostUsd: 0.0123,
-        durationMs: 5000,
-        sessionId: 'sess-abc',
-      });
-    });
-
-    it('should not fail or block the invocation when workspace is not a git repo', async () => {
-      mockExecute.mockResolvedValue(successResult);
-      mockExec.mockImplementation(
-        (_cmd: string, _opts: unknown, cb: (err: Error | null) => void) => {
-          cb(new Error('fatal: not a git repository'));
-        },
-      );
-
-      const result = await handler.handle(baseRequest);
-
-      expect(result).toEqual({
-        success: true,
-        result: 'Here is my design.',
-        totalCostUsd: 0.0123,
-        durationMs: 5000,
-        sessionId: 'sess-abc',
-      });
-    });
-
     it('should still return success even when uncommitted changes are detected', async () => {
       mockExecute.mockResolvedValue(successResult);
       mockExec.mockImplementation(
         (
-          _cmd: string,
+          cmd: string,
           _opts: unknown,
           cb: (
             err: Error | null,
             result: { stdout: string; stderr: string },
           ) => void,
         ) => {
-          cb(null, { stdout: ' M dirty-file.ts\n', stderr: '' });
+          if (cmd === 'git status --porcelain') {
+            cb(null, { stdout: ' M dirty-file.ts\n', stderr: '' });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
         },
       );
 
@@ -1029,11 +1018,153 @@ describe('InvocationHandler', () => {
 
       await handler.handle(baseRequest);
 
-      expect(mockExec).toHaveBeenCalledWith(
-        'git status --porcelain',
-        { cwd: '/mnt/quorum/workspace' },
-        expect.any(Function),
+      const statusCall = (mockExec.mock.calls as unknown[][]).find(
+        (call) => call[0] === 'git status --porcelain',
       );
+      expect(statusCall).toBeDefined();
+      expect(statusCall![1]).toEqual({
+        cwd: `/var/agent-worktrees/${baseRequest.correlationId}`,
+      });
+    });
+  });
+  describe('worktree lifecycle (#11)', () => {
+    it('should run git fetch, worktree add, execute, then worktree remove', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const cmds = (mockExec.mock.calls as unknown[][]).map(
+        (call) => call[0] as string,
+      );
+      // Expect: fetch, worktree add, status check, worktree remove
+      expect(cmds[0]).toBe('git fetch origin');
+      expect(cmds[1]).toMatch(/^git worktree add/);
+      expect(cmds[1]).toContain(baseRequest.correlationId);
+      expect(cmds[1]).toContain(baseRequest.branch);
+      // git status --porcelain comes after execute
+      expect(cmds[2]).toBe('git status --porcelain');
+      // worktree remove is last (finally block)
+      expect(cmds[3]).toMatch(/^git worktree remove --force/);
+      expect(cmds[3]).toContain(baseRequest.correlationId);
+    });
+
+    it('should return failure without calling execute when git fetch fails', async () => {
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result?: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if (cmd === 'git fetch origin') {
+            cb(new Error('network error'));
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Worktree creation failed');
+      expect(result.error).toContain('git fetch origin');
+      expect(mockExecute).not.toHaveBeenCalled();
+    });
+
+    it('should return failure without calling execute when git worktree add fails', async () => {
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result?: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if ((cmd as string).startsWith('git worktree add')) {
+            cb(new Error("fatal: 'nonexistent' is not a commit"));
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Worktree creation failed');
+      expect(mockExecute).not.toHaveBeenCalled();
+    });
+
+    it('should remove worktree even when SDK execution throws', async () => {
+      mockExecute.mockRejectedValue(new Error('SDK crash'));
+
+      await handler.handle(baseRequest);
+
+      const cmds = (mockExec.mock.calls as unknown[][]).map(
+        (call) => call[0] as string,
+      );
+      const removeCmd = cmds.find((c) =>
+        c.startsWith('git worktree remove'),
+      );
+      expect(removeCmd).toBeDefined();
+    });
+
+    it('should log warning when worktree cleanup fails', async () => {
+      mockExecute.mockResolvedValue(successResult);
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result?: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if ((cmd as string).startsWith('git worktree remove')) {
+            cb(new Error('worktree locked'));
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      // Invocation still succeeds despite cleanup failure
+      expect(result.success).toBe(true);
+      const warnMessage = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Worktree cleanup failed'),
+      )?.[0] as string;
+      expect(warnMessage).toBeDefined();
+      expect(warnMessage).toContain(baseRequest.correlationId);
+    });
+
+    it('should use workspaceDir as cwd for git fetch and worktree commands', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      // git fetch cwd
+      const fetchCall = (mockExec.mock.calls as unknown[][]).find(
+        (call) => call[0] === 'git fetch origin',
+      );
+      expect(fetchCall![1]).toEqual({
+        cwd: '/mnt/quorum/workspace',
+      });
+
+      // git worktree add cwd
+      const addCall = (mockExec.mock.calls as unknown[][]).find(
+        (call) => (call[0] as string).startsWith('git worktree add'),
+      );
+      expect(addCall![1]).toEqual({
+        cwd: '/mnt/quorum/workspace',
+      });
     });
   });
 });

@@ -22,6 +22,11 @@ import { McpToolBridgeService } from './mcp-tool-bridge.service';
 
 const execAsync = promisify(exec);
 
+/** Base directory for per-invocation worktrees. Each invocation gets a
+ *  subdirectory named by its correlationId. Uses tmpfs in production
+ *  (self-healing on container restart). */
+const WORKTREE_BASE = '/var/agent-worktrees';
+
 /**
  * Adapts the synchronous {@link ToolGuardResult} from the role guard hook
  * into the SDK's async {@link CanUseTool} callback.
@@ -92,6 +97,40 @@ export class InvocationHandler {
   }
 
   private async runInvocation(request: InvokeRequest): Promise<InvokeResponse> {
+    const worktreePath = `${WORKTREE_BASE}/${request.correlationId}`;
+    const repoDir = this.config.agent.workspaceDir;
+
+    // --- Worktree setup ---
+    try {
+      await execAsync('git fetch origin', { cwd: repoDir });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `git fetch failed: correlationId=${request.correlationId} ${msg}`,
+      );
+      return {
+        success: false,
+        error: `Worktree creation failed: git fetch origin: ${msg}`,
+      };
+    }
+
+    try {
+      await execAsync(
+        `git worktree add ${worktreePath} ${request.branch}`,
+        { cwd: repoDir },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `git worktree add failed: correlationId=${request.correlationId} ${msg}`,
+      );
+      return {
+        success: false,
+        error: `Worktree creation failed: ${msg}`,
+      };
+    }
+
+    // --- SDK execution (finally block ensures cleanup) ---
     try {
       const prompt = this.buildPrompt(request);
       const systemPrompt = this.promptService.getSystemPrompt(request.caller);
@@ -101,6 +140,7 @@ export class InvocationHandler {
       const result = await this.claudeCode.execute({
         prompt,
         systemPrompt,
+        cwd: worktreePath,
         mcpServers: this.bridge.createBridge(request),
         plugins: this.permissions.getPlugins(),
         disallowedTools: this.permissions.getDisallowedTools(),
@@ -109,7 +149,7 @@ export class InvocationHandler {
       });
 
       this.logResult(request, result);
-      await this.checkUncommittedChanges(request.correlationId);
+      await this.checkUncommittedChanges(request.correlationId, worktreePath);
 
       return result.success
         ? {
@@ -131,6 +171,20 @@ export class InvocationHandler {
         `SDK execution failed: correlationId=${request.correlationId} ${message}`,
       );
       return { success: false, error: `SDK execution failed: ${message}` };
+    } finally {
+      // --- Worktree cleanup (must run on success AND error) ---
+      try {
+        await execAsync(
+          `git worktree remove --force ${worktreePath}`,
+          { cwd: repoDir },
+        );
+      } catch (cleanupErr) {
+        const msg =
+          cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        this.logger.warn(
+          `Worktree cleanup failed: correlationId=${request.correlationId} ${msg}`,
+        );
+      }
     }
   }
 
@@ -219,10 +273,11 @@ export class InvocationHandler {
 
   private async checkUncommittedChanges(
     correlationId: string,
+    cwd?: string,
   ): Promise<boolean> {
     try {
       const { stdout } = await execAsync('git status --porcelain', {
-        cwd: this.config.agent.workspaceDir,
+        cwd: cwd ?? this.config.agent.workspaceDir,
       });
       if (stdout.trim()) {
         this.logger.warn(
