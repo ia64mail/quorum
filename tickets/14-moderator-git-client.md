@@ -241,6 +241,7 @@ This was wired by #15/#20. The moderator entrypoint already reads `GH_TOKEN`, au
 | `docker/moderator/CLAUDE.md` | Replaced "Pre-Isolation Note" with "Workspace Model" section describing git clone model and turn-start pull. Added D1 mandatory `branch` parameter note in Agent Capabilities. Added D9 cross-turn session resume note in Session Resume. |
 | `docker/moderator/settings.json` | Added 8 deny rules: `tail`, `grep`, `rg`, `cp` for both `/home/quorum/.config/gh/*` and `~/.config/gh/*` paths. |
 | `tickets/14-moderator-git-client.md` | Flipped 12 ACs to checked. Added this Implementation Notes section. |
+| `Dockerfile` (moderator stage) | Removed `/mnt/quorum/workspace/.claude` from `mkdir -p` and `chown -R` commands (lines 130-133). Fixes first-boot volume-seed bug where Docker seeded the named volume with `.claude/`, causing `git clone` to fail on non-empty directory. |
 
 ### Deviations from spec
 
@@ -255,6 +256,21 @@ None. Implementation follows the ticket spec exactly.
 ### GH_TOKEN env wiring confirmation
 
 `GH_TOKEN: ${GH_TOKEN}` confirmed present at docker-compose.yml moderator environment (line 171, from #15/#20). No changes needed.
+
+### First-boot volume-seed bug fix (PR #36 review finding)
+
+**Bug:** The Dockerfile moderator stage (line 130-131) ran `mkdir -p /mnt/quorum/workspace/.claude` at build time, creating a `.claude/` directory in the image layer at the volume mount point. When Docker first mounts the `moderator-workspace` named volume at `/mnt/quorum/workspace`, it seeds the empty volume from the image layer — copying `.claude/` into the volume. The entrypoint then runs `git clone "$REPO_URL" /mnt/quorum/workspace`, but `git clone` refuses to clone into a non-empty directory. With `set -euo pipefail`, the container dies on every first boot.
+
+**Fix: Option D — remove build-time mkdir from the volume mount point.** Removed `/mnt/quorum/workspace/.claude` from both the `mkdir -p` and `chown -R` commands in the Dockerfile moderator stage. This directory was never needed at build time: no `COPY` targets it, the entrypoint doesn't reference it, and CC CLI creates project-level `.claude/` on demand. With the directory removed, the volume mount point stays empty on first boot, and `git clone` succeeds.
+
+**Why Option D over alternatives:**
+- **A (seed-cleanup in entrypoint):** Works, but treats the symptom — adds complexity to the entrypoint for something that shouldn't exist in the image layer at all.
+- **B/C (clone-then-move or bare-clone):** Over-engineered for an empty directory that serves no purpose.
+- **D (restructure Dockerfile):** Addresses the root cause. One surgical edit, no new shell logic, preserves idempotency.
+
+**Idempotency:** Second boot (when `.git` exists) is unaffected — the entrypoint's `if [ ! -d .git ]` check still skips the clone. The removed `mkdir` was never referenced by the entrypoint.
+
+**File changed:** `Dockerfile` line 130-133 (moderator stage only). No entrypoint changes.
 
 ### Post-merge: rebuild required
 
