@@ -29,13 +29,35 @@ fi
 # Preserve the original CMD behavior (create debug dir on tmpfs)
 mkdir -p /home/quorum/.claude/debug
 
+# First-boot repo clone — idempotent via .git check.
+# REPO_URL is injected from docker-compose env; clone authenticates via the
+# gh credential helper configured above.
+if [ ! -d /var/agent-repo/.git ]; then
+  echo "First boot: cloning $REPO_URL into /var/agent-repo/"
+  git clone "$REPO_URL" /var/agent-repo/
+else
+  echo "Repo already present at /var/agent-repo/"
+fi
+
+# Free all branch refs for worktree use — a regular clone checks out the
+# default branch (main), so `git worktree add ... main` would fail with
+# "fatal: 'main' is already checked out at '/var/agent-repo'".
+# Detaching HEAD releases all branch refs while keeping the working tree
+# and .git structure intact. Safe when HEAD is already detached (no-op).
+# Runs on EVERY boot, not just first-boot — git fetch or other operations
+# could leave HEAD on a branch after a restart.
+cd /var/agent-repo && git checkout --detach && cd /app
+echo "HEAD detached — branch refs freed for worktree use"
+
 # Seed the code-review plugin into the agent's tmpfs ~/.claude/plugins on every
-# boot. Source: the in-repo docker/plugins/code-review/ via the workspace bind
-# mount. Target path mirrors the moderator's installed cache layout so CC CLI's
-# plugin resolver finds it the same way it does on the moderator. Without this,
+# boot. Source: the in-repo docker/plugins/code-review/ via the cloned base repo.
+# Target path mirrors the moderator's installed cache layout so CC CLI's plugin
+# resolver finds it the same way it does on the moderator. Without this,
 # `Skill {"skill":"code-review:code-review"}` silently fails on agents and the
 # /code-review pipeline never runs — see ticket #29.
-PLUGIN_SRC=/mnt/quorum/workspace/docker/plugins/code-review
+# Uses global scope (not project) so the plugin is available regardless of SDK
+# cwd under worktrees — see ticket #11 and architect design notes.
+PLUGIN_SRC=/var/agent-repo/docker/plugins/code-review
 PLUGIN_DIR=/home/quorum/.claude/plugins/cache/claude-plugins-official/code-review/unknown
 if [ -d "$PLUGIN_SRC" ]; then
   mkdir -p "$PLUGIN_DIR"
@@ -47,20 +69,25 @@ if [ -d "$PLUGIN_SRC" ]; then
   "plugins": {
     "code-review@claude-plugins-official": [
       {
-        "scope": "project",
+        "scope": "global",
         "installPath": "$PLUGIN_DIR",
         "version": "unknown",
         "installedAt": "$NOW",
-        "lastUpdated": "$NOW",
-        "projectPath": "/mnt/quorum/workspace"
+        "lastUpdated": "$NOW"
       }
     ]
   }
 }
 EOF
-  echo "code-review plugin installed for agent session"
+  echo "code-review plugin installed for agent session (global scope)"
 else
   echo "WARN: $PLUGIN_SRC not found — /code-review skill will not be available" >&2
 fi
+
+# Clean orphan worktree tracking entries from prior SIGKILL/OOM.
+# With tmpfs-backed worktrees, the files are already gone on restart —
+# prune only cleans the stale tracking metadata in .git/worktrees/.
+cd /var/agent-repo && git worktree prune && cd /app
+echo "git worktree prune complete"
 
 exec node dist/main.js
