@@ -19,7 +19,7 @@ describe('agentConfig', () => {
     const result = agentConfig();
     expect(result).toEqual({
       role: 'developer',
-      workspaceDir: '/mnt/quorum/workspace',
+      workspaceDir: '/var/agent-repo',
       callbackUrl: 'http://localhost:3000',
     });
   });
