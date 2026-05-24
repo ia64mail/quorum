@@ -49,12 +49,31 @@ This paragraph is reproduced verbatim from Design Decision D7 in the QRM8 roadma
 
 ## Acceptance Criteria
 
-- [ ] `SYSTEM_PREAMBLE` in `libs/common/src/prompts/role-prompt-templates.ts` includes a paragraph redirecting persistent agent-level knowledge to `context_store(scope='agent')`
-- [ ] The paragraph explains that CC memory is ephemeral on agents (tmpfs, lost on restart)
-- [ ] The paragraph names `context_store(scope='agent')` as the durable alternative with examples of what to store (patterns learned, preferences, architectural constraints)
-- [ ] Moderator memory is NOT affected — the paragraph is in `SYSTEM_PREAMBLE` (agent-only), not in `docker/moderator/CLAUDE.md`
-- [ ] No mechanical deny rules or auto-memory stripping are introduced — this is prompt guidance only
-- [ ] `npm run build && npm run lint && npm run test` all pass with no regressions
+- [x] `SYSTEM_PREAMBLE` in `libs/common/src/prompts/role-prompt-templates.ts` includes a paragraph redirecting persistent agent-level knowledge to `context_store(scope='agent')`
+- [x] The paragraph explains that CC memory is ephemeral on agents (tmpfs, lost on restart)
+- [x] The paragraph names `context_store(scope='agent')` as the durable alternative with examples of what to store (patterns learned, preferences, architectural constraints)
+- [x] Moderator memory is NOT affected — the paragraph is in `SYSTEM_PREAMBLE` (agent-only), not in `docker/moderator/CLAUDE.md`
+- [x] No mechanical deny rules or auto-memory stripping are introduced — this is prompt guidance only
+- [x] `npm run build && npm run lint && npm run test` all pass with no regressions
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Files modified:**
+- `libs/common/src/prompts/role-prompt-templates.ts` — added `## Agent Memory` section to end of `SYSTEM_PREAMBLE` (after "Progress Checkpointing", before closing backtick)
+
+**Deviations from spec:** None. The D7 paragraph was inserted verbatim with backticks escaped for the template literal (`\`` for inline code spans).
+
+**Verification results:**
+- `npm run build` — 3 webpack compilations successful
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 788 tests passed, 46 suites, 0 failures
+
+**Scope confirmation:**
+- Change is prompt-only — single string addition to `SYSTEM_PREAMBLE`
+- Moderator unaffected — `SYSTEM_PREAMBLE` is consumed only by `getRolePromptTemplate()` for agent roles; moderator prompt lives in `docker/moderator/CLAUDE.md`
+- No mechanical deny rules or auto-memory stripping introduced
 
 ## Dependencies and References
 
