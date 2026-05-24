@@ -1,22 +1,22 @@
-# #31: Fix tool-guard skill-name matching for plugin-namespaced skills (+ remove dead path code)
+# #31: Fix tool-guard skill-name matching + repoint plugin path to entrypoint-seeded location
+
+> History note: this ticket's first attempt deleted the SDK plugins-param machinery as "dead code". Empirical tests during smoke verification disconfirmed that diagnosis — the machinery is load-bearing, only the *path* it pointed at was masked at runtime. The over-aggressive cleanup commit was reverted; the corrected scope is a surgical path repoint plus removal of the no-longer-needed Dockerfile bake. See **Implementation Notes** below for the full investigation trail.
 
 ## Problem
 
-After #29 made the `code-review` plugin discoverable on agents (it now appears in every agent's CC CLI available-skills list), the `/code-review` plugin pipeline **still cannot run from agents**. Every dispatch is rejected at the agent's tool-guard hook:
+After #29 added the entrypoint seed for the `code-review` plugin, the moderator's mandated `/code-review` pipeline **still cannot run from agents**. Two independent defects gate it, both surfaced by smoke verification of PR #30:
+
+**Defect 1 — skill-name mismatch (active blocker).** Every plugin dispatch is rejected by the agent's tool-guard:
 
 ```
 Skill 'code-review:code-review' not permitted for this role
 ```
 
-This blocks the end-to-end ACs (#5 / #6) of #29 and means the moderator's CLAUDE.md mandate — "**ALWAYS set `action` to `/code-review`** when dispatching a code review" — continues to fall back to manual prose review on the agent side, despite the plugin now being correctly installed.
+`apps/agent/src/config/tool-guard-hook.ts:32` runs strict `allowedSkills.includes(skillName)`. CC CLI emits plugin skills in `<plugin>:<skill>` form (`"code-review:code-review"`), but every role profile uses bare-name form (`["code-review", "simplify"]`). Strict equality fails. This is a QRM5-BUG-002-era latent defect that was dormant until #29 first made a plugin-namespaced skill reachable.
 
-This is a **pre-existing QRM5-BUG-002-era defect** that was dormant for the system's entire history: no agent had ever resolved a plugin-namespaced skill name before #29, so the strict-equality skill check at `tool-guard-hook.ts:32` never had a chance to misfire. #29 unblocked it; this ticket fixes it.
+**Defect 2 — `CODE_REVIEW_PLUGIN.path` points at a runtime-masked path.** The SDK is told to load the plugin from `/mnt/quorum/workspace/.claude/plugins/code-review` (`role-tool-profiles.ts:29-33`), which `Dockerfile:91` bakes via `COPY`. At runtime the workspace bind mount masks `/mnt/quorum/workspace/.claude` entirely — the path does not exist inside running containers, the SDK silently can't load the plugin, and `code-review:code-review` never registers in the agent's available-skills list. Some past dispatches *appeared* to work, but those reports came from model self-narration that was never independently verified; the empirical test (Test B in the investigation thread) shows the skill is only registered when the SDK's `plugins:` path is updated to the entrypoint-seeded location.
 
-### Secondary issue — dead plugin-install machinery
-
-Teamlead's review of #29 also surfaced a parallel, redundant plugin-install path that has been silently no-op'ing since whenever it was added: the SDK `plugins:` parameter mechanism. It writes to `/mnt/quorum/workspace/.claude/plugins/code-review` (via `Dockerfile:91` `COPY`) and references that path from `role-tool-profiles.ts:29-33` (`CODE_REVIEW_PLUGIN` constant) → `claude-code.service.ts:155` (`plugins:` SDK param). At runtime the path doesn't exist — the workspace bind mount masks `/mnt/quorum/workspace/.claude` entirely — and the SDK silently ignores missing local-plugin paths. Verified: zero plugin-load warnings or errors in any agent log; `docker exec ls /mnt/quorum/workspace/.claude/plugins/code-review` confirms the path is absent in running containers. All actual plugin discovery comes from the entrypoint seed introduced by #29 (`/home/quorum/.claude/plugins/cache/...` + `installed_plugins.json`).
-
-The dead code is harmless today but actively misleading — a future developer reading `role-tool-profiles.ts:67` (`plugins: [CODE_REVIEW_PLUGIN]`) reasonably concludes that's how the plugin gets loaded. The cleanup is small (5–10 lines across 2 files + Dockerfile) and naturally belongs with the skill-name fix since both stem from the same "make plugin dispatch actually work" intent.
+So even after fixing Defect 1, Defect 2 would still leave the plugin unloadable; even after fixing Defect 2 alone, Defect 1 would still reject the dispatch. Both must land together for `/code-review` to run end-to-end on agents for the first time.
 
 ## Root Cause
 
@@ -90,19 +90,26 @@ if (toolName === 'Skill') {
 
 If two different plugins expose a skill with the same bare name (`foo:code-review` and `bar:code-review`), the bare allowlist entry `'code-review'` allows both. This is acceptable in practice — Quorum controls which plugins it installs, and we'd notice the collision at install time. If it ever becomes a problem, an explicit namespaced override could be layered on later. Out of scope here.
 
-### Secondary cleanup — remove the dead SDK plugins-param machinery
+### Defect 2 fix — repoint the plugin path to the entrypoint-seeded location
 
-Three artifacts to remove in this PR. They form a single fake plugin-install path that has never worked and is masked by the workspace bind mount at runtime:
+The SDK's `plugins: [{ type: 'local', path }]` parameter requires a path where `plugin.json` actually exists at runtime. The original `CODE_REVIEW_PLUGIN.path = '/mnt/quorum/workspace/.claude/plugins/code-review'` was baked into the image by `Dockerfile:91` `COPY`, but the workspace bind mount masks that location entirely — verified by `docker exec ls`. The agent SDK silently failed to load the plugin from the missing path, and `code-review:code-review` never registered in the agent's skills list.
 
-1. **`Dockerfile:91`** — `COPY --chown=quorum:quorum docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review` (writes to a path that's masked by the runtime workspace bind mount).
-2. **`Dockerfile:88`** — the trailing `/mnt/quorum/workspace/.claude \` entry in the `chown -R quorum:quorum ...` list. The chown was paired with the COPY; remove both together. The earlier `mkdir -p` on the same line probably needs the corresponding path stripped too — implementation will verify the exact incantation.
-3. **`apps/agent/src/config/role-tool-profiles.ts`** —
-   - Lines 28–33: the `// Pre-installed code-review plugin path ...` comment + `CODE_REVIEW_PLUGIN` constant — remove entirely.
-   - Lines 67 and 79: `plugins: [CODE_REVIEW_PLUGIN]` in teamlead and architect profiles — change to `plugins: []` (consistent with other roles) OR remove the field altogether (see next bullet).
-   - Line 25: the `plugins: Array<{ type: 'local'; path: string }>;` field on the `RoleToolProfile` interface — keep as `plugins: []` no-op for forward-compat (a future per-role plugin override is plausible), **or** remove entirely. Implementation will pick one and document the choice.
-4. **`apps/agent/src/llm/claude-code.service.ts:155`** — `...(params.plugins ? { plugins: params.plugins } : {})`. Keep as-is if the field stays on the interface; remove if the field is removed. Either path is fine.
+The empirical disambiguation came from a sequence of probes during this ticket's investigation:
+- **Test 0** (omit `plugins:` param): skill absent.
+- **Test A** (`plugins: [{ path: '<masked workspace path>' }]`): skill absent.
+- **Test B** (`plugins: [{ path: '/home/quorum/.claude/plugins/cache/claude-plugins-official/code-review/unknown' }]`): **skill present** — `code-review:code-review` enumerated in available skills, `Skill { skill: 'code-review:code-review' }` returns "Launching skill" + the plugin's instruction payload.
 
-The cleanup is hygiene, not behavioral change — verified zero plugin-load errors or warnings in any agent log today. The 784-test suite should remain green after these deletions because nothing tests the dead path and nothing depends on it.
+So the SDK uses the `plugins:` path directly — it does not fall back to `~/.claude/plugins/installed_plugins.json` discovery when the path is invalid.
+
+Two surgical changes:
+1. **`apps/agent/src/config/role-tool-profiles.ts`** — update `CODE_REVIEW_PLUGIN.path` from `/mnt/quorum/workspace/.claude/plugins/code-review` → `/home/quorum/.claude/plugins/cache/claude-plugins-official/code-review/unknown`. This is the runtime-tmpfs location that the #29 entrypoint seed populates and where `plugin.json` actually lives.
+2. **`Dockerfile`** — remove `COPY docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review` and the paired `mkdir -p /mnt/quorum/workspace/.claude/plugins` + `chown -R ... /mnt/quorum/workspace/.claude`. The bake-into-image install was always masked by the workspace bind mount; with the path repointed at the entrypoint-seeded tmpfs location, the bake step has no purpose.
+
+Everything else from the original `CODE_REVIEW_PLUGIN` / `plugins:` / `getPlugins()` / SDK-spread machinery **is retained as-is** — it's load-bearing, not dead code as initially diagnosed.
+
+### Why a single PR for both fixes
+
+Defect 1 (skill-name normalisation) and Defect 2 (path) compose: fixing only one leaves `/code-review` still broken. They surfaced from the same investigation, share the same teamlead probe protocol, and are easier to reason about together than split.
 
 ## Acceptance Criteria
 
@@ -116,16 +123,16 @@ The cleanup is hygiene, not behavioral change — verified zero plugin-load erro
    - Deny `'code-review:code-review'` when `allowedSkills = []`.
 4. - [x] All pre-existing skill-filtering tests (`should allow an explicitly permitted skill`, `should deny an unpermitted skill`, etc.) still pass without modification — bare-name behaviour is unchanged.
 
-### Dead-code cleanup
-5. - [x] `Dockerfile:91`'s `COPY docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review` is removed; the chown / mkdir lines for `/mnt/quorum/workspace/.claude` are removed too (no orphaned dir creation).
-6. - [x] `apps/agent/src/config/role-tool-profiles.ts`: `CODE_REVIEW_PLUGIN` constant deleted; the `plugins:` field removed entirely from the `RoleToolProfile` interface and from all 5 role profiles. Choice rationale in Implementation Notes.
-7. - [x] `apps/agent/src/llm/claude-code.service.ts:155`: the `params.plugins` spread removed (consistent with the field removal in AC #6); `plugins?:` field removed from `ExecuteParams` in `claude-code.types.ts`; `RolePermissionService.getPlugins()` removed from `role-permission.service.ts`; matching `getPlugins()` mock removed from `invocation-handler.service.spec.ts`.
-8. - [~] Container rebuild verification deferred until next-rebuild user-action — the changes are pure source-code; entrypoint seed from #29 (already in staging) keeps doing its job, so plugin discovery is unchanged at runtime. Verifiable end-to-end on the next `./scripts/start.sh`.
+### Plugin path repoint
+5. - [x] `CODE_REVIEW_PLUGIN.path` in `apps/agent/src/config/role-tool-profiles.ts` updated to `/home/quorum/.claude/plugins/cache/claude-plugins-official/code-review/unknown` (the entrypoint-seeded tmpfs path that contains `plugin.json` at runtime). The comment above the constant is updated to describe the actual runtime mechanism.
+6. - [x] `Dockerfile`: `COPY docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review` removed; paired `mkdir -p .../claude/plugins` and `chown ... /mnt/quorum/workspace/.claude` entries removed — the bake step served no purpose because the workspace bind mount masked the destination.
+7. - [x] All other SDK plugins-param machinery retained: `RoleToolProfile.plugins` field on the interface, `plugins: [CODE_REVIEW_PLUGIN]` entries for teamlead/architect, `RolePermissionService.getPlugins()`, `ExecuteParams.plugins?:`, the `params.plugins` SDK spread, and the call site in `InvocationHandler`. These are load-bearing — the SDK requires the parameter to load the plugin from the indicated path.
 
 ### Verification
-9. - [x] `npm run build` ✅; `npm run lint` ✅; `npm run test` ✅ — 46 suites, **771 tests** (net −13 vs. baseline of 784: +4 new skill-name tests, −17 dead-path tests that exercised the removed `plugins:` field and `getPlugins()` accessor). No active test regressed; the removed tests were testing dead code.
-10. - [~] End-to-end via teamlead `/code-review` dispatch — pending real-PR test by the user after merge. Cannot be self-tested (this PR is what makes `/code-review` work).
-11. - [x] Scope guard: `git diff 8-workspace-isolation-staging...HEAD --name-only` returns exactly `Dockerfile`, `apps/agent/src/config/role-permission.service.ts`, `apps/agent/src/config/role-permission.service.spec.ts`, `apps/agent/src/config/role-tool-profiles.ts`, `apps/agent/src/config/role-tool-profiles.spec.ts`, `apps/agent/src/config/tool-guard-hook.ts`, `apps/agent/src/config/tool-guard-hook.spec.ts`, `apps/agent/src/connection/invocation-handler.service.ts`, `apps/agent/src/connection/invocation-handler.service.spec.ts`, `apps/agent/src/llm/claude-code.service.ts`, `apps/agent/src/llm/claude-code.service.spec.ts`, `apps/agent/src/llm/claude-code.types.ts`, and `tickets/31-tool-guard-namespaced-skill-matching.md`. No other files touched.
+8. - [x] `npm run build` ✅; `npm run lint` ✅; `npm run test` ✅ — 46 suites, **788 tests** (baseline 784 + 4 new skill-name tests). No regressions.
+9. - [x] Empirical Test B (manual): inside the rebuilt teamlead container, `code-review:code-review` is present in the available-skills list; `Skill { skill: 'code-review:code-review', args: 'noop' }` returns "Launching skill" + the plugin's instruction payload (no permission denial, no SDK error).
+10. - [~] End-to-end teamlead `/code-review` dispatch on a real PR with the full multi-agent pipeline (parallel auditors + confidence scorers) — pending after merge. The skill-availability + dispatch path is empirically proved by Test B; running the full pipeline is the next-step proof.
+11. - [x] Scope guard: `git diff 8-workspace-isolation-staging...HEAD --name-only` returns exactly `Dockerfile`, `apps/agent/src/config/role-tool-profiles.ts`, `apps/agent/src/config/tool-guard-hook.ts`, `apps/agent/src/config/tool-guard-hook.spec.ts`, and `tickets/31-tool-guard-namespaced-skill-matching.md`. No other files touched.
 
 ## Out of Scope
 
@@ -142,49 +149,31 @@ The cleanup is hygiene, not behavioral change — verified zero plugin-load erro
 
 ## Implementation Notes
 
-PR #32, 2 implementation commits on top of the spec.
+PR #32 history shows the corrected approach via a revert. The instructive sequence:
 
-### Skill-name normalisation (5-line code change, 4 new tests)
+1. **`71c3096`** — Skill-name normalisation in `tool-guard-hook.ts` + 4 new tests. *(retained — correct)*
+2. **`59b81e4`** — Over-aggressive "dead code removal": deleted the SDK plugins-param machinery on the theory that the plugin loaded purely via CC CLI's `installed_plugins.json` discovery. *(later reverted via `9a1cb8c` — the machinery was load-bearing)*
+3. **`f46533c`** — Premature Implementation Notes claiming a clean cleanup. *(superseded by this section)*
+4. **`9a1cb8c`** — `Revert "#31: remove dead SDK plugins-param machinery"` after Test B disconfirmed the theory.
+5. **`6b72f29`** — Surgical correction: `CODE_REVIEW_PLUGIN.path` repointed to the runtime-seeded path; Dockerfile bake-step (which was the only genuinely dead piece) removed.
 
-`apps/agent/src/config/tool-guard-hook.ts` — added a 3-line bare-name extraction before the existing `.includes()` check:
+Final code-side delta is small:
+- `tool-guard-hook.ts` — 3-line bare-name extraction before the `.includes()` check + 4 new tests.
+- `role-tool-profiles.ts` — `CODE_REVIEW_PLUGIN.path` changed from `/mnt/quorum/workspace/.claude/plugins/code-review` → `/home/quorum/.claude/plugins/cache/claude-plugins-official/code-review/unknown`; comment rewritten to describe the entrypoint-seed mechanism.
+- `Dockerfile` — 6 lines removed (the `COPY docker/plugins/code-review` line and the paired `mkdir`/`chown` entries that prepared the masked destination).
 
-```ts
-const bareName = skillName?.includes(':')
-  ? skillName.slice(skillName.lastIndexOf(':') + 1)
-  : skillName;
-if (bareName && !allowedSkills.includes(bareName)) { ... }
-```
+### Investigation summary — the empirical disambiguation
 
-The denial `reason` field still interpolates the original `skillName`, so logs show `Skill 'code-review:code-review' not permitted` rather than the misleading bare-name form. 4 new tests in `tool-guard-hook.spec.ts` cover: namespaced-allowed, multi-segment namespace, namespaced-denied (reason contains namespaced form), empty-allowlist-with-namespaced.
+This ticket's investigation produced three useful negative results plus one positive proof:
 
-### Dead-code removal — chose "remove the field entirely"
+| Probe | SDK `plugins:` param | Skill in available list? |
+|-------|----------------------|--------------------------|
+| Test 0 (original #31, no param) | omitted | absent |
+| Test (empty array) | `[]` | absent |
+| Test A | `[{ path: '<masked workspace path>' }]` | absent |
+| **Test B** | `[{ path: '<entrypoint-seeded tmpfs path>' }]` | **present, `Skill` returns "Launching skill"** |
 
-The interface `RoleToolProfile.plugins` had exactly one consumer (`RolePermissionService.getPlugins()` → `InvocationHandler.runInvocation()` → `ClaudeCodeService.execute()` → SDK `plugins:` param) and the runtime path was a no-op (path masked by workspace bind mount, SDK silently ignored). Two cleanup options were considered:
-
-- **Keep the field as `plugins: []` everywhere** — preserves the type signature for hypothetical future per-role plugin configuration.
-- **Remove the field entirely** — chosen. YAGNI applies: nothing tested or depended on the field, and the next time a per-role plugin config is genuinely needed, the right time to introduce the plumbing is then, with whatever shape the new requirement justifies. A vestigial `plugins: []` everywhere in the meantime is dead weight.
-
-Files touched by the removal:
-- `apps/agent/src/config/role-tool-profiles.ts` — removed `CODE_REVIEW_PLUGIN` constant, removed `plugins:` field from `RoleToolProfile` interface, removed all 5 `plugins: [...]` / `plugins: []` entries.
-- `apps/agent/src/config/role-permission.service.ts` — removed `getPlugins()` accessor.
-- `apps/agent/src/llm/claude-code.types.ts` — removed `plugins?:` field from `ExecuteParams`.
-- `apps/agent/src/llm/claude-code.service.ts` — removed `...(params.plugins ? { plugins: params.plugins } : {})` spread.
-- `apps/agent/src/connection/invocation-handler.service.ts` — removed `plugins: this.permissions.getPlugins()` from `claudeCode.execute()` call.
-- `Dockerfile` — removed `COPY docker/plugins/code-review` line, removed `/mnt/quorum/workspace/.claude` and `/mnt/quorum/workspace/.claude/plugins` entries from `mkdir` + `chown` lines (the dir won't exist post-cleanup, so creating it is pointless).
-- Specs: removed `getPlugins` mock/expectations from `invocation-handler.service.spec.ts`, removed `plugins:` from the `makeProfile()` helper in `tool-guard-hook.spec.ts`, removed plugin-related tests from `claude-code.service.spec.ts`, `role-permission.service.spec.ts`, and `role-tool-profiles.spec.ts`.
-
-### Test count math
-
-| Source | Δ |
-|--------|---|
-| 4 new skill-name tests in `tool-guard-hook.spec.ts` | +4 |
-| 3 plugin-integration tests removed from `invocation-handler.service.spec.ts` | −3 |
-| 2 plugin tests removed from `claude-code.service.spec.ts` | −2 |
-| 2 `getPlugins` tests removed from `role-permission.service.spec.ts` | −2 |
-| ~10 plugin-field tests removed from `role-tool-profiles.spec.ts` (5 in `describe.each` + ~5 role-specific) | −10 |
-| **Net** | **−13** |
-
-Result: 46 suites, 771 tests, all passing. The reduction is intentional — every removed test was exercising dead code.
+The SDK uses the `plugins:` path *directly* to load `plugin.json`. It does not fall back to `~/.claude/plugins/installed_plugins.json` discovery when the path is missing or invalid. The #29 entrypoint seed creates the files; this ticket points the SDK at them.
 
 ### Why this closes the recursive bootstrap chain
 
@@ -192,12 +181,7 @@ Result: 46 suites, 771 tests, all passing. The reduction is intentional — ever
 |--------|-----|-------------------|
 | #15 | PAT wiring, SDK env allowlist | Containers can auth to GitHub |
 | #27 | Entrypoint gh-auth ordering + GIT_CONFIG_GLOBAL | Containers actually boot |
-| #29 | Agent plugin install at entrypoint | CC CLI discovers the plugin |
-| **#31** | Tool-guard accepts namespaced skill name + remove dead path | **Plugin dispatch actually executes** |
+| #29 | Agent plugin install at entrypoint | Plugin files reach the agent tmpfs |
+| **#31** | Tool-guard accepts namespaced skill name + plugin path pointed at the seeded location | **SDK actually loads the plugin; dispatch executes** |
 
-After this lands, the next `/code-review` dispatched from the moderator to teamlead will, for the first time in 109+ historical invocations, actually run the structured multi-agent pipeline (Haiku eligibility → CLAUDE.md paths → summary → 5 parallel Sonnet auditors → 5 parallel Haiku confidence scorers → filtered verdict).
-
-### Verification not done in this PR (deferred to next dispatch)
-
-- AC #8 (rebuild + boot): no docker-compose / image-shaping changes here; the entrypoint seed from #29 is unchanged; the runtime plugin-discovery path is unchanged. Next `./scripts/start.sh` will exercise it.
-- AC #10 (real teamlead `/code-review` dispatch): can't be self-tested — this PR is what makes the pipeline work, so the proof comes on the *next* dispatch, on a future ticket. The local test suite + manual diff review is the proof for #31 itself.
+Empirical Test B inside the rebuilt teamlead container confirms `code-review:code-review` is now in the agent's available-skills list and the SDK accepts `Skill { skill: 'code-review:code-review' }`. The next full `/code-review` dispatch (on a future PR) will exercise the multi-agent pipeline (Haiku eligibility → CLAUDE.md paths → summary → 5 parallel Sonnet auditors → 5 parallel Haiku confidence scorers → filtered verdict) for the first time in the system's history.
