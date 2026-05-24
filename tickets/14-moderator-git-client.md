@@ -188,18 +188,18 @@ This was wired by #15/#20. The moderator entrypoint already reads `GH_TOKEN`, au
 
 ## Acceptance Criteria
 
-- [ ] `docker/moderator/entrypoint.sh` contains first-boot `git clone` logic that clones `$REPO_URL` into `/mnt/quorum/workspace` when the directory has no `.git` subdirectory
-- [ ] Clone is idempotent — container restart on an already-initialized volume skips the clone (verified by `.git` existence check)
-- [ ] `docker-compose.yml` moderator service: workspace bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`) replaced with `moderator-workspace:/mnt/quorum/workspace` named volume
-- [ ] `moderator-workspace` added to top-level `volumes:` section in `docker-compose.yml`
-- [ ] `REPO_URL` added to moderator environment in `docker-compose.yml` and documented in `.env.example`
-- [ ] `docker/moderator/CLAUDE.md` updated: D9 cross-turn resume note, mandatory `branch` parameter note (D1), turn-start pull practice documented (referencing D10's existing mechanical reminder), Pre-Isolation Note replaced with current model description
-- [ ] `docker/moderator/settings.json` deny rules reviewed and hardened — at minimum `tail` added alongside existing `cat`/`head`/`less` patterns for `~/.config/gh/` credential paths
-- [ ] GH_TOKEN env wiring confirmed present at `docker-compose.yml:171` (no changes needed — from #15/#20)
-- [ ] Entrypoint clone block is placed after gh auth block (so credential helper is available for HTTPS clone)
-- [ ] Entrypoint quorum.md symlink block runs after the clone (so the symlink target exists on first boot)
-- [ ] `npm run build` passes, `npm run lint` passes (0 errors, 0 warnings), `npm run test` passes — no regressions
-- [ ] Ticket documents that moderator container rebuild+restart is required after merge
+- [x] `docker/moderator/entrypoint.sh` contains first-boot `git clone` logic that clones `$REPO_URL` into `/mnt/quorum/workspace` when the directory has no `.git` subdirectory
+- [x] Clone is idempotent — container restart on an already-initialized volume skips the clone (verified by `.git` existence check)
+- [x] `docker-compose.yml` moderator service: workspace bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`) replaced with `moderator-workspace:/mnt/quorum/workspace` named volume
+- [x] `moderator-workspace` added to top-level `volumes:` section in `docker-compose.yml`
+- [x] `REPO_URL` added to moderator environment in `docker-compose.yml` and documented in `.env.example`
+- [x] `docker/moderator/CLAUDE.md` updated: D9 cross-turn resume note, mandatory `branch` parameter note (D1), turn-start pull practice documented (referencing D10's existing mechanical reminder), Pre-Isolation Note replaced with current model description
+- [x] `docker/moderator/settings.json` deny rules reviewed and hardened — at minimum `tail` added alongside existing `cat`/`head`/`less` patterns for `~/.config/gh/` credential paths
+- [x] GH_TOKEN env wiring confirmed present at `docker-compose.yml:171` (no changes needed — from #15/#20)
+- [x] Entrypoint clone block is placed after gh auth block (so credential helper is available for HTTPS clone)
+- [x] Entrypoint quorum.md symlink block runs after the clone (so the symlink target exists on first boot)
+- [x] `npm run build` passes, `npm run lint` passes (0 errors, 0 warnings), `npm run test` passes — no regressions
+- [x] Ticket documents that moderator container rebuild+restart is required after merge
 
 ## Dependencies and References
 
@@ -228,3 +228,41 @@ This was wired by #15/#20. The moderator entrypoint already reads `GH_TOKEN`, au
 - [#10: FileSessionStore](10-file-session-store.md) — D9/D10 mechanical implementation
 - [#17: MCP Server Bind Mount](17-mcp-server-bind-mount.md) — Companion bind mount removal (already done)
 - [#27: gh auth env ordering](27-gh-auth-env-ordering.md) — Entrypoint fix this ticket builds on
+
+## Implementation Notes
+
+### Files modified
+
+| File | Change |
+|------|--------|
+| `docker/moderator/entrypoint.sh` | Reordered blocks: gh auth → git clone (new) → quorum.md symlink. Clone block uses `REPO_URL` env var with `${REPO_URL:?...}` hard-fail, `.git` existence check for idempotency. Symlink comment updated to reference named volume instead of bind mount. |
+| `docker-compose.yml` | Moderator volumes: replaced `${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw` bind mount with `moderator-workspace:/mnt/quorum/workspace` named volume. Added `REPO_URL: ${REPO_URL}` to moderator environment. Added `moderator-workspace:` to top-level volumes. |
+| `.env.example` | Added `REPO_URL` entry with HTTPS default URL and explanatory comment. |
+| `docker/moderator/CLAUDE.md` | Replaced "Pre-Isolation Note" with "Workspace Model" section describing git clone model and turn-start pull. Added D1 mandatory `branch` parameter note in Agent Capabilities. Added D9 cross-turn session resume note in Session Resume. |
+| `docker/moderator/settings.json` | Added 8 deny rules: `tail`, `grep`, `rg`, `cp` for both `/home/quorum/.config/gh/*` and `~/.config/gh/*` paths. |
+| `tickets/14-moderator-git-client.md` | Flipped 12 ACs to checked. Added this Implementation Notes section. |
+
+### Deviations from spec
+
+None. Implementation follows the ticket spec exactly.
+
+### Verification results
+
+- `npm run build`: 3 webpack compilations successful
+- `npm run lint`: 0 errors, 0 warnings
+- `npm run test`: 788 tests passed across 46 suites
+
+### GH_TOKEN env wiring confirmation
+
+`GH_TOKEN: ${GH_TOKEN}` confirmed present at docker-compose.yml moderator environment (line 171, from #15/#20). No changes needed.
+
+### Post-merge: rebuild required
+
+After merging this branch, the moderator container **must** be rebuilt and restarted:
+
+```bash
+docker compose build moderator
+docker compose up -d moderator
+```
+
+The `.env` file must include `REPO_URL` (HTTPS URL to the target repo). The first container start will clone the repo into the `moderator-workspace` named volume. Subsequent starts skip the clone.
