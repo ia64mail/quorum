@@ -57,13 +57,25 @@ The `MigrationService.onModuleInit()` handles `ENOENT` gracefully (migration.ser
 
 ## Acceptance Criteria
 
-- [ ] `docker-compose.yml` mcp-server bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`) is commented out with an inline note: "mount only needed if switching back to inmemory backend for debug"
-- [ ] `MCP_WORKSPACE_DIR` env var removed from the `docker-compose.yml` mcp-server service environment block
-- [ ] No source code files modified — only `docker-compose.yml` touched
-- [ ] `npm run build` passes — no compilation errors
-- [ ] `npm run lint` passes — 0 errors, 0 warnings
-- [ ] `npm run test` passes — all existing tests pass, no regressions
-- [ ] System operates normally under the OpenSearch backend (verified by build + test suite; full runtime validation deferred to Phase 4 integration testing)
+- [x] `docker-compose.yml` mcp-server bind mount (`${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`) is commented out with an inline note: "mount only needed if switching back to inmemory backend for debug"
+- [x] `MCP_WORKSPACE_DIR` env var removed from the `docker-compose.yml` mcp-server service environment block
+- [x] No source code files modified — only `docker-compose.yml` touched
+- [x] `npm run build` passes — no compilation errors
+- [x] `npm run lint` passes — 0 errors, 0 warnings
+- [x] `npm run test` passes — all existing tests pass, no regressions
+- [x] System operates normally under the OpenSearch backend (verified by build + test suite; full runtime validation deferred to Phase 4 integration testing)
+
+## Implementation Notes
+
+**Files modified:** `docker-compose.yml` only (1 file, 1 insertion, 2 deletions).
+
+**Changes:**
+- Line 112 (`MCP_WORKSPACE_DIR: /mnt/quorum/workspace`) — removed entirely.
+- Line 135 (`- ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw`) — commented out with inline note: `# mount only needed if switching back to inmemory backend for debug`.
+
+**Deviations from spec:** None — implementation matches the ticket exactly.
+
+**Verification results:** `npm run build` ✓, `npm run lint` ✓ (0 errors, 0 warnings), `npm run test` ✓ (788 tests, 46 suites, all passing).
 
 ## Dependencies and References
 
