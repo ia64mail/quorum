@@ -11,7 +11,15 @@
       "Bash(head /home/quorum/.config/gh/*)",
       "Bash(head ~/.config/gh/*)",
       "Bash(less /home/quorum/.config/gh/*)",
-      "Bash(less ~/.config/gh/*)"
+      "Bash(less ~/.config/gh/*)",
+      "Bash(tail /home/quorum/.config/gh/*)",
+      "Bash(tail ~/.config/gh/*)",
+      "Bash(grep /home/quorum/.config/gh/*)",
+      "Bash(grep ~/.config/gh/*)",
+      "Bash(rg /home/quorum/.config/gh/*)",
+      "Bash(rg ~/.config/gh/*)",
+      "Bash(cp /home/quorum/.config/gh/*)",
+      "Bash(cp ~/.config/gh/*)"
     ]
   },
   "systemPrompt": "ALWAYS call register_agent(role='moderator') on your first turn to enable agent-to-moderator elicitation.\nALWAYS call new_conversation before any other tool call on each user turn (after register_agent on the first turn).\nALWAYS use action: '/code-review' when dispatching code reviews — never send free-form review prompts.\nStore session decisions in project scope and query context before starting new orchestration."

@@ -127,10 +127,8 @@ RUN groupmod -n quorum -g ${HOST_GID} node && \
 # Install Claude Code CLI globally (pinned version from QRM6-001 spike)
 RUN npm install -g @anthropic-ai/claude-code@2.1.126
 
-RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude \
-    /mnt/quorum/workspace/.claude /etc/claude \
- && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
-    /mnt/quorum/workspace/.claude /etc/claude \
+RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude /etc/claude \
+ && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude /etc/claude \
  && ln -s /home/quorum/.claude/_claude.json /home/quorum/.claude.json
 
 # Bake settings template and moderator prompt into a read-only path; entrypoint copies them to tmpfs at runtime.

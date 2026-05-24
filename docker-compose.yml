@@ -169,8 +169,9 @@ services:
       MCP_SERVER_URL: http://mcp-server:3000/mcp
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
       GH_TOKEN: ${GH_TOKEN}
+      REPO_URL: ${REPO_URL}
     volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
+      - moderator-workspace:/mnt/quorum/workspace
       - ./logs:/app/logs
       - moderator-claude-data:/home/quorum/.claude
       - ./logs/moderator-sessions:/home/quorum/.claude/projects
@@ -256,6 +257,7 @@ volumes:
   ollama-data:
   opensearch-data:
   moderator-claude-data:
+  moderator-workspace:
   architect-sessions:
   teamlead-sessions:
   developer-sessions:

@@ -22,16 +22,6 @@ else
 fi
 cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 
-# Symlink workspace quorum.md into the moderator's user-scope ~/.claude dir
-# so the `@quorum.md` directive at the top of CLAUDE.md resolves. The relative
-# resolution looks alongside CLAUDE.md and the workspace file is only available
-# via bind mount — this symlink bridges the two. ln -sf is idempotent and
-# survives volume state from prior runs.
-if [ ! -f /mnt/quorum/workspace/quorum.md ]; then
-  echo "WARN: /mnt/quorum/workspace/quorum.md not found — @quorum.md will not resolve" >&2
-fi
-ln -sf /mnt/quorum/workspace/quorum.md /home/quorum/.claude/quorum.md
-
 # Authenticate gh CLI with the PAT and configure git's credential helper,
 # then strip the raw token from the env so the CC CLI session cannot
 # exfiltrate it via $GH_TOKEN. The token persists on disk at
@@ -57,6 +47,31 @@ if [ -n "${GH_TOKEN:-}" ]; then
 else
   echo "WARN: GH_TOKEN not set — gh CLI will not be authenticated" >&2
 fi
+
+# Clone the workspace repo on first boot. The moderator's WORKDIR
+# (/mnt/quorum/workspace, set by QRM7-004 at Dockerfile:100) points
+# to the moderator-workspace named volume. If the directory is empty
+# or not a git repo, clone into it. Skip if .git already exists
+# (idempotent across container restarts).
+REPO_URL="${REPO_URL:?REPO_URL must be set for moderator git clone}"
+if [ ! -d /mnt/quorum/workspace/.git ]; then
+  echo "First boot: cloning $REPO_URL into /mnt/quorum/workspace ..."
+  git clone "$REPO_URL" /mnt/quorum/workspace
+  echo "Clone complete"
+else
+  echo "Workspace already initialized (git repo found), skipping clone"
+fi
+
+# Symlink workspace quorum.md into the moderator's user-scope ~/.claude dir
+# so the `@quorum.md` directive at the top of CLAUDE.md resolves. The relative
+# resolution looks alongside CLAUDE.md and the workspace file is only available
+# via the moderator-workspace named volume — this symlink bridges the two.
+# ln -sf is idempotent and survives volume state from prior runs. Placed after
+# the clone block so the symlink target exists on first boot.
+if [ ! -f /mnt/quorum/workspace/quorum.md ]; then
+  echo "WARN: /mnt/quorum/workspace/quorum.md not found — @quorum.md will not resolve" >&2
+fi
+ln -sf /mnt/quorum/workspace/quorum.md /home/quorum/.claude/quorum.md
 
 # CC CLI reads `mcpServers` from ~/.claude.json (user scope), not from
 # ~/.claude/settings.json. It also stores onboarding state, oauth tokens,
