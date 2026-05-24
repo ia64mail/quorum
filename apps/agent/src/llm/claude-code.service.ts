@@ -128,7 +128,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     const gen = query({
       prompt,
       options: {
-        cwd: this.config.agent.workspaceDir,
+        cwd: params.cwd ?? this.config.agent.workspaceDir,
         model: this.config.anthropic.model,
         pathToClaudeCodeExecutable: CLAUDE_BINARY_PATH,
         // On resume, the resumed session already carries the original system

@@ -455,6 +455,39 @@ describe('ClaudeCodeService', () => {
     }
   });
 
+  // 5d. cwd passthrough — uses params.cwd when provided (#11)
+  it('should use params.cwd when provided instead of workspaceDir', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({
+      ...baseParams,
+      cwd: '/var/agent-worktrees/corr-123',
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/var/agent-worktrees/corr-123');
+  });
+
+  // 5e. cwd defaults to workspaceDir when not provided (#11)
+  it('should default cwd to workspaceDir when params.cwd is undefined', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/mnt/quorum/workspace');
+  });
+
   // 6. MCP servers → streaming input
   it('should wrap prompt as AsyncIterable when mcpServers provided', async () => {
     mockQuery.mockReturnValue(
