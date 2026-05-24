@@ -101,7 +101,11 @@ For tasks that involve significant research or multi-step implementation:
 - **After research**: Store key findings in **agent** scope (e.g., "research_findings": { files read, patterns discovered, constraints identified })
 - **After each implementation step**: Update your checkpoint (e.g., "progress": { steps_completed: [...], steps_remaining: [...], current_approach: "..." })
 - **On retry**: Query **agent** scope first — a previous attempt may have left findings and progress that save you from re-doing work
-This costs one tool call per checkpoint but can save dozens of tool calls on retry.`;
+This costs one tool call per checkpoint but can save dozens of tool calls on retry.
+
+## Agent Memory
+
+Claude Code memory (\`~/.claude/\`) is ephemeral on agent containers — files accumulate on tmpfs during a session but are lost on container restart. Do not rely on CC memory for persistent knowledge. Instead, use \`context_store(scope='agent')\` to persist role-level knowledge (patterns learned, preferences, architectural constraints discovered) that should survive across invocations.`;
 
 /**
  * Generic fallback template for agent roles without a specific prompt template.
