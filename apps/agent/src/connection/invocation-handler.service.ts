@@ -115,10 +115,9 @@ export class InvocationHandler {
     }
 
     try {
-      await execAsync(
-        `git worktree add ${worktreePath} ${request.branch}`,
-        { cwd: repoDir },
-      );
+      await execAsync(`git worktree add ${worktreePath} ${request.branch}`, {
+        cwd: repoDir,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(
@@ -174,10 +173,9 @@ export class InvocationHandler {
     } finally {
       // --- Worktree cleanup (must run on success AND error) ---
       try {
-        await execAsync(
-          `git worktree remove --force ${worktreePath}`,
-          { cwd: repoDir },
-        );
+        await execAsync(`git worktree remove --force ${worktreePath}`, {
+          cwd: repoDir,
+        });
       } catch (cleanupErr) {
         const msg =
           cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);

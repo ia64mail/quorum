@@ -120,7 +120,10 @@ export const invokeRequestSchema = z.object({
   /** Target git branch for this invocation's worktree. */
   branch: z
     .string()
-    .min(1, 'branch is required — specify the target git branch for this invocation')
+    .min(
+      1,
+      'branch is required — specify the target git branch for this invocation',
+    )
     .describe('Target git branch for this invocation worktree'),
 });
 

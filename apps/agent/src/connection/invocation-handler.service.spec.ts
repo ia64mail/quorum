@@ -1084,7 +1084,7 @@ describe('InvocationHandler', () => {
             result?: { stdout: string; stderr: string },
           ) => void,
         ) => {
-          if ((cmd as string).startsWith('git worktree add')) {
+          if (cmd.startsWith('git worktree add')) {
             cb(new Error("fatal: 'nonexistent' is not a commit"));
           } else {
             cb(null, { stdout: '', stderr: '' });
@@ -1107,9 +1107,7 @@ describe('InvocationHandler', () => {
       const cmds = (mockExec.mock.calls as unknown[][]).map(
         (call) => call[0] as string,
       );
-      const removeCmd = cmds.find((c) =>
-        c.startsWith('git worktree remove'),
-      );
+      const removeCmd = cmds.find((c) => c.startsWith('git worktree remove'));
       expect(removeCmd).toBeDefined();
     });
 
@@ -1124,7 +1122,7 @@ describe('InvocationHandler', () => {
             result?: { stdout: string; stderr: string },
           ) => void,
         ) => {
-          if ((cmd as string).startsWith('git worktree remove')) {
+          if (cmd.startsWith('git worktree remove')) {
             cb(new Error('worktree locked'));
           } else {
             cb(null, { stdout: '', stderr: '' });
@@ -1159,8 +1157,8 @@ describe('InvocationHandler', () => {
       });
 
       // git worktree add cwd
-      const addCall = (mockExec.mock.calls as unknown[][]).find(
-        (call) => (call[0] as string).startsWith('git worktree add'),
+      const addCall = (mockExec.mock.calls as unknown[][]).find((call) =>
+        (call[0] as string).startsWith('git worktree add'),
       );
       expect(addCall![1]).toEqual({
         cwd: '/mnt/quorum/workspace',
