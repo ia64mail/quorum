@@ -301,26 +301,26 @@ Minimal moderator-side update: add a brief note to `docker/moderator/CLAUDE.md` 
 
 ## Acceptance Criteria
 
-- [ ] `branch` field added to `invokeRequestSchema` as required string -- zod rejects missing/empty values with descriptive error message
-- [ ] MCP server's `invoke_agent` tool schema accepts `branch` as required parameter and passes it through to `InvokeRequest`
-- [ ] `cwd` optional field added to `ExecuteParams`; `ClaudeCodeService.executeQuery()` uses `params.cwd` when provided, falls back to `this.config.agent.workspaceDir`
-- [ ] `runInvocation()` runs `git fetch origin` (cwd: `/var/agent-repo/`) before worktree creation
-- [ ] `runInvocation()` creates worktree via `git worktree add /var/agent-worktrees/<correlationId> <branch>` (cwd: `/var/agent-repo/`)
-- [ ] `runInvocation()` passes worktree path as `cwd` to `claudeCode.execute()`
-- [ ] `runInvocation()` removes worktree in `finally` block -- cleanup runs on success, failure, and thrown exceptions
-- [ ] `git worktree add` failures (branch not found, ref ambiguous, dir exists) return clear error in `InvokeResponse`
-- [ ] Agent entrypoint: first-boot `git clone $REPO_URL /var/agent-repo` is idempotent (skips if `.git` exists); existing #15/#29 behavior preserved without regression
-- [ ] Agent entrypoint: `git checkout --detach` runs immediately after clone (every boot) — HEAD is detached so all branch refs are free for `git worktree add` (fixes blocker: regular clone checks out `main`, blocking `git worktree add ... main`)
-- [ ] Agent entrypoint: `git worktree prune` runs on every container start in `/var/agent-repo` (orphan cleanup for Concern #4)
-- [ ] Entrypoint order: gh auth (#15) -> git clone -> git checkout --detach -> plugin seed (#29, updated path + global scope) -> worktree prune -> exec node
-- [ ] Agent entrypoint plugin seed: `installed_plugins.json` uses `scope: "global"` (not `"project"`) with no `projectPath` field — ensures plugin availability regardless of SDK cwd under worktrees
-- [ ] Agent entrypoint plugin seed: `PLUGIN_SRC` updated to `/var/agent-repo/docker/plugins/code-review` (reads from cloned repo, not removed bind mount)
-- [ ] Dockerfile agent stage: `/var/agent-repo` and `/var/agent-worktrees` created as empty mount-point dirs with `quorum` ownership -- NO sub-content inside (volume-seed bug prevention)
-- [ ] Dockerfile agent stage: stale `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` removed entirely (no `node_modules` in clone; agents use CC CLI tools, not project devDeps)
-- [ ] Docker compose: workspace bind mount removed from agent services; per-role `<role>-agent-repo` named volumes; `/var/agent-worktrees` on tmpfs (`size=1g`) via `x-agent-security`; `REPO_URL` in agent env; new volumes in top-level declaration
-- [ ] `checkUncommittedChanges()` updated to accept worktree path as a `cwd` parameter — runs against the worktree, not the base repo
-- [ ] `agent.config.ts`: `workspaceDir` default changed to `/var/agent-repo`
-- [ ] Happy-path manual E2E after container rebuild: invoke agent with a branch -> worktree created at expected path, SDK runs in worktree, worktree removed after completion
+- [x] `branch` field added to `invokeRequestSchema` as required string -- zod rejects missing/empty values with descriptive error message
+- [x] MCP server's `invoke_agent` tool schema accepts `branch` as required parameter and passes it through to `InvokeRequest`
+- [x] `cwd` optional field added to `ExecuteParams`; `ClaudeCodeService.executeQuery()` uses `params.cwd` when provided, falls back to `this.config.agent.workspaceDir`
+- [x] `runInvocation()` runs `git fetch origin` (cwd: `/var/agent-repo/`) before worktree creation
+- [x] `runInvocation()` creates worktree via `git worktree add /var/agent-worktrees/<correlationId> <branch>` (cwd: `/var/agent-repo/`)
+- [x] `runInvocation()` passes worktree path as `cwd` to `claudeCode.execute()`
+- [x] `runInvocation()` removes worktree in `finally` block -- cleanup runs on success, failure, and thrown exceptions
+- [x] `git worktree add` failures (branch not found, ref ambiguous, dir exists) return clear error in `InvokeResponse`
+- [x] Agent entrypoint: first-boot `git clone $REPO_URL /var/agent-repo` is idempotent (skips if `.git` exists); existing #15/#29 behavior preserved without regression
+- [x] Agent entrypoint: `git checkout --detach` runs immediately after clone (every boot) — HEAD is detached so all branch refs are free for `git worktree add` (fixes blocker: regular clone checks out `main`, blocking `git worktree add ... main`)
+- [x] Agent entrypoint: `git worktree prune` runs on every container start in `/var/agent-repo` (orphan cleanup for Concern #4)
+- [x] Entrypoint order: gh auth (#15) -> git clone -> git checkout --detach -> plugin seed (#29, updated path + global scope) -> worktree prune -> exec node
+- [x] Agent entrypoint plugin seed: `installed_plugins.json` uses `scope: "global"` (not `"project"`) with no `projectPath` field — ensures plugin availability regardless of SDK cwd under worktrees
+- [x] Agent entrypoint plugin seed: `PLUGIN_SRC` updated to `/var/agent-repo/docker/plugins/code-review` (reads from cloned repo, not removed bind mount)
+- [x] Dockerfile agent stage: `/var/agent-repo` and `/var/agent-worktrees` created as empty mount-point dirs with `quorum` ownership -- NO sub-content inside (volume-seed bug prevention)
+- [x] Dockerfile agent stage: stale `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` removed entirely (no `node_modules` in clone; agents use CC CLI tools, not project devDeps)
+- [x] Docker compose: workspace bind mount removed from agent services; per-role `<role>-agent-repo` named volumes; `/var/agent-worktrees` on tmpfs (`size=1g`) via `x-agent-security`; `REPO_URL` in agent env; new volumes in top-level declaration
+- [x] `checkUncommittedChanges()` updated to accept worktree path as a `cwd` parameter — runs against the worktree, not the base repo
+- [x] `agent.config.ts`: `workspaceDir` default changed to `/var/agent-repo`
+- [~] Happy-path manual E2E after container rebuild: invoke agent with a branch -> worktree created at expected path, SDK runs in worktree, worktree removed after completion — deferred to post-merge rebuild
 
 ## Dependencies and References
 
@@ -338,3 +338,64 @@ Minimal moderator-side update: add a brief note to `docker/moderator/CLAUDE.md` 
 - `14-project-notes` in Context Store -- volume-seed bug discovery and fix details
 - `docs/claude-code-sdk.md` -- SDK integration reference for `query()` options and cwd behavior
 - GitHub issue: https://github.com/ia64mail/quorum/issues/11
+
+## Implementation Notes
+
+**Status:** Complete (19/19 ACs satisfied; 1 deferred to post-merge E2E)
+
+### Pass A — TypeScript schema/SDK/worktree-lifecycle/config (5 commits)
+
+| Commit | Description |
+|--------|-------------|
+| `c4063db` | Add `branch` field to InvokeRequest schema + MCP `invoke_agent` tool |
+| `2353884` | Add `cwd` to ExecuteParams and thread through ClaudeCodeService |
+| `35a4bf7` | Add `cwd` to ExecuteParams and thread through ClaudeCodeService (lint fix) |
+| `67c52b1` | Add worktree lifecycle to InvocationHandler + cwd-aware `checkUncommittedChanges` |
+| `c697493` | Shift `agent.config.workspaceDir` default to `/var/agent-repo` |
+
+**Files modified (Pass A):**
+- `libs/common/src/messaging/invoke.types.ts` — `branch` added as required field
+- `apps/mcp-server/src/mcp/mcp.service.ts` — `branch` in tool schema + request construction
+- `apps/agent/src/llm/claude-code.types.ts` — `cwd` optional field on ExecuteParams
+- `apps/agent/src/llm/claude-code.service.ts` — `params.cwd ?? config.workspaceDir` fallback
+- `apps/agent/src/connection/invocation-handler.service.ts` — worktree lifecycle (fetch → add → execute → remove), cwd-aware `checkUncommittedChanges`
+- `apps/agent/src/config/agent.config.ts` — default to `/var/agent-repo`
+- All corresponding `.spec.ts` files updated for new `branch` field and worktree behavior
+
+### Pass B — Container infrastructure (3 commits)
+
+| Commit | Description |
+|--------|-------------|
+| `462ba78` | Extend agent entrypoint: clone + detach + global plugin scope + worktree prune |
+| `f1e288f` | docker-compose: remove bind mount, add named volumes + worktree tmpfs + REPO_URL |
+| `6c84adc` | Dockerfile: add mount points, remove stale PATH |
+
+**Files modified (Pass B):**
+- `docker/agent/entrypoint.sh` — full entrypoint rewrite with new boot sequence
+- `docker-compose.yml` — per-role named volumes, worktree tmpfs, REPO_URL in shared-env
+- `Dockerfile` — mount-point dirs + PATH removal in agent stage
+
+### Architect-Driven Decisions
+
+1. **`git checkout --detach` (BLOCKING FIX):** Regular clone checks out `main`, which blocks `git worktree add ... main`. Detaching HEAD on every boot frees all branch refs. This is in the entrypoint at line 49.
+2. **Plugin scope `"global"` (not `"project"`):** Under worktrees the SDK cwd is `/var/agent-worktrees/<correlationId>`, which wouldn't match a project-scoped plugin's `projectPath`. Global scope makes the plugin available regardless of cwd.
+3. **PATH removal:** The stale `ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"` pointed to a now-nonexistent directory. Removed entirely — agents use CC CLI built-in tools, not project devDeps.
+4. **tmpfs for worktrees:** Self-healing orphan cleanup — container restart clears tmpfs, then `git worktree prune` cleans stale tracking entries.
+
+### Deviations
+
+- None. Implementation follows the ticket spec and architect design notes exactly.
+
+### Verification
+
+- 3 webpack compilations successful (mcp-server, agent, common)
+- 0 lint errors
+- 46 test suites, 798 tests passed
+- E2E deferred to post-merge container rebuild
+
+### Post-Merge Rebuild Required
+
+All agent containers need rebuild after merge:
+```bash
+docker compose build architect developer teamlead && docker compose up -d
+```
