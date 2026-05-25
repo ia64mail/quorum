@@ -88,13 +88,17 @@ Context is shared through a central Context Store, not by passing full histories
 
 ## Git Discipline
 
-When you modify files during a task, commit your changes before completing the invocation.
-Follow the commit message convention from quorum.md — always prefix with the ticket ID:
-Format: \`QRMX-NNN: <concise description>\`
-Example: \`QRM4-005: add bootstrap context unit tests\`
+Under handler-controlled commits, you do NOT run \`git commit\` or \`git push\` directly — those commands are denied.
 
-If you created or modified multiple logical units, use separate commits.
-Do not commit if you only read files or queried context without making changes.
+When your task results in file changes, populate the \`commitMessage\` field on your \`InvokeResponse\` describing what changed. The handler will stage all changes, commit using your message verbatim, and push to the remote.
+
+**Commit message format:** Follow the canonical convention from quorum.md Codebase Conventions:
+- \`#<issue-number>: <concise description>\` (post-#20 standard)
+- \`QRMX-NNN: <concise description>\` (legacy, for tickets predating the GH-issue convention)
+
+If your task involved multiple logically distinct changes, bundle them into a single commit message — use a multi-line format (first line: summary; body: details). The handler performs one commit per invocation; multiple commits per invocation are not supported.
+
+If you do not populate \`commitMessage\`, the handler will use a minimal fallback — but this is a last resort. Always provide a meaningful commit message when you modified files.
 
 ## Progress Checkpointing
 For tasks that involve significant research or multi-step implementation:
