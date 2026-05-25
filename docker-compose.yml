@@ -7,6 +7,7 @@ x-git-identity: &git-identity
 x-shared-env: &shared-env
   <<: *git-identity
   GH_TOKEN: ${GH_TOKEN}
+  REPO_URL: ${REPO_URL}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
   ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
   ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-4096}
@@ -36,6 +37,7 @@ x-agent-security: &agent-security
     - /home/quorum/.config:size=64m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
     - /home/quorum/.local:size=64m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
     - /home/quorum/.cache:size=128m,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
+    - /var/agent-worktrees:size=1g,uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}
 
 services:
   ollama-init:
@@ -197,7 +199,7 @@ services:
       AGENT_ROLE: architect
       AGENT_CALLBACK_URL: http://architect:3002
     volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
+      - architect-agent-repo:/var/agent-repo
       - ./logs:/app/logs
       - architect-sessions:/var/agent-sessions
     networks:
@@ -222,7 +224,7 @@ services:
       AGENT_ROLE: teamlead
       AGENT_CALLBACK_URL: http://teamlead:3002
     volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
+      - teamlead-agent-repo:/var/agent-repo
       - ./logs:/app/logs
       - teamlead-sessions:/var/agent-sessions
     networks:
@@ -247,7 +249,7 @@ services:
       AGENT_ROLE: developer
       AGENT_CALLBACK_URL: http://developer:3002
     volumes:
-      - ${WORKSPACE_PATH:-.}:/mnt/quorum/workspace:rw
+      - developer-agent-repo:/var/agent-repo
       - ./logs:/app/logs
       - developer-sessions:/var/agent-sessions
     networks:
@@ -261,6 +263,9 @@ volumes:
   architect-sessions:
   teamlead-sessions:
   developer-sessions:
+  architect-agent-repo:
+  teamlead-agent-repo:
+  developer-agent-repo:
 
 networks:
   quorum-net:

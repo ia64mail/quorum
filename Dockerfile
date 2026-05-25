@@ -81,10 +81,10 @@ COPY --from=builder --chown=quorum:quorum /app/package*.json ./
 RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
+      /var/agent-repo /var/agent-worktrees \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
+      /var/agent-repo /var/agent-worktrees \
  && ln -s /tmp/.claude.json /home/quorum/.claude.json
-
-ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"
 
 # Bake the agent entrypoint (gh auth bootstrap).
 COPY --chown=quorum:quorum docker/agent/entrypoint.sh /usr/local/bin/entrypoint.sh

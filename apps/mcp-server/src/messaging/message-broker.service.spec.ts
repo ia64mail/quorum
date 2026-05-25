@@ -18,6 +18,7 @@ function makeRequest(overrides: Partial<InvokeRequest> = {}): InvokeRequest {
     action: 'review design',
     wait: true,
     depth: 0,
+    branch: 'main',
     ...overrides,
   };
 }

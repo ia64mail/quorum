@@ -455,6 +455,39 @@ describe('ClaudeCodeService', () => {
     }
   });
 
+  // 5d. cwd passthrough — uses params.cwd when provided (#11)
+  it('should use params.cwd when provided instead of workspaceDir', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({
+      ...baseParams,
+      cwd: '/var/agent-worktrees/corr-123',
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/var/agent-worktrees/corr-123');
+  });
+
+  // 5e. cwd defaults to workspaceDir when not provided (#11)
+  it('should default cwd to workspaceDir when params.cwd is undefined', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/mnt/quorum/workspace');
+  });
+
   // 6. MCP servers → streaming input
   it('should wrap prompt as AsyncIterable when mcpServers provided', async () => {
     mockQuery.mockReturnValue(
@@ -545,6 +578,77 @@ describe('ClaudeCodeService', () => {
       options: Record<string, unknown>;
     };
     expect(callArgs.options.maxTurns).toBe(60);
+  });
+
+  // 7b. cwd passthrough (#11 worktree-per-invocation)
+  it('should use config workspaceDir as cwd when params.cwd is not set', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/mnt/quorum/workspace');
+  });
+
+  // 7c. Explicit cwd overrides config (#11)
+  it('should pass explicit cwd to the SDK when provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({
+      ...baseParams,
+      cwd: '/var/agent-worktrees/corr-123',
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/var/agent-worktrees/corr-123');
+  });
+
+  // 7d. cwd preserved on retry-fresh path (#11)
+  it('should preserve cwd when retrying fresh after resume failure', async () => {
+    mockQuery
+      .mockReturnValueOnce(
+        // eslint-disable-next-line require-yield
+        (async function* () {
+          throw new Error('Session not found');
+        })(),
+      )
+      .mockReturnValueOnce(
+        generateMessages([
+          initMessage('sess-new'),
+          successResult({ session_id: 'sess-new' }),
+        ]),
+      );
+
+    const result = await service.execute({
+      ...baseParams,
+      cwd: '/var/agent-worktrees/corr-456',
+      resume: 'sess-stale',
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+
+    // Both calls should use the same cwd
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const firstCallArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const secondCallArgs = mockQuery.mock.calls[1][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(firstCallArgs.options.cwd).toBe('/var/agent-worktrees/corr-456');
+    expect(secondCallArgs.options.cwd).toBe('/var/agent-worktrees/corr-456');
   });
 
   // 8. Resume parameter — QRM6-BUG-005: passes `resume` + `sessionStore` to SDK

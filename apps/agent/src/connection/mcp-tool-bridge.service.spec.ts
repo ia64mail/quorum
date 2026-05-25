@@ -70,6 +70,7 @@ const baseRequest: InvokeRequest = {
   action: 'implement feature',
   wait: true,
   depth: 1,
+  branch: 'feature-branch',
 };
 
 function mcpResult(text: string, isError = false) {

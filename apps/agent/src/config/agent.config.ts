@@ -11,7 +11,7 @@ const schema = z.object({
 export const agentConfig = registerAs('agent', () =>
   schema.parse({
     role: process.env.AGENT_ROLE || 'developer',
-    workspaceDir: process.env.AGENT_WORKSPACE_DIR || '/mnt/quorum/workspace',
+    workspaceDir: process.env.AGENT_WORKSPACE_DIR || '/var/agent-repo',
     callbackUrl:
       process.env.AGENT_CALLBACK_URL ||
       `http://localhost:${process.env.PORT || '3000'}`,
