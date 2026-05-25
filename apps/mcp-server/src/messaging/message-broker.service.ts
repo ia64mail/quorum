@@ -14,7 +14,9 @@ import { ROLE_TIMEOUTS } from './role-timeouts';
 @Injectable()
 export class MessageBroker {
   private readonly logger = new Logger(MessageBroker.name);
+  /** Key: correlationId */
   private readonly callChains = new Map<string, Set<AgentRole>>();
+  /** Key: branch name */
   private readonly branchLocks = new Map<
     string,
     { correlationId: string; target: AgentRole }
