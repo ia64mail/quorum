@@ -96,24 +96,22 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('read it at the start of any task');
     });
 
-    it('should include a Git Discipline section with commit instructions', () => {
+    it('should include a Git Discipline section with handler-controlled commit model', () => {
       expect(SYSTEM_PREAMBLE).toContain('## Git Discipline');
-      expect(SYSTEM_PREAMBLE).toContain(
-        'commit your changes before completing the invocation',
-      );
+      expect(SYSTEM_PREAMBLE).toContain('handler-controlled commits');
+      expect(SYSTEM_PREAMBLE).toContain('do NOT run');
+      expect(SYSTEM_PREAMBLE).toContain('commitMessage');
     });
 
-    it('should specify commit message format with ticket ID prefix', () => {
+    it('should specify commit message format with canonical conventions', () => {
+      expect(SYSTEM_PREAMBLE).toContain(
+        '#<issue-number>: <concise description>',
+      );
       expect(SYSTEM_PREAMBLE).toContain('QRMX-NNN: <concise description>');
-      expect(SYSTEM_PREAMBLE).toContain(
-        'QRM4-005: add bootstrap context unit tests',
-      );
     });
 
-    it('should instruct agents not to commit when only reading', () => {
-      expect(SYSTEM_PREAMBLE).toContain(
-        'Do not commit if you only read files or queried context without making changes',
-      );
+    it('should note single-commit-per-invocation constraint', () => {
+      expect(SYSTEM_PREAMBLE).toContain('one commit per invocation');
     });
   });
 
@@ -148,8 +146,10 @@ describe('getRolePromptTemplate', () => {
 
     it('should describe git restrictions', () => {
       const template = getRolePromptTemplate(AgentRole.developer);
-      expect(template).toContain('git push --force');
-      expect(template).toContain('git push -f');
+      expect(template).toContain('git commit');
+      expect(template).toContain('git push');
+      expect(template).toContain('git checkout -b');
+      expect(template).toContain('git branch');
       expect(template).toContain('rm -rf /');
     });
   });
@@ -179,12 +179,12 @@ describe('getRolePromptTemplate', () => {
   });
 
   describe('teamlead template', () => {
-    it('should describe full filesystem and bash access with commit', () => {
+    it('should describe full filesystem and bash access with handler-controlled git', () => {
       const template = getRolePromptTemplate(AgentRole.teamlead);
       expect(template).toContain('Full filesystem access');
       expect(template).toContain('Full bash access');
-      expect(template).toContain('can commit');
-      expect(template).toContain('Cannot force-push');
+      expect(template).toContain('handler-controlled');
+      expect(template).toContain('Cannot commit, push, or create branches');
     });
 
     it('should mention ticket creation in tickets/', () => {

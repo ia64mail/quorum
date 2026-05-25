@@ -148,6 +148,96 @@ describe('createToolGuardHook', () => {
     });
   });
 
+  // ── Handler-controlled git deny patterns (#12) ────────────────────
+
+  describe('handler-controlled git deny patterns', () => {
+    const hook = createToolGuardHook(
+      makeProfile({
+        deniedBashCommands: [
+          'git commit',
+          'git push',
+          'git checkout -b',
+          'git branch',
+        ],
+      }),
+      WORKSPACE,
+    );
+
+    it('should deny git commit -m "message"', () => {
+      const result = hook('Bash', { command: 'git commit -m "fix typo"' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny git commit --amend', () => {
+      const result = hook('Bash', { command: 'git commit --amend' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny git push origin <branch>', () => {
+      const result = hook('Bash', { command: 'git push origin feature-x' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git push');
+    });
+
+    it('should deny git push --force (subsumed by git push prefix)', () => {
+      const result = hook('Bash', { command: 'git push --force origin main' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git push');
+    });
+
+    it('should deny git checkout -b new-branch', () => {
+      const result = hook('Bash', { command: 'git checkout -b new-branch' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git checkout -b');
+    });
+
+    it('should allow git checkout <existing-branch> (not -b)', () => {
+      const result = hook('Bash', { command: 'git checkout main' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should deny git branch feature-x', () => {
+      const result = hook('Bash', { command: 'git branch feature-x' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git branch');
+    });
+
+    it('should deny git branch -D feature-x', () => {
+      const result = hook('Bash', { command: 'git branch -D feature-x' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git branch');
+    });
+
+    it('should allow git status (read-only)', () => {
+      const result = hook('Bash', { command: 'git status' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow git diff (read-only)', () => {
+      const result = hook('Bash', { command: 'git diff HEAD~1' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow git log (read-only)', () => {
+      const result = hook('Bash', { command: 'git log --oneline -10' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should deny git commit with extra whitespace', () => {
+      const result = hook('Bash', { command: 'git  commit   -m "msg"' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny sudo git push', () => {
+      const result = hook('Bash', { command: 'sudo git push origin main' });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git push');
+    });
+  });
+
   // ── Write path filtering ───────────────────────────────────────────
 
   describe('write path filtering', () => {
