@@ -243,13 +243,16 @@ export class ClaudeCodeService implements OnApplicationShutdown {
 
       case 'result':
         if (message.subtype === 'success') {
+          const { message: commitMessage, stripped } =
+            ClaudeCodeService.extractCommitMessage(message.result);
           return {
             success: true,
-            result: message.result,
+            result: stripped,
             sessionId: sessionId ?? message.session_id,
             durationMs: message.duration_ms,
             totalCostUsd: message.total_cost_usd,
             numTurns: message.num_turns,
+            ...(commitMessage !== undefined ? { commitMessage } : {}),
           };
         }
         return {
@@ -263,6 +266,32 @@ export class ClaudeCodeService implements OnApplicationShutdown {
       default:
         return null;
     }
+  }
+
+  /**
+   * Extract a `<commit-message>...</commit-message>` block from SDK result text.
+   * If multiple blocks are present, the last one wins (agent may revise mid-stream).
+   * The block is stripped from the returned text so consumers don't see metadata.
+   */
+  private static extractCommitMessage(text: string): {
+    message?: string;
+    stripped: string;
+  } {
+    const matches = [
+      ...text.matchAll(/<commit-message>([\s\S]*?)<\/commit-message>/gi),
+    ];
+
+    if (matches.length === 0) {
+      return { stripped: text };
+    }
+
+    const message = matches[matches.length - 1][1].trim();
+    const stripped = text
+      .replace(/<commit-message>[\s\S]*?<\/commit-message>/gi, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return { message: message || undefined, stripped };
   }
 }
 
