@@ -64,6 +64,9 @@ export type ExecuteResult =
       totalCostUsd: number;
       /** Number of conversation turns consumed. */
       numTurns: number;
+      /** Agent-authored commit message for handler-controlled commit.
+       *  Populated when the agent modified files and provided a message. */
+      commitMessage?: string;
     }
   | {
       success: false;

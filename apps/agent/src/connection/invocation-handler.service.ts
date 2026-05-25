@@ -156,6 +156,7 @@ export class InvocationHandler {
             totalCostUsd: result.totalCostUsd,
             durationMs: result.durationMs,
             sessionId: result.sessionId,
+            commitMessage: result.commitMessage,
           }
         : {
             success: false,
