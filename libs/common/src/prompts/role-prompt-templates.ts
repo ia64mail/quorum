@@ -90,15 +90,25 @@ Context is shared through a central Context Store, not by passing full histories
 
 Under handler-controlled commits, you do NOT run \`git commit\` or \`git push\` directly — those commands are denied.
 
-When your task results in file changes, populate the \`commitMessage\` field on your \`InvokeResponse\` describing what changed. The handler will stage all changes, commit using your message verbatim, and push to the remote.
+When you modified files during your task, output your commit message wrapped in a \`<commit-message>...</commit-message>\` block at the end of your response. The handler extracts it. Example:
+
+\`\`\`
+<commit-message>
+#12: add commit-message delimiter extraction
+
+Wire ClaudeCodeService to parse the agent's <commit-message> block
+out of the SDK result text and surface it via ExecuteResult so the
+handler can use it verbatim.
+</commit-message>
+\`\`\`
+
+The handler uses the contents verbatim. If you omit the block, a placeholder is used and a warning is logged.
 
 **Commit message format:** Follow the canonical convention from quorum.md Codebase Conventions:
 - \`#<issue-number>: <concise description>\` (post-#20 standard)
 - \`QRMX-NNN: <concise description>\` (legacy, for tickets predating the GH-issue convention)
 
-If your task involved multiple logically distinct changes, bundle them into a single commit message — use a multi-line format (first line: summary; body: details). The handler performs one commit per invocation; multiple commits per invocation are not supported.
-
-If you do not populate \`commitMessage\`, the handler will use a minimal fallback — but this is a last resort. Always provide a meaningful commit message when you modified files.
+Multi-line messages are supported (subject + body separated by blank line). The handler performs one commit per invocation; multiple commits per invocation are not supported.
 
 ## Progress Checkpointing
 For tasks that involve significant research or multi-step implementation:

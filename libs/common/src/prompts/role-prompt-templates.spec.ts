@@ -100,7 +100,7 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('## Git Discipline');
       expect(SYSTEM_PREAMBLE).toContain('handler-controlled commits');
       expect(SYSTEM_PREAMBLE).toContain('do NOT run');
-      expect(SYSTEM_PREAMBLE).toContain('commitMessage');
+      expect(SYSTEM_PREAMBLE).toContain('<commit-message>');
     });
 
     it('should specify commit message format with canonical conventions', () => {
