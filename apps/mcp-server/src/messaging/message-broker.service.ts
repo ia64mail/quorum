@@ -15,6 +15,10 @@ import { ROLE_TIMEOUTS } from './role-timeouts';
 export class MessageBroker {
   private readonly logger = new Logger(MessageBroker.name);
   private readonly callChains = new Map<string, Set<AgentRole>>();
+  private readonly branchLocks = new Map<
+    string,
+    { correlationId: string; target: AgentRole }
+  >();
 
   constructor(
     private readonly registry: AgentRegistry,
@@ -73,8 +77,26 @@ export class MessageBroker {
     chain.add(caller);
     this.callChains.set(correlationId, chain);
 
+    // Safeguard 4 — Branch-in-flight guard (O(1))
+    // Prevents two concurrent invocations from operating on the same git branch,
+    // which would race on commit/push. Mirrors callChains lifecycle.
+    const existingLock = this.branchLocks.get(request.branch);
+    if (existingLock && existingLock.correlationId !== correlationId) {
+      const error = `Branch '${request.branch}' is already in-flight (target=${existingLock.target}, correlationId=${existingLock.correlationId})`;
+      this.logger.warn(`Rejected: ${error} [correlationId=${correlationId}]`);
+      // Clean up the caller's entry from callChains (was added above)
+      chain.delete(caller);
+      if (chain.size === 0) {
+        this.callChains.delete(correlationId);
+      }
+      return { success: false, error };
+    }
+
+    // Acquire branch lock before delivery
+    this.branchLocks.set(request.branch, { correlationId, target });
+
     try {
-      // Safeguard 4 — Role-based timeout (wraps delivery)
+      // Safeguard 5 — Role-based timeout (wraps delivery)
       const timeout =
         ROLE_TIMEOUTS[target] ?? this.config.broker.defaultTimeoutMs;
 
@@ -143,6 +165,7 @@ export class MessageBroker {
       if (chain.size === 0) {
         this.callChains.delete(correlationId);
       }
+      this.branchLocks.delete(request.branch);
     }
   }
 
