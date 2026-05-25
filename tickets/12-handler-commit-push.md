@@ -257,6 +257,21 @@ No `deriveCommitMessage` unit tests are needed — the old regex-based exported 
 - `libs/common/src/prompts/role-prompt-templates.spec.ts` — updated existing tests to match rewritten Git Discipline section and updated role capability descriptions.
 - `tickets/12-handler-commit-push.md` — flipped all 14 ACs, added this Implementation Notes section.
 
+**Pass C (commit-message delimiter extraction — PR #41 code-review fix):**
+
+The `/code-review` on PR #41 flagged `ExecuteResult.commitMessage` as dead code: it was declared but never populated. The primary path in `commitAndPush()` (verbatim use of `response.commitMessage`) was always falling through to the WARN fallback because agents had no mechanism to surface a commit message through the SDK result.
+
+**Fix — delimiter extraction:** Agents now output commit messages in `<commit-message>...</commit-message>` blocks in their response text. `ClaudeCodeService.processMessage()` extracts the block content and populates `ExecuteResult.commitMessage`, which flows through to `InvokeResponse.commitMessage` and into `commitAndPush()`.
+
+Files modified:
+- `apps/agent/src/llm/claude-code.service.ts` — added `extractCommitMessage()` private static method (regex-based, last-block-wins, strips tags from result text); wired into `processMessage()` success path
+- `apps/agent/src/llm/claude-code.service.spec.ts` — 6 new tests: single block extraction, no block → undefined, multiple blocks → last wins, multi-line preservation, malformed block, mixed surrounding text
+- `libs/common/src/prompts/role-prompt-templates.ts` — updated Git Discipline section: replaced "populate `commitMessage` on `InvokeResponse`" with concrete `<commit-message>` block syntax, example, and format guidance
+- `libs/common/src/prompts/role-prompt-templates.spec.ts` — updated assertion from `commitMessage` to `<commit-message>`
+- `tickets/12-handler-commit-push.md` — this section
+
+The primary path (`response.commitMessage` → verbatim commit) is now exercisable end-to-end: agent outputs `<commit-message>` block → `ClaudeCodeService.extractCommitMessage()` parses it → `ExecuteResult.commitMessage` populated → handler's `commitAndPush()` uses it verbatim. The fallback path (WARN + synthesized message) remains as a safety net for agents that omit the block.
+
 ### Deviations from Spec
 
 None. Implementation follows the ticket spec exactly.
@@ -265,7 +280,7 @@ None. Implementation follows the ticket spec exactly.
 
 - `npm run build` — passes
 - `npm run lint` — passes (0 errors, 0 warnings)
-- `npm run test` — 813 tests across 46 suites, all passing (baseline 798 + 6 handler tests from Pass A + 13 tool guard tests from Pass B, minus 4 removed/replaced prompt template tests + updated replacements)
+- `npm run test` — 819 tests across 46 suites, all passing (813 baseline + 6 new commit-message extraction tests)
 
 ### Agent-Affecting Change
 
@@ -275,4 +290,4 @@ None. Implementation follows the ticket spec exactly.
 docker compose build architect developer teamlead qa && docker compose up -d
 ```
 
-Agents must read the new prompt to understand that they should populate `commitMessage` on their `InvokeResponse` instead of running `git commit`/`git push` directly.
+Agents must read the new prompt to understand that they should output `<commit-message>` blocks in their response text instead of running `git commit`/`git push` directly.
