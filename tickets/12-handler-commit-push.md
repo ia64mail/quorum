@@ -206,20 +206,20 @@ No `deriveCommitMessage` unit tests are needed — the old regex-based exported 
 
 ## Acceptance Criteria
 
-- [ ] `InvokeResponse` interface extended with optional `commitMessage?: string` field (with inline doc comment)
-- [ ] `checkUncommittedChanges()` replaced by `commitAndPush(cwd, request, response)` in `InvocationHandler`
-- [ ] When `response.commitMessage` is present: handler uses it verbatim for `git commit -m`
-- [ ] When `response.commitMessage` is absent and changes exist: handler synthesizes fallback `(no-message/<corrId-short>): changes from <target> invocation` and logs WARN
-- [ ] `git push origin <branch>` runs after commit (no force-push); push rejection surfaces as `InvokeResponse { success: false, error: "..." }`
-- [ ] No commit/push when `result.success === false` (error path skips commit)
-- [ ] No commit/push when worktree has no changes after execution (log INFO, return success)
-- [ ] `deniedBashCommands` updated: developer denies `git commit`, `git push`, `git checkout -b`, `git branch`
-- [ ] `deniedBashCommands` updated: teamlead denies `git commit`, `git push`, `git checkout -b`, `git branch`
-- [ ] `deniedBashCommands` updated: architect adds `git branch` (already denies `git push`, `git commit`, `git checkout -b`)
-- [ ] `deniedBashCommands` updated: qa adds `git checkout -b`, `git branch` (already denies `git push`, `git commit`)
-- [ ] `tool-guard-hook.spec.ts` updated with tests for newly denied git commands
-- [ ] `invocation-handler.service.spec.ts` updated: happy-path commit/push tests (with and without commitMessage), no-changes test, push-rejection test, fallback-message + WARN test, no-commit-on-failure test
-- [ ] `SYSTEM_PREAMBLE` Git Discipline section rewritten: agents told NOT to run `git commit`/`git push`, instructed to populate `commitMessage` on `InvokeResponse`, canonical format referenced, single-commit-per-invocation constraint noted
+- [x] `InvokeResponse` interface extended with optional `commitMessage?: string` field (with inline doc comment)
+- [x] `checkUncommittedChanges()` replaced by `commitAndPush(cwd, request, response)` in `InvocationHandler`
+- [x] When `response.commitMessage` is present: handler uses it verbatim for `git commit -m`
+- [x] When `response.commitMessage` is absent and changes exist: handler synthesizes fallback `(no-message/<corrId-short>): changes from <target> invocation` and logs WARN
+- [x] `git push origin <branch>` runs after commit (no force-push); push rejection surfaces as `InvokeResponse { success: false, error: "..." }`
+- [x] No commit/push when `result.success === false` (error path skips commit)
+- [x] No commit/push when worktree has no changes after execution (log INFO, return success)
+- [x] `deniedBashCommands` updated: developer denies `git commit`, `git push`, `git checkout -b`, `git branch`
+- [x] `deniedBashCommands` updated: teamlead denies `git commit`, `git push`, `git checkout -b`, `git branch`
+- [x] `deniedBashCommands` updated: architect adds `git branch` (already denies `git push`, `git commit`, `git checkout -b`)
+- [x] `deniedBashCommands` updated: qa adds `git checkout -b`, `git branch` (already denies `git push`, `git commit`)
+- [x] `tool-guard-hook.spec.ts` updated with tests for newly denied git commands
+- [x] `invocation-handler.service.spec.ts` updated: happy-path commit/push tests (with and without commitMessage), no-changes test, push-rejection test, fallback-message + WARN test, no-commit-on-failure test
+- [x] `SYSTEM_PREAMBLE` Git Discipline section rewritten: agents told NOT to run `git commit`/`git push`, instructed to populate `commitMessage` on `InvokeResponse`, canonical format referenced, single-commit-per-invocation constraint noted
 
 ## Out of Scope
 
@@ -238,3 +238,41 @@ No `deriveCommitMessage` unit tests are needed — the old regex-based exported 
 - **Code reference:** `libs/common/src/prompts/role-prompt-templates.ts` lines 89-98 -- `SYSTEM_PREAMBLE` Git Discipline section (target for rewrite)
 - **Related:** #13 (branch-in-flight guard) -- operates at the broker level, independent of this handler-level change
 - **Issue:** https://github.com/ia64mail/quorum/issues/12
+
+## Implementation Notes
+
+**Status:** Complete
+
+### Files Modified
+
+**Pass A (schema + handler + handler tests):**
+- `libs/common/src/messaging/invoke.types.ts` — added optional `commitMessage?: string` to `InvokeResponse`
+- `apps/agent/src/connection/invocation-handler.service.ts` — replaced `checkUncommittedChanges()` with `commitAndPush(cwd, request, response)`, gated on `result.success`
+- `apps/agent/src/connection/invocation-handler.service.spec.ts` — replaced uncommitted-changes test block with commit-and-push tests (verbatim message, fallback + WARN, no-changes INFO, push rejection, no-commit-on-failure, multi-line message)
+
+**Pass B (deny rules + prompt + tool guard tests + ticket flips):**
+- `apps/agent/src/config/role-tool-profiles.ts` — updated `deniedBashCommands` for developer (replaced `git push --force`/`-f` with full set), teamlead (same), architect (added `git branch`), qa (added `git checkout -b` + `git branch`). Productowner unchanged (Bash fully disabled).
+- `libs/common/src/prompts/role-prompt-templates.ts` — rewrote Git Discipline section in `SYSTEM_PREAMBLE` to handler-controlled commit model; updated Capabilities sections for architect, teamlead, developer, and qa roles to reflect new deny lists.
+- `apps/agent/src/config/tool-guard-hook.spec.ts` — added 13 tests in `handler-controlled git deny patterns` block covering all newly denied commands, allowed read-only commands, whitespace normalization, and sudo stripping.
+- `libs/common/src/prompts/role-prompt-templates.spec.ts` — updated existing tests to match rewritten Git Discipline section and updated role capability descriptions.
+- `tickets/12-handler-commit-push.md` — flipped all 14 ACs, added this Implementation Notes section.
+
+### Deviations from Spec
+
+None. Implementation follows the ticket spec exactly.
+
+### Verification Results
+
+- `npm run build` — passes
+- `npm run lint` — passes (0 errors, 0 warnings)
+- `npm run test` — 813 tests across 46 suites, all passing (baseline 798 + 6 handler tests from Pass A + 13 tool guard tests from Pass B, minus 4 removed/replaced prompt template tests + updated replacements)
+
+### Agent-Affecting Change
+
+**⚠️ Post-merge rebuild required.** The `SYSTEM_PREAMBLE` Git Discipline rewrite changes what agents see in their system prompt. The `deniedBashCommands` updates change what the tool guard hook enforces at runtime. Both take effect only after rebuilding and restarting agent containers:
+
+```bash
+docker compose build architect developer teamlead qa && docker compose up -d
+```
+
+Agents must read the new prompt to understand that they should populate `commitMessage` on their `InvokeResponse` instead of running `git commit`/`git push` directly.
