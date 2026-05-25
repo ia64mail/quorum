@@ -148,9 +148,8 @@ export class InvocationHandler {
       });
 
       this.logResult(request, result);
-      await this.checkUncommittedChanges(request.correlationId, worktreePath);
 
-      return result.success
+      const response: InvokeResponse = result.success
         ? {
             success: true,
             result: result.result,
@@ -164,6 +163,19 @@ export class InvocationHandler {
             totalCostUsd: result.totalCostUsd,
             durationMs: result.durationMs,
           };
+
+      if (result.success) {
+        try {
+          await this.commitAndPush(worktreePath, request, response);
+        } catch (commitErr) {
+          const msg =
+            commitErr instanceof Error ? commitErr.message : String(commitErr);
+          response.success = false;
+          response.error = `Commit/push failed: ${msg}`;
+        }
+      }
+
+      return response;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(
@@ -269,25 +281,48 @@ export class InvocationHandler {
     return lines.join('\n');
   }
 
-  private async checkUncommittedChanges(
-    correlationId: string,
-    cwd?: string,
-  ): Promise<boolean> {
-    try {
-      const { stdout } = await execAsync('git status --porcelain', {
-        cwd: cwd ?? this.config.agent.workspaceDir,
-      });
-      if (stdout.trim()) {
-        this.logger.warn(
-          `Uncommitted changes after invocation: correlationId=${correlationId}\n${stdout.trim()}`,
-        );
-        return true;
-      }
-      return false;
-    } catch {
-      // git not available or not a repo — skip silently
-      return false;
+  private async commitAndPush(
+    cwd: string,
+    request: InvokeRequest,
+    response: InvokeResponse,
+  ): Promise<void> {
+    const { stdout: status } = await execAsync('git status --porcelain', {
+      cwd,
+    });
+
+    if (!status.trim()) {
+      this.logger.log(
+        `No changes to commit after invocation: correlationId=${request.correlationId}`,
+      );
+      return;
     }
+
+    let message: string;
+    if (response.commitMessage) {
+      message = response.commitMessage;
+    } else {
+      const corrIdShort = request.correlationId.substring(0, 8);
+      message = `(no-message/${corrIdShort}): changes from ${request.target} invocation`;
+      this.logger.warn(
+        `Agent did not provide commitMessage: correlationId=${request.correlationId} — using fallback`,
+      );
+    }
+
+    await execAsync('git add -A', { cwd });
+    await execAsync(`git commit -m ${this.shellQuote(message)}`, { cwd });
+
+    try {
+      await execAsync(`git push origin ${request.branch}`, { cwd });
+    } catch (pushErr) {
+      const stderr =
+        pushErr instanceof Error ? pushErr.message : String(pushErr);
+      throw new Error(`push rejected: ${stderr}`);
+    }
+  }
+
+  /** Wraps a string in single quotes, escaping embedded single quotes. */
+  private shellQuote(s: string): string {
+    return "'" + s.replace(/'/g, "'\\''") + "'";
   }
 
   private logResult(request: InvokeRequest, result: ExecuteResult): void {
