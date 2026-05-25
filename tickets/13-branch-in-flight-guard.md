@@ -82,14 +82,29 @@ New test cases should go in a dedicated `describe('branch-in-flight guard', ...)
 
 ## Acceptance Criteria
 
-- [ ] `branchLocks: Map<string, { correlationId: string; target: AgentRole }>` field added to `MessageBroker`, checked after existing safeguards (depth, availability, circular call) and before delivery
-- [ ] Lock acquired when delivery starts (after guard check passes, before the `try` block), mirroring `callChains` acquire pattern
-- [ ] Lock released in the `finally` block on successful completion, alongside `callChains` cleanup
-- [ ] Lock released in the `finally` block on error/exception, alongside `callChains` cleanup
-- [ ] Descriptive error message on rejection includes the conflicting branch name, the in-flight target role, and the in-flight correlationId
-- [ ] Test: concurrent invocations targeting the same branch — second call rejected with descriptive error
-- [ ] Test: concurrent invocations targeting different branches — both succeed (no false rejection)
-- [ ] Test: `branchLocks` map is empty when no invocations are in flight (cleanup verified on both success and error paths)
+- [x] `branchLocks: Map<string, { correlationId: string; target: AgentRole }>` field added to `MessageBroker`, checked after existing safeguards (depth, availability, circular call) and before delivery
+- [x] Lock acquired when delivery starts (after guard check passes, before the `try` block), mirroring `callChains` acquire pattern
+- [x] Lock released in the `finally` block on successful completion, alongside `callChains` cleanup
+- [x] Lock released in the `finally` block on error/exception, alongside `callChains` cleanup
+- [x] Descriptive error message on rejection includes the conflicting branch name, the in-flight target role, and the in-flight correlationId
+- [x] Test: concurrent invocations targeting the same branch — second call rejected with descriptive error
+- [x] Test: concurrent invocations targeting different branches — both succeed (no false rejection)
+- [x] Test: `branchLocks` map is empty when no invocations are in flight (cleanup verified on both success and error paths)
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Files modified:**
+- `apps/mcp-server/src/messaging/message-broker.service.ts` — added `branchLocks` map field, safeguard 4 (branch-in-flight guard) between `callChains` tracking and the `try` block, lock release in `finally` block. Renumbered old "Safeguard 4" (role-based timeout) to "Safeguard 5".
+- `apps/mcp-server/src/messaging/message-broker.service.spec.ts` — added `describe('branch-in-flight guard', ...)` block with 6 tests: same-branch rejection, different-branch coexistence, lock release on success, lock release on error, empty-map invariant after mixed success/error, and callChains cleanup on branch guard rejection.
+
+**Deviation from ticket:** The guard allows same-correlationId invocations through (`existingLock.correlationId !== correlationId` check). The ticket specified unconditional lock checking, but unconditional locking would break the existing nested-call pattern (A→B→C within the same correlationId on the same branch), which is sequential within a single handler and does not race on push. Two pre-existing tests confirmed this: the circular call detection test and the elicitation bypass test both use same-branch nested calls. The correlationId exemption is correct — the guard targets cross-correlationId concurrent edits, which is the actual race condition described in the problem statement.
+
+**Verification:**
+- `npm run build` — 3 webpack compilations, 0 errors
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 46 suites, 804 tests passed (798 baseline + 6 new)
 
 ## Dependencies and References
 
