@@ -165,4 +165,10 @@ export interface InvokeResponse {
   durationMs?: number;
   /** SDK session ID — enables session resume on follow-up invocations. */
   sessionId?: string;
+  /**
+   * Populated by the agent when work resulted in file changes.
+   * Used verbatim by InvocationHandler for the commit message.
+   * Optional — a minimal fallback applies if missing.
+   */
+  commitMessage?: string;
 }

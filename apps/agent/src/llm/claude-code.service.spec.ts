@@ -921,4 +921,123 @@ describe('ClaudeCodeService', () => {
     expect(r1.success).toBe(false);
     expect(r2.success).toBe(false);
   });
+
+  // 10. Commit-message extraction (#12)
+  describe('commit-message extraction', () => {
+    it('should extract a single <commit-message> block from the result', async () => {
+      const resultText =
+        'Implementation complete.\n\n<commit-message>\n#12: add commit-message extraction\n</commit-message>';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe('#12: add commit-message extraction');
+        expect(result.result).toBe('Implementation complete.');
+        expect(result.result).not.toContain('commit-message');
+      }
+    });
+
+    it('should leave commitMessage undefined when no block is present', async () => {
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: 'Task completed' }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBeUndefined();
+        expect(result.result).toBe('Task completed');
+      }
+    });
+
+    it('should use the last block when multiple <commit-message> blocks are present', async () => {
+      const resultText =
+        '<commit-message>first attempt</commit-message>\nRevised.\n<commit-message>#12: final message</commit-message>';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe('#12: final message');
+        expect(result.result).not.toContain('commit-message');
+        expect(result.result).toContain('Revised.');
+      }
+    });
+
+    it('should preserve multi-line commit messages verbatim', async () => {
+      const multiLine =
+        '#12: subject line\n\nBody paragraph explaining the change\nin more detail.';
+      const resultText = `Done.\n\n<commit-message>\n${multiLine}\n</commit-message>`;
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe(multiLine);
+        expect(result.result).toBe('Done.');
+      }
+    });
+
+    it('should treat a malformed block (missing close tag) as no block', async () => {
+      const resultText = 'Done.\n\n<commit-message>\n#12: unclosed block';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBeUndefined();
+        expect(result.result).toBe(resultText);
+      }
+    });
+
+    it('should preserve surrounding text when block is in the middle', async () => {
+      const resultText =
+        'Before block.\n\n<commit-message>#12: mid-text</commit-message>\n\nAfter block.';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe('#12: mid-text');
+        expect(result.result).toContain('Before block.');
+        expect(result.result).toContain('After block.');
+        expect(result.result).not.toContain('commit-message');
+      }
+    });
+  });
 });

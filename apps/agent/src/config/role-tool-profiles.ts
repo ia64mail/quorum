@@ -56,7 +56,13 @@ type DeployableRole = (typeof DEPLOYABLE_AGENT_ROLES)[number];
 export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
   developer: {
     disallowedTools: [...COMMON_DISALLOWED_TOOLS, 'TodoWrite'],
-    deniedBashCommands: ['git push --force', 'git push -f', 'rm -rf /'],
+    deniedBashCommands: [
+      'git commit',
+      'git push',
+      'git checkout -b',
+      'git branch',
+      'rm -rf /',
+    ],
     allowedSkills: ['simplify'],
     plugins: [],
   },
@@ -67,6 +73,7 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
       'git push',
       'git commit',
       'git checkout -b',
+      'git branch',
       'rm -rf',
       'npm publish',
     ],
@@ -78,8 +85,10 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
   teamlead: {
     disallowedTools: [...COMMON_DISALLOWED_TOOLS],
     deniedBashCommands: [
-      'git push --force',
-      'git push -f',
+      'git commit',
+      'git push',
+      'git checkout -b',
+      'git branch',
       'rm -rf /',
       'npm publish',
     ],
@@ -89,7 +98,14 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
 
   qa: {
     disallowedTools: [...COMMON_DISALLOWED_TOOLS],
-    deniedBashCommands: ['git push', 'git commit', 'rm -rf', 'npm publish'],
+    deniedBashCommands: [
+      'git push',
+      'git commit',
+      'git checkout -b',
+      'git branch',
+      'rm -rf',
+      'npm publish',
+    ],
     allowedSkills: [],
     plugins: [],
   },

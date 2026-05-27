@@ -917,13 +917,12 @@ describe('InvocationHandler', () => {
     });
   });
 
-  describe('uncommitted changes check', () => {
-    it('should run git status --porcelain in the worktree after execution', async () => {
+  describe('commit and push', () => {
+    it('should run git status --porcelain in the worktree after successful execution', async () => {
       mockExecute.mockResolvedValue(successResult);
 
       await handler.handle(baseRequest);
 
-      // Find the git status call (there are also fetch, worktree add/remove calls)
       const statusCall = (mockExec.mock.calls as unknown[][]).find(
         (call) => call[0] === 'git status --porcelain',
       );
@@ -933,9 +932,37 @@ describe('InvocationHandler', () => {
       });
     });
 
-    it('should log a warning when uncommitted changes exist', async () => {
+    it('should not commit or push when no changes exist', async () => {
       mockExecute.mockResolvedValue(successResult);
-      // Command-aware mock: git status reports dirty, everything else succeeds
+      // Default mock returns empty stdout → no changes
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(true);
+      // No git add, commit, or push commands should appear
+      const cmds = (mockExec.mock.calls as unknown[][]).map(
+        (call) => call[0] as string,
+      );
+      expect(cmds.find((c) => c.startsWith('git add'))).toBeUndefined();
+      expect(cmds.find((c) => c.startsWith('git commit'))).toBeUndefined();
+      expect(cmds.find((c) => c.startsWith('git push'))).toBeUndefined();
+      // INFO log should note no changes
+      const infoLog = (logSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('No changes to commit after invocation'),
+      )?.[0] as string;
+      expect(infoLog).toBeDefined();
+      expect(infoLog).toContain('correlationId=corr-123');
+    });
+
+    it('should commit with provided commitMessage verbatim and push', async () => {
+      const resultWithMsg: ExecuteResult = {
+        ...successResult,
+        commitMessage: '#12: implement handler-controlled commit',
+      };
+      mockExecute.mockResolvedValue(resultWithMsg);
+      // git status reports dirty
       mockExec.mockImplementation(
         (
           cmd: string,
@@ -947,7 +974,7 @@ describe('InvocationHandler', () => {
         ) => {
           if (cmd === 'git status --porcelain') {
             cb(null, {
-              stdout: ' M src/app.ts\n?? new-file.ts\n',
+              stdout: ' M src/app.ts\n',
               stderr: '',
             });
           } else {
@@ -956,35 +983,22 @@ describe('InvocationHandler', () => {
         },
       );
 
-      await handler.handle(baseRequest);
+      const result = await handler.handle(baseRequest);
 
-      const warnMessage = (warnSpy.mock.calls as unknown[][]).find(
-        (call) =>
-          typeof call[0] === 'string' &&
-          call[0].includes('Uncommitted changes after invocation'),
-      )?.[0] as string;
-      expect(warnMessage).toBeDefined();
-      expect(warnMessage).toContain('correlationId=corr-123');
-      expect(warnMessage).toContain('M src/app.ts');
-      expect(warnMessage).toContain('new-file.ts');
-    });
-
-    it('should not log a warning when workspace is clean', async () => {
-      mockExecute.mockResolvedValue(successResult);
-      // Default mock returns empty stdout for all commands
-
-      await handler.handle(baseRequest);
-
-      const warnMessage = (warnSpy.mock.calls as unknown[][]).find(
-        (call) =>
-          typeof call[0] === 'string' &&
-          call[0].includes('Uncommitted changes after invocation'),
+      expect(result.success).toBe(true);
+      const cmds = (mockExec.mock.calls as unknown[][]).map(
+        (call) => call[0] as string,
       );
-      expect(warnMessage).toBeUndefined();
+      expect(cmds).toContain('git add -A');
+      const commitCmd = cmds.find((c) => c.startsWith('git commit'));
+      expect(commitCmd).toBeDefined();
+      expect(commitCmd).toContain('#12: implement handler-controlled commit');
+      expect(cmds).toContain(`git push origin ${baseRequest.branch}`);
     });
 
-    it('should still return success even when uncommitted changes are detected', async () => {
-      mockExecute.mockResolvedValue(successResult);
+    it('should use fallback message and log WARN when commitMessage is missing', async () => {
+      mockExecute.mockResolvedValue(successResult); // no commitMessage
+      // git status reports dirty
       mockExec.mockImplementation(
         (
           cmd: string,
@@ -995,7 +1009,10 @@ describe('InvocationHandler', () => {
           ) => void,
         ) => {
           if (cmd === 'git status --porcelain') {
-            cb(null, { stdout: ' M dirty-file.ts\n', stderr: '' });
+            cb(null, {
+              stdout: ' M src/app.ts\n',
+              stderr: '',
+            });
           } else {
             cb(null, { stdout: '', stderr: '' });
           }
@@ -1004,16 +1021,64 @@ describe('InvocationHandler', () => {
 
       const result = await handler.handle(baseRequest);
 
-      expect(result).toEqual({
-        success: true,
-        result: 'Here is my design.',
-        totalCostUsd: 0.0123,
-        durationMs: 5000,
-        sessionId: 'sess-abc',
-      });
+      expect(result.success).toBe(true);
+      // Verify fallback message format: (no-message/<corrId-short>): changes from <target> invocation
+      const cmds = (mockExec.mock.calls as unknown[][]).map(
+        (call) => call[0] as string,
+      );
+      const commitCmd = cmds.find((c) => c.startsWith('git commit'));
+      expect(commitCmd).toBeDefined();
+      expect(commitCmd).toContain('(no-message/corr-123');
+      expect(commitCmd).toContain(
+        `changes from ${baseRequest.target} invocation`,
+      );
+      // WARN log should be emitted
+      const warnMessage = (warnSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Agent did not provide commitMessage'),
+      )?.[0] as string;
+      expect(warnMessage).toBeDefined();
+      expect(warnMessage).toContain('correlationId=corr-123');
+      expect(warnMessage).toContain('using fallback');
     });
 
-    it('should check for uncommitted changes even on failed invocations', async () => {
+    it('should return failure with error when push is rejected', async () => {
+      const resultWithMsg: ExecuteResult = {
+        ...successResult,
+        commitMessage: '#12: some change',
+      };
+      mockExecute.mockResolvedValue(resultWithMsg);
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if (cmd === 'git status --porcelain') {
+            cb(null, { stdout: ' M file.ts\n', stderr: '' });
+          } else if (cmd.startsWith('git push')) {
+            cb(new Error('rejected: non-fast-forward'), {
+              stdout: '',
+              stderr: 'rejected: non-fast-forward',
+            });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Commit/push failed');
+      expect(result.error).toContain('push rejected');
+    });
+
+    it('should NOT call commitAndPush when SDK returns failure', async () => {
       mockExecute.mockResolvedValue(failureResult);
 
       await handler.handle(baseRequest);
@@ -1021,10 +1086,46 @@ describe('InvocationHandler', () => {
       const statusCall = (mockExec.mock.calls as unknown[][]).find(
         (call) => call[0] === 'git status --porcelain',
       );
-      expect(statusCall).toBeDefined();
-      expect(statusCall![1]).toEqual({
-        cwd: `/var/agent-worktrees/${baseRequest.correlationId}`,
-      });
+      // git status --porcelain should NOT be called because commitAndPush is skipped
+      expect(statusCall).toBeUndefined();
+    });
+
+    it('should pass multi-line commitMessage through verbatim', async () => {
+      const multiLineMsg =
+        '#12: implement handler-controlled commit\n\n- Add commitAndPush method\n- Wire into runInvocation';
+      const resultWithMsg: ExecuteResult = {
+        ...successResult,
+        commitMessage: multiLineMsg,
+      };
+      mockExecute.mockResolvedValue(resultWithMsg);
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if (cmd === 'git status --porcelain') {
+            cb(null, { stdout: ' M src/handler.ts\n', stderr: '' });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(true);
+      const cmds = (mockExec.mock.calls as unknown[][]).map(
+        (call) => call[0] as string,
+      );
+      const commitCmd = cmds.find((c) => c.startsWith('git commit'));
+      expect(commitCmd).toBeDefined();
+      // Multi-line message should appear in the commit command
+      expect(commitCmd).toContain('#12: implement handler-controlled commit');
+      expect(commitCmd).toContain('Add commitAndPush method');
     });
   });
   describe('worktree lifecycle (#11)', () => {
@@ -1036,12 +1137,12 @@ describe('InvocationHandler', () => {
       const cmds = (mockExec.mock.calls as unknown[][]).map(
         (call) => call[0] as string,
       );
-      // Expect: fetch, worktree add, status check, worktree remove
+      // Expect: fetch, worktree add, status check (commitAndPush, no changes), worktree remove
       expect(cmds[0]).toBe('git fetch origin');
       expect(cmds[1]).toMatch(/^git worktree add/);
       expect(cmds[1]).toContain(baseRequest.correlationId);
       expect(cmds[1]).toContain(baseRequest.branch);
-      // git status --porcelain comes after execute
+      // git status --porcelain from commitAndPush (no changes → no commit/push)
       expect(cmds[2]).toBe('git status --porcelain');
       // worktree remove is last (finally block)
       expect(cmds[3]).toMatch(/^git worktree remove --force/);
