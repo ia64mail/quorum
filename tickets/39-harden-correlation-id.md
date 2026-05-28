@@ -2,7 +2,7 @@
 
 ## Summary
 
-Defense-in-depth hardening for `correlationId` when used as a filesystem path component and shell argument in the per-invocation worktree machinery (#11). Two changes: (1) add `z.string().uuid()` validation on `correlationId` in both the MCP tool input schema and the shared `invokeRequestSchema`, and (2) convert shell-interpolated `execAsync` calls for `git worktree add` and `git worktree remove --force` to argv-array `execFile` calls that bypass `sh -c`.
+Defense-in-depth hardening for `correlationId` when used as a filesystem path component and shell argument in the per-invocation worktree machinery (#11). Three changes: (1) add `z.string().uuid()` validation on `correlationId` in both the MCP tool input schema and the shared `invokeRequestSchema`, (2) convert shell-interpolated `execAsync` calls for `git worktree add`, `git worktree remove --force`, and `git push` to argv-array `execFile` calls that bypass `sh -c`, and (3) add a success log line in `commitAndPush` recording the SHA, branch, and correlationId after a successful push — closing an observability gap identified during #12 review.
 
 ## Problem Statement
 
@@ -114,17 +114,32 @@ expect(mockExecFile).toHaveBeenCalledWith(
 );
 ```
 
+### 4. Success Log Line in `commitAndPush`
+
+**File:** `apps/agent/src/connection/invocation-handler.service.ts`
+
+The `commitAndPush` method only logged on failure/warning paths — the agent log ended at "Invocation complete" with no record of git push activity on the happy path (observability gap noticed during #12 review). After a successful `git push`, run `git rev-parse --short HEAD` and emit an INFO-level log line:
+
+```ts
+this.logger.log(
+  `Committed and pushed: correlationId=${request.correlationId} branch=${request.branch} sha=${sha.trim()}`,
+);
+```
+
+Bonus: `git push origin ${request.branch}` was also converted to `execFileAsync` for consistency with the other shell-safe conversions, since `request.branch` is user-supplied.
+
 ## Acceptance Criteria
 
-- [ ] `correlationId` in `invoke_agent` MCP tool schema (`mcp.service.ts`) rejects non-UUID strings with a descriptive zod error
-- [ ] `correlationId` in `invokeRequestSchema` (`invoke.types.ts`) rejects non-UUID strings
-- [ ] Auto-generated correlationIds (via `randomUUID()`) still pass validation (no regression)
-- [ ] `git worktree add` call in `invocation-handler.service.ts` uses `execFileAsync` with argv array (no shell interpolation)
-- [ ] `git worktree remove --force` call in `invocation-handler.service.ts` uses `execFileAsync` with argv array (no shell interpolation)
-- [ ] Unit tests cover UUID schema rejection with non-UUID and path-traversal strings
-- [ ] Unit tests verify `execFileAsync` argv structure for worktree commands
-- [ ] Existing worktree lifecycle tests pass after mock retargeting
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass
+- [x] `correlationId` in `invoke_agent` MCP tool schema (`mcp.service.ts`) rejects non-UUID strings with a descriptive zod error
+- [x] `correlationId` in `invokeRequestSchema` (`invoke.types.ts`) rejects non-UUID strings
+- [x] Auto-generated correlationIds (via `randomUUID()`) still pass validation (no regression)
+- [x] `git worktree add` call in `invocation-handler.service.ts` uses `execFileAsync` with argv array (no shell interpolation)
+- [x] `git worktree remove --force` call in `invocation-handler.service.ts` uses `execFileAsync` with argv array (no shell interpolation)
+- [x] Unit tests cover UUID schema rejection with non-UUID and path-traversal strings
+- [x] Unit tests verify `execFileAsync` argv structure for worktree commands
+- [x] Existing worktree lifecycle tests pass after mock retargeting
+- [x] Handler logs a "Committed and pushed" line on the happy path with sha + branch + correlationId
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass
 
 ## Dependencies and References
 
@@ -141,3 +156,18 @@ expect(mockExecFile).toHaveBeenCalledWith(
 - `11-design-notes` in Context Store (project scope) — architect design review for #11
 - `13-project-notes` in Context Store (project scope) — branch-in-flight guard (related broker safeguard)
 - GitHub issue: https://github.com/ia64mail/quorum/issues/39
+
+## Implementation Notes
+
+**Files modified:**
+- `apps/mcp-server/src/mcp/mcp.service.ts` — `correlationId: z.string().uuid().optional()` in invoke_agent input schema
+- `libs/common/src/messaging/invoke.types.ts` — `correlationId: z.string().uuid()` in invokeRequestSchema
+- `apps/agent/src/connection/invocation-handler.service.ts` — converted `git worktree add`, both `git worktree remove --force` sites (finally block + symlink-failure cleanup from #45), and `git push` to `execFileAsync`; added "Committed and pushed" success log line with SHA/branch/correlationId
+- `apps/agent/src/connection/invocation-handler.service.spec.ts` — updated `baseRequest.correlationId` to valid UUID, retargeted worktree lifecycle tests from `mockExec` to `mockExecFile`, added `correlationId hardening (#39)` and `commitAndPush success log line (#39)` test blocks (5 new tests)
+- `libs/common/src/messaging/invoke.types.spec.ts` — new file, 6 tests for UUID schema rejection (valid UUID, randomUUID-style, non-UUID, path-traversal, shell injection, empty string)
+- `apps/agent/src/connection/invocation.controller.spec.ts` — updated test correlationId to valid UUID
+- `apps/mcp-server/src/testing/test.controller.spec.ts` — updated test correlationId to valid UUID
+
+**Bonus scope:** `git push origin ${request.branch}` in `commitAndPush` was also converted to `execFileAsync` — `request.branch` is user-supplied and was the last remaining `execAsync` call interpolating request fields. The `git commit -m` call was intentionally left as `execAsync` because the commit message uses `shellQuote()` and `execFile` doesn't have a natural way to pass `-m <msg>` without shell quoting for multi-line messages.
+
+**Verification:** 839 tests across 47 suites, all passing. Build and lint clean.

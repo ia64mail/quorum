@@ -116,9 +116,11 @@ export class InvocationHandler {
     }
 
     try {
-      await execAsync(`git worktree add ${worktreePath} ${request.branch}`, {
-        cwd: repoDir,
-      });
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', worktreePath, request.branch],
+        { cwd: repoDir },
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(
@@ -144,9 +146,11 @@ export class InvocationHandler {
       );
       // Clean up the worktree we just created before returning error
       try {
-        await execAsync(`git worktree remove --force ${worktreePath}`, {
-          cwd: repoDir,
-        });
+        await execFileAsync(
+          'git',
+          ['worktree', 'remove', '--force', worktreePath],
+          { cwd: repoDir },
+        );
       } catch {
         /* best-effort cleanup */
       }
@@ -213,9 +217,11 @@ export class InvocationHandler {
     } finally {
       // --- Worktree cleanup (must run on success AND error) ---
       try {
-        await execAsync(`git worktree remove --force ${worktreePath}`, {
-          cwd: repoDir,
-        });
+        await execFileAsync(
+          'git',
+          ['worktree', 'remove', '--force', worktreePath],
+          { cwd: repoDir },
+        );
       } catch (cleanupErr) {
         const msg =
           cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
@@ -340,12 +346,19 @@ export class InvocationHandler {
     await execAsync(`git commit -m ${this.shellQuote(message)}`, { cwd });
 
     try {
-      await execAsync(`git push origin ${request.branch}`, { cwd });
+      await execFileAsync('git', ['push', 'origin', request.branch], { cwd });
     } catch (pushErr) {
       const stderr =
         pushErr instanceof Error ? pushErr.message : String(pushErr);
       throw new Error(`push rejected: ${stderr}`);
     }
+
+    const { stdout: sha } = await execAsync('git rev-parse --short HEAD', {
+      cwd,
+    });
+    this.logger.log(
+      `Committed and pushed: correlationId=${request.correlationId} branch=${request.branch} sha=${sha.trim()}`,
+    );
   }
 
   /** Wraps a string in single quotes, escaping embedded single quotes. */
