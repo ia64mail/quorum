@@ -114,15 +114,15 @@ try {
 
 ## Acceptance Criteria
 
-- [ ] After `git worktree add` succeeds, handler creates symlink `<worktreePath>/node_modules → /app/node_modules`
-- [ ] Symlink creation uses `execFile` argv form (not `execAsync` shell interpolation) — prevents shell injection from correlationId values
-- [ ] Symlink-creation failure returns a clear `InvokeResponse` error and cleans up the just-created worktree before returning
-- [ ] `npm run build` from inside the worktree succeeds (NestJS CLI binary resolves)
-- [ ] `npm run lint` from inside the worktree succeeds (ESLint binary resolves)
-- [ ] `npm run test` from inside the worktree succeeds (Jest binary resolves)
-- [ ] `git worktree remove --force` cleanup unaffected — symlink removal does not touch `/app/node_modules`
-- [ ] Unit test in `invocation-handler.service.spec.ts` verifies symlink call: correct command (`ln`), correct argv (`['-s', '/app/node_modules', '<worktreePath>/node_modules']`), and correct insertion point (after worktree add, before SDK execute)
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass in the development environment (no regressions)
+- [x] After `git worktree add` succeeds, handler creates symlink `<worktreePath>/node_modules → /app/node_modules`
+- [x] Symlink creation uses `execFile` argv form (not `execAsync` shell interpolation) — prevents shell injection from correlationId values
+- [x] Symlink-creation failure returns a clear `InvokeResponse` error and cleans up the just-created worktree before returning
+- [x] `npm run build` from inside the worktree succeeds (NestJS CLI binary resolves)
+- [x] `npm run lint` from inside the worktree succeeds (ESLint binary resolves)
+- [x] `npm run test` from inside the worktree succeeds (Jest binary resolves)
+- [x] `git worktree remove --force` cleanup unaffected — symlink removal does not touch `/app/node_modules`
+- [x] Unit test in `invocation-handler.service.spec.ts` verifies symlink call: correct command (`ln`), correct argv (`['-s', '/app/node_modules', '<worktreePath>/node_modules']`), and correct insertion point (after worktree add, before SDK execute)
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass in the development environment (no regressions)
 
 ## Dependencies and References
 
@@ -146,3 +146,16 @@ try {
 ## Architect Review
 
 **Not requested.** This is a localized bug fix within the well-defined worktree lifecycle established by #11. It adds one step (symlink) to the existing setup sequence — no new abstractions, no cross-module contract changes, no design decisions beyond "use symlink vs. alternatives" (which is straightforward). The worktree-isolation boundary is preserved, not modified.
+
+## Implementation Notes
+
+**Files modified:**
+- `apps/agent/src/connection/invocation-handler.service.ts` — added `execFile` import, `execFileAsync` promisify, symlink step with try/catch error handling and worktree cleanup on failure
+- `apps/agent/src/connection/invocation-handler.service.spec.ts` — added `mockExecFile` alongside `mockExec`, default success behavior in `beforeEach`, 3 new tests in `describe('node_modules symlink (#45)')`: argv shape, call ordering, failure path with cleanup
+
+**Deviations:** None. Implementation follows the ticket design exactly.
+
+**Verification results:**
+- `npm run build` — 3 webpack compilations succeeded
+- `npm run lint` — clean (eslint auto-fixed no issues)
+- `npm run test` — 46 suites, 828 tests passed (825 baseline + 3 new), 0 failures

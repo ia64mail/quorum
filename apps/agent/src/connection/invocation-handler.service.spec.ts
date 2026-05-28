@@ -17,6 +17,7 @@ jest.mock('node:child_process');
 // ---------------------------------------------------------------------------
 
 const mockExec = childProcess.exec as unknown as jest.Mock;
+const mockExecFile = childProcess.execFile as unknown as jest.Mock;
 const mockExecute = jest.fn<Promise<ExecuteResult>, [unknown]>();
 const mockCreateBridge = jest.fn();
 const mockGetDisallowedTools = jest.fn();
@@ -78,6 +79,20 @@ describe('InvocationHandler', () => {
       (
         _cmd: string,
         _opts: unknown,
+        cb: (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void,
+      ) => {
+        cb(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    // Default: execFile (node_modules symlink) succeeds
+    mockExecFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
         cb: (
           err: Error | null,
           result: { stdout: string; stderr: string },
@@ -1264,6 +1279,96 @@ describe('InvocationHandler', () => {
       expect(addCall![1]).toEqual({
         cwd: '/mnt/quorum/workspace',
       });
+    });
+  });
+
+  describe('node_modules symlink (#45)', () => {
+    const expectedSymlinkTarget = `/var/agent-worktrees/${baseRequest.correlationId}/node_modules`;
+
+    it('should create node_modules symlink with correct argv after worktree add', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ln',
+        ['-s', '/app/node_modules', expectedSymlinkTarget],
+        expect.any(Function),
+      );
+    });
+
+    it('should run symlink after worktree add and before SDK execute', async () => {
+      const callOrder: string[] = [];
+
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          callOrder.push(cmd.split(' ').slice(0, 3).join(' '));
+          cb(null, { stdout: '', stderr: '' });
+        },
+      );
+
+      mockExecFile.mockImplementation(
+        (
+          _file: string,
+          _args: string[],
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          callOrder.push('ln -s');
+          cb(null, { stdout: '', stderr: '' });
+        },
+      );
+
+      mockExecute.mockImplementation(async () => {
+        callOrder.push('sdk-execute');
+        return successResult;
+      });
+
+      await handler.handle(baseRequest);
+
+      const addIdx = callOrder.findIndex((c) =>
+        c.startsWith('git worktree add'),
+      );
+      const symlinkIdx = callOrder.indexOf('ln -s');
+      const executeIdx = callOrder.indexOf('sdk-execute');
+
+      expect(addIdx).toBeGreaterThanOrEqual(0);
+      expect(symlinkIdx).toBeGreaterThan(addIdx);
+      expect(executeIdx).toBeGreaterThan(symlinkIdx);
+    });
+
+    it('should return failure and clean up worktree when symlink fails', async () => {
+      mockExecFile.mockImplementation(
+        (_file: string, _args: string[], cb: (err: Error | null) => void) => {
+          cb(new Error('EEXIST: file already exists'));
+        },
+      );
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain(
+        'Worktree setup failed: node_modules symlink',
+      );
+      expect(result.error).toContain('EEXIST');
+      expect(mockExecute).not.toHaveBeenCalled();
+      // Worktree cleanup should have been attempted
+      const cmds = (mockExec.mock.calls as unknown[][]).map(
+        (call) => call[0] as string,
+      );
+      const removeCmd = cmds.find((c) =>
+        c.startsWith('git worktree remove --force'),
+      );
+      expect(removeCmd).toBeDefined();
     });
   });
 });

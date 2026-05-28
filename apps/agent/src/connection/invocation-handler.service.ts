@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
   CanUseTool,
@@ -21,6 +21,7 @@ import { RolePromptService } from '../prompts';
 import { McpToolBridgeService } from './mcp-tool-bridge.service';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /** Base directory for per-invocation worktrees. Each invocation gets a
  *  subdirectory named by its correlationId. Uses tmpfs in production
@@ -126,6 +127,32 @@ export class InvocationHandler {
       return {
         success: false,
         error: `Worktree creation failed: ${msg}`,
+      };
+    }
+
+    // --- Symlink /app/node_modules into worktree ---
+    try {
+      await execFileAsync('ln', [
+        '-s',
+        '/app/node_modules',
+        `${worktreePath}/node_modules`,
+      ]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `node_modules symlink failed: correlationId=${request.correlationId} ${msg}`,
+      );
+      // Clean up the worktree we just created before returning error
+      try {
+        await execAsync(`git worktree remove --force ${worktreePath}`, {
+          cwd: repoDir,
+        });
+      } catch {
+        /* best-effort cleanup */
+      }
+      return {
+        success: false,
+        error: `Worktree setup failed: node_modules symlink: ${msg}`,
       };
     }
 
