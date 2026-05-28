@@ -32,8 +32,10 @@ const mockConfig = {
 let logSpy: jest.SpyInstance;
 let warnSpy: jest.SpyInstance;
 
+const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000';
+
 const baseRequest: InvokeRequest = {
-  correlationId: 'corr-123',
+  correlationId: VALID_UUID,
   caller: AgentRole.moderator,
   target: AgentRole.architect,
   action: 'design auth system',
@@ -88,19 +90,15 @@ describe('InvocationHandler', () => {
       },
     );
 
-    // Default: execFile (node_modules symlink) succeeds
-    mockExecFile.mockImplementation(
-      (
-        _file: string,
-        _args: string[],
-        cb: (
-          err: Error | null,
-          result: { stdout: string; stderr: string },
-        ) => void,
-      ) => {
-        cb(null, { stdout: '', stderr: '' });
-      },
-    );
+    // Default: execFile (worktree add/remove, symlink, push) succeeds.
+    // Handles both 3-arg (file, args, cb) and 4-arg (file, args, opts, cb) signatures.
+    mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+      const cb = callArgs[callArgs.length - 1] as (
+        err: Error | null,
+        result: { stdout: string; stderr: string },
+      ) => void;
+      cb(null, { stdout: '', stderr: '' });
+    });
 
     logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
     warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
@@ -835,7 +833,7 @@ describe('InvocationHandler', () => {
           call[0].includes('Duplicate invocation reusing in-flight'),
       )?.[0] as string;
       expect(dupLog).toBeDefined();
-      expect(dupLog).toContain('correlationId=corr-123');
+      expect(dupLog).toContain('correlationId=550e8400');
     });
 
     it('should run separate execute() calls for different correlationIds', async () => {
@@ -855,7 +853,7 @@ describe('InvocationHandler', () => {
 
       const request2: InvokeRequest = {
         ...baseRequest,
-        correlationId: 'corr-456',
+        correlationId: '660e8400-e29b-41d4-a716-446655440001',
       };
 
       const promise1 = handler.handle(baseRequest);
@@ -954,13 +952,17 @@ describe('InvocationHandler', () => {
       const result = await handler.handle(baseRequest);
 
       expect(result.success).toBe(true);
-      // No git add, commit, or push commands should appear
+      // No git add or commit commands should appear (execAsync)
       const cmds = (mockExec.mock.calls as unknown[][]).map(
         (call) => call[0] as string,
       );
       expect(cmds.find((c) => c.startsWith('git add'))).toBeUndefined();
       expect(cmds.find((c) => c.startsWith('git commit'))).toBeUndefined();
-      expect(cmds.find((c) => c.startsWith('git push'))).toBeUndefined();
+      // No git push should appear (execFileAsync)
+      const pushCall = (mockExecFile.mock.calls as unknown[][]).find(
+        (call) => call[0] === 'git' && (call[1] as string[])[0] === 'push',
+      );
+      expect(pushCall).toBeUndefined();
       // INFO log should note no changes
       const infoLog = (logSpy.mock.calls as unknown[][]).find(
         (call) =>
@@ -968,7 +970,7 @@ describe('InvocationHandler', () => {
           call[0].includes('No changes to commit after invocation'),
       )?.[0] as string;
       expect(infoLog).toBeDefined();
-      expect(infoLog).toContain('correlationId=corr-123');
+      expect(infoLog).toContain('correlationId=550e8400');
     });
 
     it('should commit with provided commitMessage verbatim and push', async () => {
@@ -1008,7 +1010,13 @@ describe('InvocationHandler', () => {
       const commitCmd = cmds.find((c) => c.startsWith('git commit'));
       expect(commitCmd).toBeDefined();
       expect(commitCmd).toContain('#12: implement handler-controlled commit');
-      expect(cmds).toContain(`git push origin ${baseRequest.branch}`);
+      // git push now uses execFileAsync
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['push', 'origin', baseRequest.branch],
+        expect.objectContaining({ cwd: expect.any(String) as string }),
+        expect.any(Function),
+      );
     });
 
     it('should use fallback message and log WARN when commitMessage is missing', async () => {
@@ -1043,7 +1051,7 @@ describe('InvocationHandler', () => {
       );
       const commitCmd = cmds.find((c) => c.startsWith('git commit'));
       expect(commitCmd).toBeDefined();
-      expect(commitCmd).toContain('(no-message/corr-123');
+      expect(commitCmd).toContain(`(no-message/${VALID_UUID.substring(0, 8)}`);
       expect(commitCmd).toContain(
         `changes from ${baseRequest.target} invocation`,
       );
@@ -1054,7 +1062,7 @@ describe('InvocationHandler', () => {
           call[0].includes('Agent did not provide commitMessage'),
       )?.[0] as string;
       expect(warnMessage).toBeDefined();
-      expect(warnMessage).toContain('correlationId=corr-123');
+      expect(warnMessage).toContain('correlationId=550e8400');
       expect(warnMessage).toContain('using fallback');
     });
 
@@ -1064,6 +1072,7 @@ describe('InvocationHandler', () => {
         commitMessage: '#12: some change',
       };
       mockExecute.mockResolvedValue(resultWithMsg);
+      // git status reports dirty
       mockExec.mockImplementation(
         (
           cmd: string,
@@ -1075,16 +1084,25 @@ describe('InvocationHandler', () => {
         ) => {
           if (cmd === 'git status --porcelain') {
             cb(null, { stdout: ' M file.ts\n', stderr: '' });
-          } else if (cmd.startsWith('git push')) {
-            cb(new Error('rejected: non-fast-forward'), {
-              stdout: '',
-              stderr: 'rejected: non-fast-forward',
-            });
           } else {
             cb(null, { stdout: '', stderr: '' });
           }
         },
       );
+      // git push (execFileAsync) fails
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'push') {
+          cb(new Error('rejected: non-fast-forward'));
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       const result = await handler.handle(baseRequest);
 
@@ -1143,25 +1161,37 @@ describe('InvocationHandler', () => {
       expect(commitCmd).toContain('Add commitAndPush method');
     });
   });
-  describe('worktree lifecycle (#11)', () => {
-    it('should run git fetch, worktree add, execute, then worktree remove', async () => {
+  describe('worktree lifecycle (#11, #39)', () => {
+    const expectedWorktreePath = `/var/agent-worktrees/${VALID_UUID}`;
+
+    it('should run git fetch, worktree add (execFile), execute, then worktree remove (execFile)', async () => {
       mockExecute.mockResolvedValue(successResult);
 
       await handler.handle(baseRequest);
 
-      const cmds = (mockExec.mock.calls as unknown[][]).map(
+      // git fetch still uses execAsync
+      const execCmds = (mockExec.mock.calls as unknown[][]).map(
         (call) => call[0] as string,
       );
-      // Expect: fetch, worktree add, status check (commitAndPush, no changes), worktree remove
-      expect(cmds[0]).toBe('git fetch origin');
-      expect(cmds[1]).toMatch(/^git worktree add/);
-      expect(cmds[1]).toContain(baseRequest.correlationId);
-      expect(cmds[1]).toContain(baseRequest.branch);
+      expect(execCmds[0]).toBe('git fetch origin');
       // git status --porcelain from commitAndPush (no changes → no commit/push)
-      expect(cmds[2]).toBe('git status --porcelain');
-      // worktree remove is last (finally block)
-      expect(cmds[3]).toMatch(/^git worktree remove --force/);
-      expect(cmds[3]).toContain(baseRequest.correlationId);
+      expect(execCmds[1]).toBe('git status --porcelain');
+
+      // worktree add via execFileAsync
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['worktree', 'add', expectedWorktreePath, baseRequest.branch],
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
+      );
+
+      // worktree remove via execFileAsync (finally block)
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['worktree', 'remove', '--force', expectedWorktreePath],
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
+      );
     });
 
     it('should return failure without calling execute when git fetch fails', async () => {
@@ -1191,22 +1221,18 @@ describe('InvocationHandler', () => {
     });
 
     it('should return failure without calling execute when git worktree add fails', async () => {
-      mockExec.mockImplementation(
-        (
-          cmd: string,
-          _opts: unknown,
-          cb: (
-            err: Error | null,
-            result?: { stdout: string; stderr: string },
-          ) => void,
-        ) => {
-          if (cmd.startsWith('git worktree add')) {
-            cb(new Error("fatal: 'nonexistent' is not a commit"));
-          } else {
-            cb(null, { stdout: '', stderr: '' });
-          }
-        },
-      );
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void;
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          cb(new Error("fatal: 'nonexistent' is not a commit"));
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       const result = await handler.handle(baseRequest);
 
@@ -1220,31 +1246,29 @@ describe('InvocationHandler', () => {
 
       await handler.handle(baseRequest);
 
-      const cmds = (mockExec.mock.calls as unknown[][]).map(
-        (call) => call[0] as string,
+      // worktree remove via execFileAsync
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['worktree', 'remove', '--force', expectedWorktreePath],
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
       );
-      const removeCmd = cmds.find((c) => c.startsWith('git worktree remove'));
-      expect(removeCmd).toBeDefined();
     });
 
     it('should log warning when worktree cleanup fails', async () => {
       mockExecute.mockResolvedValue(successResult);
-      mockExec.mockImplementation(
-        (
-          cmd: string,
-          _opts: unknown,
-          cb: (
-            err: Error | null,
-            result?: { stdout: string; stderr: string },
-          ) => void,
-        ) => {
-          if (cmd.startsWith('git worktree remove')) {
-            cb(new Error('worktree locked'));
-          } else {
-            cb(null, { stdout: '', stderr: '' });
-          }
-        },
-      );
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void;
+        if (args[0] === 'worktree' && args[1] === 'remove') {
+          cb(new Error('worktree locked'));
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       const result = await handler.handle(baseRequest);
 
@@ -1264,7 +1288,7 @@ describe('InvocationHandler', () => {
 
       await handler.handle(baseRequest);
 
-      // git fetch cwd
+      // git fetch cwd (execAsync)
       const fetchCall = (mockExec.mock.calls as unknown[][]).find(
         (call) => call[0] === 'git fetch origin',
       );
@@ -1272,13 +1296,13 @@ describe('InvocationHandler', () => {
         cwd: '/mnt/quorum/workspace',
       });
 
-      // git worktree add cwd
-      const addCall = (mockExec.mock.calls as unknown[][]).find((call) =>
-        (call[0] as string).startsWith('git worktree add'),
+      // git worktree add cwd (execFileAsync)
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['worktree', 'add', expectedWorktreePath, baseRequest.branch],
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
       );
-      expect(addCall![1]).toEqual({
-        cwd: '/mnt/quorum/workspace',
-      });
     });
   });
 
@@ -1314,19 +1338,22 @@ describe('InvocationHandler', () => {
         },
       );
 
-      mockExecFile.mockImplementation(
-        (
-          _file: string,
-          _args: string[],
-          cb: (
-            err: Error | null,
-            result: { stdout: string; stderr: string },
-          ) => void,
-        ) => {
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'ln') {
           callOrder.push('ln -s');
-          cb(null, { stdout: '', stderr: '' });
-        },
-      );
+        } else if (file === 'git' && args[0] === 'worktree') {
+          callOrder.push(`git worktree ${args[1]}`);
+        } else {
+          callOrder.push(`${file} ${args[0]}`);
+        }
+        cb(null, { stdout: '', stderr: '' });
+      });
 
       mockExecute.mockImplementation(async () => {
         callOrder.push('sdk-execute');
@@ -1347,11 +1374,18 @@ describe('InvocationHandler', () => {
     });
 
     it('should return failure and clean up worktree when symlink fails', async () => {
-      mockExecFile.mockImplementation(
-        (_file: string, _args: string[], cb: (err: Error | null) => void) => {
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'ln') {
           cb(new Error('EEXIST: file already exists'));
-        },
-      );
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       const result = await handler.handle(baseRequest);
 
@@ -1361,14 +1395,129 @@ describe('InvocationHandler', () => {
       );
       expect(result.error).toContain('EEXIST');
       expect(mockExecute).not.toHaveBeenCalled();
-      // Worktree cleanup should have been attempted
-      const cmds = (mockExec.mock.calls as unknown[][]).map(
-        (call) => call[0] as string,
+      // Worktree cleanup should have been attempted via execFileAsync
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['worktree', 'remove', '--force', expect.stringContaining(VALID_UUID)],
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
       );
-      const removeCmd = cmds.find((c) =>
-        c.startsWith('git worktree remove --force'),
+    });
+  });
+
+  describe('correlationId hardening (#39)', () => {
+    it('should pass execFileAsync argv array for git worktree add (no shell interpolation)', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['worktree', 'add', `/var/agent-worktrees/${VALID_UUID}`, 'main'],
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
       );
-      expect(removeCmd).toBeDefined();
+    });
+
+    it('should pass execFileAsync argv array for git worktree remove (finally block)', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['worktree', 'remove', '--force', `/var/agent-worktrees/${VALID_UUID}`],
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
+      );
+    });
+
+    it('should pass execFileAsync argv array for git push (commitAndPush)', async () => {
+      const resultWithMsg: ExecuteResult = {
+        ...successResult,
+        commitMessage: '#39: test push argv',
+      };
+      mockExecute.mockResolvedValue(resultWithMsg);
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if (cmd === 'git status --porcelain') {
+            cb(null, { stdout: ' M file.ts\n', stderr: '' });
+          } else if (cmd === 'git rev-parse --short HEAD') {
+            cb(null, { stdout: 'abc1234\n', stderr: '' });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      await handler.handle(baseRequest);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['push', 'origin', 'main'],
+        expect.objectContaining({ cwd: expect.any(String) as string }),
+        expect.any(Function),
+      );
+    });
+  });
+
+  describe('commitAndPush success log line (#39)', () => {
+    it('should log "Committed and pushed" with sha, branch, and correlationId on happy path', async () => {
+      const resultWithMsg: ExecuteResult = {
+        ...successResult,
+        commitMessage: '#39: test success log',
+      };
+      mockExecute.mockResolvedValue(resultWithMsg);
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if (cmd === 'git status --porcelain') {
+            cb(null, { stdout: ' M file.ts\n', stderr: '' });
+          } else if (cmd === 'git rev-parse --short HEAD') {
+            cb(null, { stdout: 'abc1234\n', stderr: '' });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      await handler.handle(baseRequest);
+
+      const pushLog = (logSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Committed and pushed'),
+      )?.[0] as string;
+      expect(pushLog).toBeDefined();
+      expect(pushLog).toContain(`correlationId=${VALID_UUID}`);
+      expect(pushLog).toContain('branch=main');
+      expect(pushLog).toContain('sha=abc1234');
+    });
+
+    it('should NOT log "Committed and pushed" when there are no changes', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      const pushLog = (logSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Committed and pushed'),
+      );
+      expect(pushLog).toBeUndefined();
     });
   });
 });

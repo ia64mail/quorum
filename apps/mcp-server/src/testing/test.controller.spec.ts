@@ -21,7 +21,7 @@ describe('TestController', () => {
   });
 
   const validBody: InvokeRequest = {
-    correlationId: 'test-001',
+    correlationId: '550e8400-e29b-41d4-a716-446655440000',
     caller: AgentRole.moderator,
     target: AgentRole.architect,
     action: 'ping',
@@ -39,7 +39,7 @@ describe('TestController', () => {
     expect(result).toEqual(response);
     expect(broker.invoke).toHaveBeenCalledWith(
       expect.objectContaining({
-        correlationId: 'test-001',
+        correlationId: '550e8400-e29b-41d4-a716-446655440000',
         target: AgentRole.architect,
       }),
     );

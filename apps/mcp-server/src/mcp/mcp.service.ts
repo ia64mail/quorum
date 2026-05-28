@@ -306,9 +306,10 @@ export class McpService implements OnModuleInit {
             .describe('Block until target responds'),
           correlationId: z
             .string()
+            .uuid()
             .optional()
             .describe(
-              'Correlation ID for call chain tracing. Auto-injected from session state if omitted, generated if neither available.',
+              'Correlation ID for call chain tracing (UUID). Auto-injected from session state if omitted, generated if neither available.',
             ),
           depth: z
             .number()
