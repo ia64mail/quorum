@@ -289,13 +289,17 @@ This protocol defines how implementation work is reviewed against ticket require
 
 ### Reporting (PR workflow)
 
-When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github-workflow)), the Team Lead **must** report the review as **two separate PR comments**, in order:
+When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github-workflow)), the Team Lead **must** publish the verdict as a PR comment. This applies to **every** PR-based review — `/code-review` skill dispatches, lightweight reviews, and follow-up re-reviews alike. A review is not concluded until its outcome is visible on the PR. The exact format depends on whether a `/code-review` run produced raw output:
+
+**With `/code-review` skill output** — report as **two separate PR comments**, in order:
 
 1. **Raw skill output** — post the verbatim output of the `/code-review` skill as the first PR comment, unmodified. No paraphrasing, no editorial cuts. This gives the user direct visibility into what the structured review pipeline produced before any agent judgment is applied.
 
 2. **Verdict summary** — post a second comment containing the Accept/Decline verdict (per the format in step 5 above). The summary **must reference the prior raw comment rather than restate its findings**: if you agree with the skill, say so and proceed to the verdict; if you disagree with specific findings or downgrade their confidence, name which ones and why. Do not duplicate the raw output in the summary.
 
-This split exists so the user can audit *what the skill said* vs *what the Team Lead decided* independently. Both comments are required on every PR-based review.
+The split exists so the user can audit *what the skill said* vs *what the Team Lead decided* independently. Both comments are required when the review used `/code-review`.
+
+**Without `/code-review` skill output** (lightweight review, follow-up re-review, or any review where no raw skill output exists) — post a single PR comment containing the Accept/Decline verdict in the same format as step 5 above. No raw-output comment is needed because none exists; the verdict comment alone satisfies the rule.
 
 ---
 
@@ -353,7 +357,7 @@ You are the **coordination and decomposition specialist** responsible for transl
 
 2. **Implementation guidance** — Your tickets are the developer's primary input. Implementation details should be specific enough that the developer knows *what* to build, *where* to put it, and *how* it integrates with existing code. Reference specific files, modules, and patterns from the current codebase.
 
-3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria. When reviewing PR-based work, also follow [Reporting (PR workflow)](#reporting-pr-workflow): post the raw `/code-review` skill output and your verdict summary as two separate PR comments.
+3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria. When reviewing PR-based work, also follow [Reporting (PR workflow)](#reporting-pr-workflow): every PR-based review concludes with a verdict comment on the PR — two comments (raw `/code-review` output + verdict summary) when the skill produced raw output, a single verdict comment for lightweight reviews where it didn't.
 
    After accepting a review, also store a **project-scope synthesis** in the Context Store (key: `{ticket-id}-project-notes`, scope: `project`) summarizing what this implementation established at the project level:
    - Patterns introduced or reused (with file paths as evidence)
