@@ -216,7 +216,7 @@ The `HttpAgentConnection.handle()` method:
 4. Maps `DOMException` abort to timeout error
 5. Catches all errors — never throws, always resolves to `InvokeResponse`
 
-> **Long-poll note:** For moderator → long-timeout-role calls, `messageBroker.invoke()`'s returned promise is captured by the long-poll continuation layer in `mcp.service.ts` rather than awaited inline — the broker's own behavior is unchanged. See [MCP Connectivity §3.6](mcp-connectivity.md#36-long-poll-continuation-moderator-only) for the protocol that sits above the broker.
+> **Long-poll note:** For moderator → long-timeout-role calls, `messageBroker.invoke()`'s returned promise is parked in an `InvocationRecord` at dispatch time (#47) and the dispatch returns `{ status: "pending" }` immediately — the broker's own behavior is unchanged. The `deliveryPromise` is then consumed by `wait_invocation` calls. See [MCP Connectivity §3.6](mcp-connectivity.md#36-long-poll-continuation-moderator-only) for the protocol that sits above the broker.
 
 ## Transport
 

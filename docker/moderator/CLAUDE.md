@@ -104,16 +104,9 @@ Use natural language `action` only for non-review tasks (implementation, data re
 
 ### Long-Poll Continuation
 
-**Never abandon an in-flight `invoke_agent` POST voluntarily.** Once you call `invoke_agent`, you are committed to the open POST until the MCP tool call returns one of four terminal shapes:
+Every long-role `invoke_agent` (target ∈ {teamlead, architect, qa, developer, moderator}) returns `{ status: "pending", invocationId, next: "call wait_invocation(invocationId)" }` in the dispatch response. Always. The dispatch POST completes in milliseconds — the server parks the invocation immediately and hands you a recovery handle. Immediately call `wait_invocation(invocationId)` and continue cycling until status is `completed` or `failed`.
 
-- `{ status: "completed", response }` — work finished successfully
-- `{ status: "failed", … }` — work errored or timed out server-side
-- `{ status: "pending", invocationId, next }` — the 270 s long-poll ceiling fired; the work is still running and you must call `wait_invocation(invocationId)` next
-- A real client-side transport error surfaced by the MCP SDK itself (not your judgement)
-
-The 0–270 s window between dispatching `invoke_agent` and receiving the first response envelope is **the protocol working as designed.** Long-running roles (teamlead 10 min, architect/qa 15 min, developer 30 min) routinely sit in apparent silence for the full 270 s before the first `pending` envelope arrives. Do not interpret that silence as a hang, drop, or stuck call. Do not open a `new_conversation`, do not re-dispatch the same task, do not "retry just in case" — the held POST is alive, the agent is working, and the SSE keepalive is touching `lastSeenAt` every 15 s underneath you.
-
-**Why this matters:** before the 270 s ceiling fires server-side, the invocation has no `invocationId` — it is only a `correlationId` and an in-memory `deliveryPromise`. There is nothing to `wait_invocation` against. If you abandon the POST mid-wait and re-dispatch, you have **no way to recover the original invocation** — the agent will run to completion in parallel with your retry, and you will be billed for both. (Observed 2026-05-19 on QRM8 #10 dispatch: moderator abandoned a healthy long-poll at ~3 min, restarted with a `new_conversation` labeled "retry after transport drop", and both developer runs completed independently. The server log shows the original POST closed cleanly at 270 s with `writableFinished=true keepaliveFired=true` — there was no drop, only impatience.)
+Short-role targets (productowner at 2 min) and all agent-to-agent calls return their `InvokeResponse` inline on the dispatch POST — no `wait_invocation` needed.
 
 **Pending envelope handling.** When any MCP tool response carries `status: "pending"` with an `invocationId`, the work is still running server-side. Immediately call `wait_invocation(invocationId)` to continue waiting. Repeat if `wait_invocation` also returns pending. Stop only when status is `completed` or `failed`.
 

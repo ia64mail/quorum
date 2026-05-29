@@ -313,9 +313,9 @@ sequenceDiagram
 
 ### 3.6 Long-poll continuation (moderator-only)
 
-When the moderator calls `invoke_agent` targeting a role whose `ROLE_TIMEOUTS` exceeds 270 s (teamlead, architect, qa, developer), the server races the broker's delivery against a 4 min 30 s server-side ceiling (`LONG_POLL_CEILING_MS`). If the broker resolves first, the result returns inline — identical to the synchronous path in §3.3, zero overhead. If the ceiling fires first, the server parks the in-flight invocation in an `InvocationResultStore` and returns `{ status: "pending", invocationId }`. The moderator then calls `wait_invocation(invocationId)` to continue waiting, repeating until the result lands.
+When the moderator calls `invoke_agent` targeting a role whose `ROLE_TIMEOUTS` exceeds 270 s (teamlead, architect, qa, developer, moderator), the server parks the invocation in an `InvocationResultStore` immediately and returns `{ status: "pending", invocationId }` in a sub-second dispatch response (#47). The moderator then calls `wait_invocation(invocationId)` to receive the actual result, repeating until the result lands. The `LONG_POLL_CEILING_MS` timer (270 s) is now only consulted inside `wait_invocation` — each wait window is capped at 270 s to stay under CC CLI's ~5 min `bodyTimeout`.
 
-This protocol exists because CC CLI's bundled undici enforces a ~5 min `bodyTimeout` on POST response bodies. The 270 s ceiling ensures each POST completes well before the client's HTTP stack kills the response. Agent-to-agent calls are unaffected — they use the 35-min undici dispatcher controlled by the agent container (§3.2).
+This protocol exists because CC CLI's bundled undici enforces a ~5 min `bodyTimeout` on POST response bodies. The always-pending dispatch ensures every long-role call has a recovery handle (`invocationId`) from the moment of dispatch, eliminating the 0–270 s recovery gap that existed when the server raced the broker against the ceiling. Agent-to-agent calls are unaffected — they use the 35-min undici dispatcher controlled by the agent container (§3.2).
 
 #### Caller-aware gating
 
@@ -328,21 +328,21 @@ The long-poll path only activates when **both** conditions hold:
 |---|---|---|---|
 | Any agent | Any agent | 2–30 min | **Sync** — 35-min undici dispatcher |
 | Moderator | productowner | 2 min | **Sync** — under 270 s ceiling |
-| Moderator | moderator | 5 min | **Sync** — elicitation, under 270 s ceiling |
-| Moderator | teamlead | 10 min | **Long-poll** — exceeds ceiling |
-| Moderator | architect | 15 min | **Long-poll** — exceeds ceiling |
-| Moderator | qa | 15 min | **Long-poll** — exceeds ceiling |
-| Moderator | developer | 30 min | **Long-poll** — exceeds ceiling |
+| Moderator | moderator | 5 min | **Always-pending** — 300 s exceeds 270 s ceiling |
+| Moderator | teamlead | 10 min | **Always-pending** — exceeds ceiling |
+| Moderator | architect | 15 min | **Always-pending** — exceeds ceiling |
+| Moderator | qa | 15 min | **Always-pending** — exceeds ceiling |
+| Moderator | developer | 30 min | **Always-pending** — exceeds ceiling |
 
 #### Response envelope
 
-`invoke_agent` and `wait_invocation` share a common response shape:
+`invoke_agent` (long-role dispatch) and `wait_invocation` share a common response shape:
 
 | Status | Meaning | Fields |
 |---|---|---|
 | `completed` | Agent finished successfully | `{ status, response }` |
 | `failed` | Agent timed out or errored | `{ status, response }` (with `success: false`) or `{ status, error }` |
-| `pending` | Ceiling timer fired; work still in flight | `{ status, invocationId, next }` |
+| `pending` | Dispatch parked / wait ceiling fired; work still in flight | `{ status, invocationId, next }` |
 
 #### `wait_invocation` semantics
 
@@ -373,14 +373,12 @@ sequenceDiagram
     participant Target as target agent (e.g. developer)
     Mod->>Server: invoke_agent { target: developer }
     Server->>BR: deliveryPromise = messageBroker.invoke(request)
-    Server->>Server: race deliveryPromise vs 270 s ceiling
-    Note over Server: ceiling fires at 270 s — broker still pending
     Server->>Store: store({ invocationId, deliveryPromise, status: pending })
-    Server-->>Mod: { status: "pending", invocationId }
+    Server-->>Mod: { status: "pending", invocationId } (sub-second)
     Note over Mod: CLAUDE.md rule: call wait_invocation immediately
     Mod->>Server: wait_invocation(invocationId)
     Server->>Store: get(invocationId) → status: pending
-    Server->>Server: race deliveryPromise vs fresh 270 s ceiling
+    Server->>Server: race deliveryPromise vs 270 s ceiling
     Note over BR,Target: developer finishes during this window
     Target-->>BR: InvokeResponse { success: true }
     BR-->>Server: deliveryPromise resolves
@@ -516,7 +514,7 @@ With the long-poll continuation protocol (§3.6), three timeout layers now gover
 
 | Layer | Value | Authority | What it bounds |
 |---|---|---|---|
-| Long-poll ceiling | 270 s (`LONG_POLL_CEILING_MS`) | `mcp.service.ts` `raceAgainstCeiling()` | Maximum hold time for a single POST response before the server returns `pending` |
+| Long-poll ceiling | 270 s (`LONG_POLL_CEILING_MS`) | `mcp.service.ts` `raceAgainstCeiling()` (used by `wait_invocation` only) | Maximum hold time for a single `wait_invocation` POST before the server returns `pending`; `invoke_agent` returns `pending` immediately at dispatch (#47) |
 | Per-role broker timeout | 2–30 min (`ROLE_TIMEOUTS`) | `message-broker.service.ts` `deliverWithTimeout()` | Deadline for the agent to complete its work — fires `{ success: false }` on expiry |
 | Undici dispatcher | 35 min (`headersTimeout` / `bodyTimeout`) | Agent + server undici `Agent` config | Transport ceiling — prevents HTTP stacks from killing the connection before role timeout fires |
 
@@ -535,7 +533,7 @@ The role-timeout table itself is unchanged. The long-poll ceiling is a protocol-
 | 2 s × N | agent connect retry | linear backoff, 10 attempts max |
 | 30 s | agent undici keepAliveInitialDelay | TCP keepalive on outbound transport |
 | 35 min | undici `headersTimeout` / `bodyTimeout` | both directions; allows the per-role timeouts above to be the sole authority |
-| 270 s | long-poll ceiling (`LONG_POLL_CEILING_MS`) | max hold time per POST in the long-poll continuation protocol (§3.6); must be under CC CLI's ~5 min `bodyTimeout` |
+| 270 s | long-poll ceiling (`LONG_POLL_CEILING_MS`) | max hold time per `wait_invocation` POST (§3.6); `invoke_agent` returns pending immediately (#47); must be under CC CLI's ~5 min `bodyTimeout` |
 | 40 min (max) | InvocationResultStore TTL | `ROLE_TIMEOUTS[target] + 10 min`; longest for developer (30 + 10 min); reaped on the 30 s reaper interval |
 
 ---
@@ -590,33 +588,33 @@ sequenceDiagram
 
 ### 7.3 Long-running invoke_agent — keepalive in action
 
-> **See also §7.4** for the long-poll continuation protocol, which is now the protocol-level model for moderator-driven long calls. The SSE keepalive flow below still operates at the transport level underneath each held POST window.
+> **See also §7.4** for the long-poll continuation protocol, which is the protocol-level model for moderator-driven long calls. The SSE keepalive flow below still operates at the transport level underneath each held `wait_invocation` POST window. For moderator → long-role calls, the `invoke_agent` dispatch POST itself returns in sub-second (#47); the keepalive fires during the subsequent `wait_invocation` POSTs. For agent-to-agent and short-role calls, the full flow below applies directly.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Mod as moderator (CC CLI)
+    participant Caller as caller agent
     participant Server as MCP server
-    participant Dev as developer
-    Mod->>Server: POST /mcp invoke_agent { target: developer }
-    Server-->>Mod: 200 text/event-stream + : ready (touchSession)
+    participant Target as target agent
+    Caller->>Server: POST /mcp invoke_agent { target }
+    Server-->>Caller: 200 text/event-stream + : ready (touchSession)
     par per-15s SSE keepalive (POST path)
-        Server-->>Mod: : ping (touchSession)
-        Server-->>Mod: : ping (touchSession)
-        Server-->>Mod: : ping (touchSession)
-    and broker delivers to developer
-        Server->>Dev: POST /invoke
-        Dev-->>Server: 200 InvokeResponse (after N min)
+        Server-->>Caller: : ping (touchSession)
+        Server-->>Caller: : ping (touchSession)
+        Server-->>Caller: : ping (touchSession)
+    and broker delivers to target
+        Server->>Target: POST /invoke
+        Target-->>Server: 200 InvokeResponse (after N min)
     end
-    Server-->>Mod: JSON-RPC response on the SSE stream
-    Mod--xServer: POST close (writableFinished=true, keepaliveFired=true)
+    Server-->>Caller: JSON-RPC response on the SSE stream
+    Caller--xServer: POST close (writableFinished=true, keepaliveFired=true)
 ```
 
-The 15 s pings keep `lastSeenAt` continuously fresh on the moderator's session for the full duration of the invocation, regardless of whether its `GET /mcp` SSE happens to be open at that moment.
+The 15 s pings keep `lastSeenAt` continuously fresh on the caller's session for the full duration of the held POST, regardless of whether its `GET /mcp` SSE happens to be open at that moment.
 
 ### 7.4 Long-running invoke_agent — long-poll continuation
 
-End-to-end flow for a moderator → developer invocation that takes ~9 minutes, showing two pending cycles and final completion. Each held POST receives the same 15 s keepalive pings from §7.3 at the transport level.
+End-to-end flow for a moderator → developer invocation that takes ~9 minutes, showing the always-pending dispatch (#47), two `wait_invocation` cycles, and final completion. The `invoke_agent` dispatch returns in sub-second; each `wait_invocation` POST receives the same 15 s keepalive pings from §7.3 at the transport level.
 
 ```mermaid
 sequenceDiagram
@@ -625,17 +623,20 @@ sequenceDiagram
     participant Server as MCP server
     participant Dev as developer
     Mod->>Server: POST /mcp invoke_agent { target: developer }
+    Server->>Dev: POST /invoke (broker dispatch)
+    Server-->>Mod: { status: "pending", invocationId: "inv_7c2a" } (sub-second)
+    Note over Mod: CLAUDE.md rule: immediately call wait_invocation
+    Mod->>Server: POST /mcp wait_invocation { invocationId: "inv_7c2a" }
     Server-->>Mod: 200 text/event-stream + : ready
     par SSE keepalive (transport level)
         loop every 15 s while POST open
             Server-->>Mod: : ping (touchSession)
         end
-    and broker delivers to developer
-        Server->>Dev: POST /invoke
+    and waiting on deliveryPromise
+        Note over Server: race deliveryPromise vs 270 s ceiling
     end
     Note over Server: 270 s ceiling fires — developer still working
     Server-->>Mod: { status: "pending", invocationId: "inv_7c2a" }
-    Note over Mod: CLAUDE.md rule: immediately call wait_invocation
     Mod->>Server: POST /mcp wait_invocation { invocationId: "inv_7c2a" }
     Server-->>Mod: 200 text/event-stream + : ready
     par SSE keepalive
@@ -645,10 +646,6 @@ sequenceDiagram
     and waiting on deliveryPromise
         Note over Server: race deliveryPromise vs fresh 270 s ceiling
     end
-    Note over Server: 270 s ceiling fires again — still pending
-    Server-->>Mod: { status: "pending", invocationId: "inv_7c2a" }
-    Mod->>Server: POST /mcp wait_invocation { invocationId: "inv_7c2a" }
-    Server-->>Mod: 200 text/event-stream + : ready
     Note over Dev,Server: developer finishes at ~549 s total
     Dev-->>Server: 200 InvokeResponse { success: true }
     Note over Server: deliveryPromise resolves → record.status=completed
@@ -656,8 +653,9 @@ sequenceDiagram
 ```
 
 Key observations:
-- Each POST window is capped at 270 s, safely under CC CLI's ~5 min `bodyTimeout`.
-- The SSE keepalive pings (§2.3) fire on every held POST, keeping `lastSeenAt` fresh and preventing idle-reaping during the wait.
+- The `invoke_agent` dispatch returns `{ status: "pending" }` in sub-second — no 0–270 s blind spot. The `invocationId` is a recovery handle from the moment of dispatch.
+- Each `wait_invocation` POST window is capped at 270 s, safely under CC CLI's ~5 min `bodyTimeout`.
+- The SSE keepalive pings (§2.3) fire on every held `wait_invocation` POST, keeping `lastSeenAt` fresh and preventing idle-reaping during the wait.
 - The developer's work runs continuously server-side — the pending/wait cycle is purely a protocol-envelope concern for the moderator's HTTP transport.
 - If the moderator presses Esc mid-wait, the in-flight POST dies but the invocation continues. The next `wait_invocation` call (on a new or existing session) picks up the result from the `InvocationResultStore`.
 

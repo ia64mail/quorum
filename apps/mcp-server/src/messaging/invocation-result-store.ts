@@ -19,14 +19,15 @@ export interface InvocationRecord {
 }
 
 /**
- * In-memory store for long-poll continuation records (QRM7-017).
+ * In-memory store for long-poll continuation records (QRM7-017, #47).
  *
- * When `invoke_agent` returns `{ status: "pending" }` because the
- * 4 min 30 s server timer fired before the broker resolved, the
- * in-flight invocation is parked here. `wait_invocation` reads from
- * this store to continue waiting on the same `deliveryPromise`.
+ * Every long-role `invoke_agent` dispatch (moderator → teamlead/architect/
+ * qa/developer) parks an `InvocationRecord` here at dispatch time and
+ * returns `{ status: "pending", invocationId }` immediately.
+ * `wait_invocation` reads from this store to continue waiting on the
+ * same `deliveryPromise`.
  *
- * Bounded by `maxCallDepth x concurrent moderator sessions` — in
+ * Bounded by `maxCallDepth × concurrent moderator sessions` — in
  * practice <20 entries. Stale records are reaped on the existing
  * 30 s reaper interval via {@link reapStaleInvocations}.
  */
