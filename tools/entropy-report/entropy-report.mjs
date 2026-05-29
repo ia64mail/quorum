@@ -317,7 +317,7 @@ function buildLlmPrompt(data) {
 
   return `You are analyzing source code complexity metrics for "Quorum" — a multi-agent AI orchestration system (NestJS/TypeScript monorepo). The entire codebase was written by Claude Code (AI) in a "vibe coding" mode, with a human developer providing ticket-level control and careful code review.
 
-The project has ${data.length} commits spanning ${first.date.split('T')[0]} to ${last.date.split('T')[0]}, across 2 milestones (QRM1: infrastructure, QRM2: Claude Code SDK integration).
+The project has ${data.length} commits spanning ${first.date.split('T')[0]} to ${last.date.split('T')[0]}, across eight milestones (QRM1: NestJS/MCP infrastructure; QRM2: Claude Code SDK integration; QRM4: agent hardening; QRM5: semantic-search context store; QRM6: moderator/MCP transport stabilization; QRM7: long-poll transport + moderator daily-use stabilization; QRM8: workspace isolation — git worktree-per-invocation, handler-controlled commits, named-volume git clones).
 
 METRICS SUMMARY:
 - LOC: ${first.metrics.loc} → ${last.metrics.loc} (${((last.metrics.loc / Math.max(first.metrics.loc, 1) - 1) * 100).toFixed(0)}% growth)
