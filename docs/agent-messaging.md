@@ -116,17 +116,25 @@ All inter-agent communication flows through a single MCP tool:
 
 ```typescript
 server.tool('invoke_agent', {
-  callerRole: z.enum(AgentRole),           // Identity of the calling agent
-  target: z.enum(INVOCABLE_AGENT_ROLES),   // All 6 roles (including moderator)
-  action: z.string(),                       // What you need the agent to do
-  context: z.record(z.unknown()).optional(), // Relevant context to pass
-  wait: z.boolean().default(true),          // Block until response; long-poll continuation for moderator→long-role calls (mcp-connectivity §3.6)
-  correlationId: z.string().optional(),     // Generated as UUID if omitted
-  depth: z.number().int().min(0).default(0) // Call depth (auto-incremented by bridge)
+  callerRole: z.enum(AgentRole).optional(),   // Auto-injected from MCP session identity if omitted
+  target: z.enum(INVOCABLE_AGENT_ROLES),      // All 6 roles (including moderator)
+  action: z.string(),                          // Task for the target. Slash command (e.g. "/code-review")
+                                               // dispatches a built-in skill; natural language otherwise
+  context: z.record(z.unknown()).optional(),   // Optional key-value payload
+  wait: z.boolean().default(true),             // Block until response; long-poll continuation for
+                                               // moderator → long-role calls (mcp-connectivity §3.6)
+  correlationId: z.string().uuid().optional(), // Auto-injected from session state, generated if neither available
+  depth: z.number().int().min(0).default(0),   // Current call depth (auto-incremented by bridge)
+  sessionId: z.string().optional(),            // Resume a prior SDK session. Auto-injected from the moderator's
+                                               // per-role session cache. Pass "" to force a fresh session (QRM8 D9)
+  branch: z.string().min(1),                   // REQUIRED — target git branch. The agent runs in a dedicated
+                                               // worktree checked out to this branch (QRM8 #11)
 });
 ```
 
-When called through the MCP Tool Bridge, `callerRole`, `correlationId`, and `depth` are auto-injected — agents only need to specify `target`, `action`, and optionally `context`.
+When called through the MCP Tool Bridge, `callerRole`, `correlationId`, and `depth` are auto-injected — agents only need to specify `target`, `action`, `branch`, and optionally `context`. `sessionId` is auto-injected by the MCP server from the moderator's per-role `agentSessions` cache (the cache persists across `new_conversation` boundaries — QRM8 D9 — so cross-turn resume is the default; pass an empty string to force a fresh session).
+
+`branch` has no default and is rejected by zod validation if omitted, even from the moderator. For read-only or review tasks, callers pass the current feature branch (or `main` for general codebase exploration). The Message Broker uses `branch` for its [branch-in-flight guard](message-broker.md#4-branch-in-flight-guard-qrm8-d6), and the agent's `InvocationHandler` uses it to create the per-invocation `git worktree`.
 
 For moderator → long-timeout-role calls (teamlead, architect, qa, developer, moderator), `invoke_agent` always returns `{ status: "pending", invocationId, next: "call wait_invocation(invocationId)" }` immediately at dispatch (#47). The moderator must then call `wait_invocation(invocationId)` to receive the actual result, repeating until `status` is `completed` or `failed`. Agent-to-agent calls and moderator calls targeting short-timeout roles (productowner) always return an `InvokeResponse` inline. See [MCP Connectivity §3.6](mcp-connectivity.md#36-long-poll-continuation-moderator-only) for the full protocol.
 
