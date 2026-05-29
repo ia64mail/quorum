@@ -4,7 +4,7 @@ All notable changes to Quorum are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely — section names are adapted to the project's needs (New Features, Bug Fixes, Documentation, Internal / Other Changes). Each entry is a one-line summary; for full milestone narrative, follow the cross-reference to the matching release note in [`releases/`](releases/).
 
-## [v0.8.0-beta] (QRM8) — 2026-05-29 — Workspace Isolation
+## [v0.8.0] (QRM8) — 2026-05-29 — Workspace Isolation
 
 Full milestone notes: [releases/RELEASE-QRM8.md](releases/RELEASE-QRM8.md)
 
@@ -247,7 +247,7 @@ Full milestone notes: [releases/RELEASE-QRM1.md](releases/RELEASE-QRM1.md)
 - **`docs/context-management.md`** + **`docs/context-store.md`** (new) — Context Store concepts and InMemoryStore reference.
 - **`docs/smoke-test-runbook.md`** (new) — 8 scenarios for end-to-end validation.
 
-[v0.8.0-beta]: releases/RELEASE-QRM8.md
+[v0.8.0]: releases/RELEASE-QRM8.md
 [v0.7.0]: releases/RELEASE-QRM7.md
 [v0.6.0-beta]: releases/RELEASE-QRM6.md
 [v0.5.0-beta]: releases/RELEASE-QRM5.md
