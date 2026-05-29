@@ -185,8 +185,10 @@ describe('McpService', () => {
       });
 
       const handler = getToolHandler(service, 'invoke_agent');
+      // Use agent-to-agent (teamlead → architect) to test basic sync routing
+      // without triggering the always-pending long-poll path (#47).
       const result = await handler({
-        callerRole: AgentRole.moderator,
+        callerRole: AgentRole.teamlead,
         target: AgentRole.architect,
         action: 'design API',
         wait: true,
@@ -198,7 +200,7 @@ describe('McpService', () => {
       expect(mockBroker.invoke).toHaveBeenCalledWith(
         expect.objectContaining({
           correlationId: 'test-corr-1',
-          caller: AgentRole.moderator,
+          caller: AgentRole.teamlead,
           target: AgentRole.architect,
           action: 'design API',
           wait: true,
@@ -316,10 +318,12 @@ describe('McpService', () => {
       });
 
       const handler = getToolHandler(service, 'invoke_agent');
+      // Use moderator → productowner (sync path, 2 min < 270s) to test
+      // sessionId pass-through without triggering always-pending (#47).
       const result = await handler({
         callerRole: AgentRole.moderator,
-        target: AgentRole.architect,
-        action: 'design API',
+        target: AgentRole.productowner,
+        action: 'clarify requirement',
         wait: true,
         depth: 0,
         correlationId: 'test-corr-3',
@@ -1427,71 +1431,24 @@ describe('McpService', () => {
   });
 
   // -------------------------------------------------------------------------
-  // QRM7-017: invoke_agent racing logic + caller-aware policy
+  // #47: invoke_agent always-pending dispatch + caller-aware policy
   // -------------------------------------------------------------------------
 
-  describe('invoke_agent long-poll racing (QRM7-017)', () => {
-    beforeEach(() => {
-      jest.useFakeTimers();
-    });
-
-    afterEach(() => {
-      jest.useRealTimers();
-    });
-
-    it('should return inline when broker resolves before 4m30s ceiling (sync path)', async () => {
-      const brokerResponse: InvokeResponse = {
-        success: true,
-        result: 'done',
-        sessionId: 'sess-1',
-      };
-      mockBroker.invoke.mockResolvedValue(brokerResponse);
+  describe('invoke_agent always-pending dispatch (#47)', () => {
+    it('should return pending immediately for long-role dispatch without timer advancement', async () => {
+      // Broker never resolves — dispatch should still return pending instantly
+      mockBroker.invoke.mockReturnValue(new Promise<InvokeResponse>(() => {}));
 
       const handler = getToolHandler(service, 'invoke_agent');
-      const resultPromise = handler({
+      const result = await handler({
         callerRole: AgentRole.moderator,
         target: AgentRole.developer, // 30 min timeout > 270s threshold
         action: 'implement feature',
         wait: true,
         depth: 0,
-        correlationId: 'test-lp-sync',
+        correlationId: 'test-always-pending',
         branch: 'feature-branch',
       });
-
-      // Resolve microtasks so the broker promise settles
-      await jest.advanceTimersByTimeAsync(0);
-      const result = await resultPromise;
-
-      const parsed = JSON.parse(textContent(result)) as LongPollResult;
-      expect(parsed.success).toBe(true);
-      expect(parsed.result).toBe('done');
-      // Should NOT have stored in the invocation result store
-      expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
-    });
-
-    it('should return pending when broker does not resolve before 4m30s ceiling', async () => {
-      // Broker never resolves within the timeout
-      let resolveDelivery!: (value: InvokeResponse) => void;
-      mockBroker.invoke.mockReturnValue(
-        new Promise<InvokeResponse>((resolve) => {
-          resolveDelivery = resolve;
-        }),
-      );
-
-      const handler = getToolHandler(service, 'invoke_agent');
-      const resultPromise = handler({
-        callerRole: AgentRole.moderator,
-        target: AgentRole.developer,
-        action: 'long task',
-        wait: true,
-        depth: 0,
-        correlationId: 'test-lp-pending',
-        branch: 'feature-branch',
-      });
-
-      // Advance past the long-poll ceiling
-      await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
-      const result = await resultPromise;
 
       const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('pending');
@@ -1504,12 +1461,37 @@ describe('McpService', () => {
           status: 'pending',
         }),
       );
-
-      // Clean up: resolve the dangling promise
-      resolveDelivery({ success: true, result: 'late' });
     });
 
-    it('should update record status when broker resolves after server timer', async () => {
+    it('should park InvocationRecord in store immediately at dispatch time', async () => {
+      // Broker never resolves
+      mockBroker.invoke.mockReturnValue(new Promise<InvokeResponse>(() => {}));
+
+      // Use real store to verify size
+      const realStore = new InvocationResultStore();
+      mockInvocationResultStore.store.mockImplementation((record: unknown) =>
+        realStore.store(record as never),
+      );
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      await handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        action: 'implement feature',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-park-immediate',
+        branch: 'feature-branch',
+      });
+
+      // Record is in the store immediately — no fake timers needed
+      expect(realStore.size).toBe(1);
+
+      // Restore mocks
+      mockInvocationResultStore.store.mockReset();
+    });
+
+    it('should update record status when broker resolves after dispatch', async () => {
       let resolveDelivery!: (value: InvokeResponse) => void;
       mockBroker.invoke.mockReturnValue(
         new Promise<InvokeResponse>((resolve) => {
@@ -1519,7 +1501,6 @@ describe('McpService', () => {
 
       // Use the real InvocationResultStore for this test
       const realStore = new InvocationResultStore();
-      // Temporarily wire the mock to delegate to the real store
       mockInvocationResultStore.store.mockImplementation((record: unknown) =>
         realStore.store(record as never),
       );
@@ -1528,7 +1509,8 @@ describe('McpService', () => {
       );
 
       const handler = getToolHandler(service, 'invoke_agent');
-      const resultPromise = handler({
+      // Dispatch returns pending immediately — no timer advancement needed
+      const result = await handler({
         callerRole: AgentRole.moderator,
         target: AgentRole.developer,
         action: 'long task',
@@ -1538,17 +1520,14 @@ describe('McpService', () => {
         branch: 'feature-branch',
       });
 
-      // Advance past the ceiling so we get a pending response
-      await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
-      const result = await resultPromise;
-
       const parsed = JSON.parse(textContent(result)) as LongPollResult;
+      expect(parsed.status).toBe('pending');
       const invocationId = parsed.invocationId!;
 
-      // Now the broker resolves after the timer
+      // Now the broker resolves
       resolveDelivery({ success: true, result: 'late result' });
       // Flush microtasks for the .then() handler
-      await jest.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
 
       // Record should now be completed
       const record = realStore.get(invocationId);
@@ -1569,7 +1548,7 @@ describe('McpService', () => {
   // QRM7-017: Caller-aware policy
   // -------------------------------------------------------------------------
 
-  describe('invoke_agent caller-aware policy (QRM7-017)', () => {
+  describe('invoke_agent caller-aware policy (QRM7-017, #47)', () => {
     beforeEach(() => {
       jest.useFakeTimers();
     });
@@ -1578,12 +1557,12 @@ describe('McpService', () => {
       jest.useRealTimers();
     });
 
-    it('moderator + target timeout > 270s → enters long-poll path', async () => {
-      // Broker never resolves so we can check if store was used
+    it('moderator + target timeout > 270s → returns pending immediately', async () => {
+      // Broker never resolves — dispatch should return pending without timer advancement
       mockBroker.invoke.mockReturnValue(new Promise<InvokeResponse>(() => {}));
 
       const handler = getToolHandler(service, 'invoke_agent');
-      const resultPromise = handler({
+      const result = await handler({
         callerRole: AgentRole.moderator,
         target: AgentRole.developer, // 30 min > 270s
         action: 'implement',
@@ -1592,9 +1571,6 @@ describe('McpService', () => {
         correlationId: 'caller-aware-1',
         branch: 'feature-branch',
       });
-
-      await jest.advanceTimersByTimeAsync(LONG_POLL_CEILING_MS + 1);
-      const result = await resultPromise;
 
       const parsed = JSON.parse(textContent(result)) as LongPollResult;
       expect(parsed.status).toBe('pending');
@@ -1626,16 +1602,17 @@ describe('McpService', () => {
       expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
     });
 
-    it('moderator + moderator target (5 min, elicitation) → sync path', async () => {
-      mockBroker.invoke.mockResolvedValue({
-        success: true,
-        result: 'user says yes',
-      });
+    it('moderator + moderator target (5 min > 270s ceiling) → pending path', async () => {
+      // Moderator timeout is 5 min (300s) which exceeds the 270s ceiling,
+      // so moderator → moderator correctly enters the always-pending path.
+      // The old raceAgainstCeiling masked this because elicitation resolves
+      // fast (broker always won the race). #47 exposes the truth.
+      mockBroker.invoke.mockReturnValue(new Promise<InvokeResponse>(() => {}));
 
       const handler = getToolHandler(service, 'invoke_agent');
-      const resultPromise = handler({
+      const result = await handler({
         callerRole: AgentRole.moderator,
-        target: AgentRole.moderator, // 5 min ≤ 270s
+        target: AgentRole.moderator, // 5 min = 300s > 270s ceiling
         action: 'ask user',
         wait: true,
         depth: 0,
@@ -1643,12 +1620,9 @@ describe('McpService', () => {
         branch: 'main',
       });
 
-      await jest.advanceTimersByTimeAsync(0);
-      const result = await resultPromise;
-
       const parsed = JSON.parse(textContent(result)) as LongPollResult;
-      expect(parsed.success).toBe(true);
-      expect(mockInvocationResultStore.store).not.toHaveBeenCalled();
+      expect(parsed.status).toBe('pending');
+      expect(mockInvocationResultStore.store).toHaveBeenCalled();
     });
 
     it('non-moderator caller (agent-to-agent) → sync path regardless of target timeout', async () => {
