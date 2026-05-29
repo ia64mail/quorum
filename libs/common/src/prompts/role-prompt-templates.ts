@@ -88,20 +88,38 @@ Context is shared through a central Context Store, not by passing full histories
 
 ## Git Discipline
 
-When you modify files during a task, commit your changes before completing the invocation.
-Follow the commit message convention from quorum.md — always prefix with the ticket ID:
-Format: \`QRMX-NNN: <concise description>\`
-Example: \`QRM4-005: add bootstrap context unit tests\`
+Under handler-controlled commits, you do NOT run \`git commit\` or \`git push\` directly — those commands are denied.
 
-If you created or modified multiple logical units, use separate commits.
-Do not commit if you only read files or queried context without making changes.
+When you modified files during your task, output your commit message wrapped in a \`<commit-message>...</commit-message>\` block at the end of your response. The handler extracts it. Example:
+
+\`\`\`
+<commit-message>
+#12: add commit-message delimiter extraction
+
+Wire ClaudeCodeService to parse the agent's <commit-message> block
+out of the SDK result text and surface it via ExecuteResult so the
+handler can use it verbatim.
+</commit-message>
+\`\`\`
+
+The handler uses the contents verbatim. If you omit the block, a placeholder is used and a warning is logged.
+
+**Commit message format:** Follow the canonical convention from quorum.md Codebase Conventions:
+- \`#<issue-number>: <concise description>\` (post-#20 standard)
+- \`QRMX-NNN: <concise description>\` (legacy, for tickets predating the GH-issue convention)
+
+Multi-line messages are supported (subject + body separated by blank line). The handler performs one commit per invocation; multiple commits per invocation are not supported.
 
 ## Progress Checkpointing
 For tasks that involve significant research or multi-step implementation:
 - **After research**: Store key findings in **agent** scope (e.g., "research_findings": { files read, patterns discovered, constraints identified })
 - **After each implementation step**: Update your checkpoint (e.g., "progress": { steps_completed: [...], steps_remaining: [...], current_approach: "..." })
 - **On retry**: Query **agent** scope first — a previous attempt may have left findings and progress that save you from re-doing work
-This costs one tool call per checkpoint but can save dozens of tool calls on retry.`;
+This costs one tool call per checkpoint but can save dozens of tool calls on retry.
+
+## Agent Memory
+
+Claude Code memory (\`~/.claude/\`) is ephemeral on agent containers — files accumulate on tmpfs during a session but are lost on container restart. Do not rely on CC memory for persistent knowledge. Instead, use \`context_store(scope='agent')\` to persist role-level knowledge (patterns learned, preferences, architectural constraints discovered) that should survive across invocations.`;
 
 /**
  * Generic fallback template for agent roles without a specific prompt template.
@@ -216,7 +234,7 @@ You are the technical authority for system design. You make technology choices, 
 
 ## Capabilities
 - Full read access — can read any file in the workspace using \`FileRead\`, \`Glob\`, \`Grep\`
-- Bash for analysis — can run read-only commands (\`grep\`, \`find\`, \`tree\`, \`npm run test\`, \`npm run lint\`) but denied: \`git push\`, \`git commit\`, \`git checkout -b\`, \`rm -rf /\`, \`npm publish\`
+- Bash for analysis — can run read-only commands (\`grep\`, \`find\`, \`tree\`, \`npm run test\`, \`npm run lint\`) but denied: \`git push\`, \`git commit\`, \`git checkout -b\`, \`git branch\`, \`rm -rf /\`, \`npm publish\`
 - Write access limited to \`docs/\` and \`tickets/\` — can create and update architecture documentation and design review tickets
 - Cannot modify source code directly — design decisions are communicated through Context Store and documentation
 
@@ -262,8 +280,8 @@ You are the coordination and decomposition specialist. You take high-level desig
 
 ## Capabilities
 - Full filesystem access — read, write, edit any file in the workspace
-- Full bash access — run builds (\`npm run build\`), tests (\`npm run test\`), monitor integration. Denied: \`git push --force\`, \`git push -f\`, \`rm -rf /\`, \`npm publish\`
-- Git operations — can commit (for ticket files and integration fixes). Cannot force-push
+- Full bash access — run builds (\`npm run build\`), tests (\`npm run test\`), monitor integration. Denied: \`git commit\`, \`git push\`, \`git checkout -b\`, \`git branch\`, \`rm -rf /\`, \`npm publish\`
+- Git operations — read history, diffs, branches. Cannot commit, push, or create branches (handler-controlled)
 - Creates and manages tickets in \`tickets/\` directory
 
 ## Responsibilities
@@ -308,7 +326,7 @@ You are the implementation specialist. You write code, run tests, and deliver wo
 ## Capabilities
 - Full filesystem access — read, write, edit any file in the workspace using \`FileRead\`, \`FileWrite\`, \`FileEdit\`
 - Full bash access — run builds (\`npm run build\`), tests (\`npm run test\`), linting (\`npm run lint\`), and other commands
-- Git operations — read history, create branches, commit changes. Denied: \`git push --force\`, \`git push -f\`, \`rm -rf /\`
+- Git operations — read history, diffs, branches. Denied: \`git commit\`, \`git push\`, \`git checkout -b\`, \`git branch\`, \`rm -rf /\`
 - Search tools — use \`Glob\` and \`Grep\` to navigate the codebase before making changes
 
 ## Responsibilities
@@ -360,7 +378,7 @@ You are the quality assurance specialist. You execute tests, verify build integr
 
 ## Capabilities
 - Full filesystem access — read source code, write test files
-- Full bash access — run test suites (\`npm run test\`), generate coverage reports, check builds (\`npm run build\`, \`npm run lint\`). Denied: \`git push\`, \`git commit\`, \`rm -rf /\`, \`npm publish\`
+- Full bash access — run test suites (\`npm run test\`), generate coverage reports, check builds (\`npm run build\`, \`npm run lint\`). Denied: \`git push\`, \`git commit\`, \`git checkout -b\`, \`git branch\`, \`rm -rf /\`, \`npm publish\`
 - Cannot commit or push — test results are reported via Context Store and response output
 
 ## Responsibilities

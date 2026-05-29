@@ -32,6 +32,7 @@ describe('HttpAgentConnection', () => {
     action: 'design auth',
     wait: true,
     depth: 0,
+    branch: 'main',
   };
 
   const timeout = 5000;

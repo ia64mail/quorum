@@ -18,6 +18,7 @@ function makeRequest(overrides: Partial<InvokeRequest> = {}): InvokeRequest {
     action: 'review design',
     wait: true,
     depth: 0,
+    branch: 'main',
     ...overrides,
   };
 }
@@ -327,6 +328,213 @@ describe('MessageBroker', () => {
         broker as unknown as { callChains: Map<string, Set<AgentRole>> }
       ).callChains;
       expect(callChains.size).toBe(0);
+    });
+  });
+
+  describe('branch-in-flight guard', () => {
+    it('should reject concurrent invocations targeting the same branch', async () => {
+      const devConnection = new MockConnection(AgentRole.developer);
+      let resolveFirst!: (v: { success: boolean; result: string }) => void;
+      devConnection.handleFn = () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        });
+      registry.register(devConnection);
+
+      // First invocation starts — holds the lock on 'feature/auth'
+      const first = broker.invoke(
+        makeRequest({
+          correlationId: 'corr-A',
+          target: AgentRole.developer,
+          branch: 'feature/auth',
+        }),
+      );
+
+      // Yield to let first invocation acquire the lock
+      await new Promise((r) => setImmediate(r));
+
+      // Second invocation on the same branch — should be rejected
+      const second = await broker.invoke(
+        makeRequest({
+          correlationId: 'corr-B',
+          target: AgentRole.developer,
+          branch: 'feature/auth',
+        }),
+      );
+
+      expect(second.success).toBe(false);
+      expect(second.error).toContain(
+        "Branch 'feature/auth' is already in-flight",
+      );
+      expect(second.error).toContain('target=developer');
+      expect(second.error).toContain('correlationId=corr-A');
+
+      // Complete first invocation
+      resolveFirst({ success: true, result: 'done' });
+      const firstResult = await first;
+      expect(firstResult.success).toBe(true);
+    });
+
+    it('should allow concurrent invocations targeting different branches', async () => {
+      const devConnection = new MockConnection(AgentRole.developer);
+      const archConnection = new MockConnection(AgentRole.architect);
+      devConnection.handleFn = async () => ({
+        success: true,
+        result: 'dev done',
+      });
+      archConnection.handleFn = async () => ({
+        success: true,
+        result: 'arch done',
+      });
+      registry.register(devConnection);
+      registry.register(archConnection);
+
+      const [first, second] = await Promise.all([
+        broker.invoke(
+          makeRequest({
+            correlationId: 'corr-A',
+            target: AgentRole.developer,
+            branch: 'feature/auth',
+          }),
+        ),
+        broker.invoke(
+          makeRequest({
+            correlationId: 'corr-B',
+            target: AgentRole.architect,
+            branch: 'feature/payments',
+          }),
+        ),
+      ]);
+
+      expect(first.success).toBe(true);
+      expect(first.result).toBe('dev done');
+      expect(second.success).toBe(true);
+      expect(second.result).toBe('arch done');
+    });
+
+    it('should release branch lock after successful completion', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      registry.register(connection);
+
+      await broker.invoke(makeRequest({ branch: 'feature/test' }));
+
+      const branchLocks = (
+        broker as unknown as {
+          branchLocks: Map<
+            string,
+            { correlationId: string; target: AgentRole }
+          >;
+        }
+      ).branchLocks;
+      expect(branchLocks.size).toBe(0);
+    });
+
+    it('should release branch lock after handler error', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async () => {
+        throw new Error('handler crashed');
+      };
+      registry.register(connection);
+
+      const response = await broker.invoke(
+        makeRequest({ branch: 'feature/test' }),
+      );
+
+      expect(response.success).toBe(false);
+      expect(response.error).toBe('handler crashed');
+
+      const branchLocks = (
+        broker as unknown as {
+          branchLocks: Map<
+            string,
+            { correlationId: string; target: AgentRole }
+          >;
+        }
+      ).branchLocks;
+      expect(branchLocks.size).toBe(0);
+    });
+
+    it('should have empty branchLocks map when no invocations are in flight', async () => {
+      const devConnection = new MockConnection(AgentRole.developer);
+      const archConnection = new MockConnection(AgentRole.architect);
+      devConnection.handleFn = async () => ({
+        success: true,
+        result: 'done',
+      });
+      archConnection.handleFn = async () => {
+        throw new Error('arch failed');
+      };
+      registry.register(devConnection);
+      registry.register(archConnection);
+
+      // Run two invocations — one success, one error — on different branches
+      await Promise.all([
+        broker.invoke(
+          makeRequest({
+            correlationId: 'corr-A',
+            target: AgentRole.developer,
+            branch: 'feature/one',
+          }),
+        ),
+        broker.invoke(
+          makeRequest({
+            correlationId: 'corr-B',
+            target: AgentRole.architect,
+            branch: 'feature/two',
+          }),
+        ),
+      ]);
+
+      const branchLocks = (
+        broker as unknown as {
+          branchLocks: Map<
+            string,
+            { correlationId: string; target: AgentRole }
+          >;
+        }
+      ).branchLocks;
+      expect(branchLocks.size).toBe(0);
+    });
+
+    it('should clean up callChains when branch guard rejects', async () => {
+      const devConnection = new MockConnection(AgentRole.developer);
+      let resolveFirst!: (v: { success: boolean; result: string }) => void;
+      devConnection.handleFn = () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        });
+      registry.register(devConnection);
+
+      // First invocation holds the lock
+      const first = broker.invoke(
+        makeRequest({
+          correlationId: 'corr-A',
+          caller: AgentRole.moderator,
+          target: AgentRole.developer,
+          branch: 'feature/auth',
+        }),
+      );
+      await new Promise((r) => setImmediate(r));
+
+      // Second invocation on same branch — rejected by branch guard
+      await broker.invoke(
+        makeRequest({
+          correlationId: 'corr-B',
+          caller: AgentRole.moderator,
+          target: AgentRole.developer,
+          branch: 'feature/auth',
+        }),
+      );
+
+      // Verify rejected caller's callChains entry was cleaned up
+      const callChains = (
+        broker as unknown as { callChains: Map<string, Set<AgentRole>> }
+      ).callChains;
+      expect(callChains.has('corr-B')).toBe(false);
+
+      // Complete first invocation
+      resolveFirst({ success: true, result: 'done' });
+      await first;
     });
   });
 

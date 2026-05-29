@@ -22,6 +22,57 @@ else
 fi
 cp /etc/claude/CLAUDE.md /home/quorum/.claude/CLAUDE.md
 
+# Authenticate gh CLI with the PAT and configure git's credential helper,
+# then strip the raw token from the env so the CC CLI session cannot
+# exfiltrate it via $GH_TOKEN. The token persists on disk at
+# ~/.config/gh/hosts.yml (tmpfs — re-created on each container start).
+if [ -n "${GH_TOKEN:-}" ]; then
+  # gh refuses to persist credentials while GH_TOKEN is in env (it treats the
+  # env var as authoritative). Capture, unset, then pipe — otherwise gh exits
+  # non-zero and `set -euo pipefail` aborts the entrypoint.
+  _token="$GH_TOKEN"
+  unset GH_TOKEN
+  echo "$_token" | gh auth login --with-token
+  unset _token
+  # gh auth setup-git writes the credential helper to ~/.gitconfig by default,
+  # but the rootfs is read_only. Redirect git's global config to a tmpfs path
+  # declared in x-base-security so the write succeeds. The export propagates
+  # to descendant processes of this entrypoint (gh auth setup-git below).
+  # Moderator CC CLI sessions (docker exec) get the credential helper via
+  # git's XDG fallback at ~/.config/git/config — see ticket #27 out-of-scope.
+  mkdir -p /home/quorum/.config/git
+  export GIT_CONFIG_GLOBAL=/home/quorum/.config/git/config
+  gh auth setup-git          # configures git credential helper → gh
+  echo "gh auth: logged in, credential helper configured, GH_TOKEN unset"
+else
+  echo "WARN: GH_TOKEN not set — gh CLI will not be authenticated" >&2
+fi
+
+# Clone the workspace repo on first boot. The moderator's WORKDIR
+# (/mnt/quorum/workspace, set by QRM7-004 at Dockerfile:100) points
+# to the moderator-workspace named volume. If the directory is empty
+# or not a git repo, clone into it. Skip if .git already exists
+# (idempotent across container restarts).
+REPO_URL="${REPO_URL:?REPO_URL must be set for moderator git clone}"
+if [ ! -d /mnt/quorum/workspace/.git ]; then
+  echo "First boot: cloning $REPO_URL into /mnt/quorum/workspace ..."
+  git clone "$REPO_URL" /mnt/quorum/workspace
+  echo "Clone complete"
+else
+  echo "Workspace already initialized (git repo found), skipping clone"
+fi
+
+# Symlink workspace quorum.md into the moderator's user-scope ~/.claude dir
+# so the `@quorum.md` directive at the top of CLAUDE.md resolves. The relative
+# resolution looks alongside CLAUDE.md and the workspace file is only available
+# via the moderator-workspace named volume — this symlink bridges the two.
+# ln -sf is idempotent and survives volume state from prior runs. Placed after
+# the clone block so the symlink target exists on first boot.
+if [ ! -f /mnt/quorum/workspace/quorum.md ]; then
+  echo "WARN: /mnt/quorum/workspace/quorum.md not found — @quorum.md will not resolve" >&2
+fi
+ln -sf /mnt/quorum/workspace/quorum.md /home/quorum/.claude/quorum.md
+
 # CC CLI reads `mcpServers` from ~/.claude.json (user scope), not from
 # ~/.claude/settings.json. It also stores onboarding state, oauth tokens,
 # and per-project tool permissions there. /home/quorum/.claude.json is a

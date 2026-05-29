@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AgentConfigService } from '../config';
 import { ClaudeCodeService } from './claude-code.service';
 import type { ExecuteParams } from './claude-code.types';
+import { FileSessionStore } from './file-session-store';
 
 // ---------------------------------------------------------------------------
 // SDK mock
@@ -135,6 +136,14 @@ describe('ClaudeCodeService', () => {
       providers: [
         ClaudeCodeService,
         { provide: AgentConfigService, useValue: mockConfig },
+        {
+          provide: FileSessionStore,
+          useValue: {
+            append: jest.fn(),
+            load: jest.fn().mockResolvedValue(null),
+            listSubkeys: jest.fn().mockResolvedValue([]),
+          },
+        },
       ],
     }).compile();
 
@@ -336,6 +345,149 @@ describe('ClaudeCodeService', () => {
     expect(typeof callArgs.options.stderr).toBe('function');
   });
 
+  // 5a. SDK env allowlist — GH_TOKEN must NOT reach the subprocess (#15)
+  it('should exclude GH_TOKEN from the SDK subprocess env', async () => {
+    const originalGhToken = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = 'ghp_test_secret_token';
+
+    try {
+      mockQuery.mockReturnValue(
+        generateMessages([initMessage(), successResult()]),
+      );
+
+      await service.execute(baseParams);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: Record<string, string | undefined> };
+      };
+      expect(callArgs.options.env.GH_TOKEN).toBeUndefined();
+    } finally {
+      if (originalGhToken !== undefined) {
+        process.env.GH_TOKEN = originalGhToken;
+      } else {
+        delete process.env.GH_TOKEN;
+      }
+    }
+  });
+
+  // 5b. SDK env allowlist — NestJS-internal vars must NOT reach the subprocess (#15)
+  it('should exclude NestJS-internal vars from the SDK subprocess env', async () => {
+    const saved: Record<string, string | undefined> = {};
+    const internalVars = [
+      'MCP_SERVER_URL',
+      'AGENT_ROLE',
+      'AGENT_CALLBACK_URL',
+      'LOG_LEVEL',
+      'LOG_JSON_DIR',
+    ];
+    for (const key of internalVars) {
+      saved[key] = process.env[key];
+      process.env[key] = 'test-value';
+    }
+
+    try {
+      mockQuery.mockReturnValue(
+        generateMessages([initMessage(), successResult()]),
+      );
+
+      await service.execute(baseParams);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: Record<string, string | undefined> };
+      };
+      for (const key of internalVars) {
+        expect(callArgs.options.env[key]).toBeUndefined();
+      }
+    } finally {
+      for (const key of internalVars) {
+        if (saved[key] !== undefined) {
+          process.env[key] = saved[key];
+        } else {
+          delete process.env[key];
+        }
+      }
+    }
+  });
+
+  // 5c. SDK env allowlist — allowlisted vars are forwarded when set (#15)
+  it('should forward allowlisted env vars to the SDK subprocess', async () => {
+    const saved: Record<string, string | undefined> = {};
+    const allowedVars: Record<string, string> = {
+      HOME: '/home/quorum',
+      USER: 'quorum',
+      SHELL: '/bin/bash',
+      TERM: 'xterm-256color',
+      LANG: 'en_US.UTF-8',
+      GIT_AUTHOR_NAME: 'Test Author',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'Test Committer',
+      GIT_COMMITTER_EMAIL: 'committer@example.com',
+    };
+    for (const [key, value] of Object.entries(allowedVars)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+
+    try {
+      mockQuery.mockReturnValue(
+        generateMessages([initMessage(), successResult()]),
+      );
+
+      await service.execute(baseParams);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: Record<string, string | undefined> };
+      };
+      for (const [key, value] of Object.entries(allowedVars)) {
+        expect(callArgs.options.env[key]).toBe(value);
+      }
+    } finally {
+      for (const key of Object.keys(allowedVars)) {
+        if (saved[key] !== undefined) {
+          process.env[key] = saved[key];
+        } else {
+          delete process.env[key];
+        }
+      }
+    }
+  });
+
+  // 5d. cwd passthrough — uses params.cwd when provided (#11)
+  it('should use params.cwd when provided instead of workspaceDir', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({
+      ...baseParams,
+      cwd: '/var/agent-worktrees/corr-123',
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/var/agent-worktrees/corr-123');
+  });
+
+  // 5e. cwd defaults to workspaceDir when not provided (#11)
+  it('should default cwd to workspaceDir when params.cwd is undefined', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/mnt/quorum/workspace');
+  });
+
   // 6. MCP servers → streaming input
   it('should wrap prompt as AsyncIterable when mcpServers provided', async () => {
     mockQuery.mockReturnValue(
@@ -426,6 +578,77 @@ describe('ClaudeCodeService', () => {
       options: Record<string, unknown>;
     };
     expect(callArgs.options.maxTurns).toBe(60);
+  });
+
+  // 7b. cwd passthrough (#11 worktree-per-invocation)
+  it('should use config workspaceDir as cwd when params.cwd is not set', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute(baseParams);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/mnt/quorum/workspace');
+  });
+
+  // 7c. Explicit cwd overrides config (#11)
+  it('should pass explicit cwd to the SDK when provided', async () => {
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), successResult()]),
+    );
+
+    await service.execute({
+      ...baseParams,
+      cwd: '/var/agent-worktrees/corr-123',
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const callArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(callArgs.options.cwd).toBe('/var/agent-worktrees/corr-123');
+  });
+
+  // 7d. cwd preserved on retry-fresh path (#11)
+  it('should preserve cwd when retrying fresh after resume failure', async () => {
+    mockQuery
+      .mockReturnValueOnce(
+        // eslint-disable-next-line require-yield
+        (async function* () {
+          throw new Error('Session not found');
+        })(),
+      )
+      .mockReturnValueOnce(
+        generateMessages([
+          initMessage('sess-new'),
+          successResult({ session_id: 'sess-new' }),
+        ]),
+      );
+
+    const result = await service.execute({
+      ...baseParams,
+      cwd: '/var/agent-worktrees/corr-456',
+      resume: 'sess-stale',
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+
+    // Both calls should use the same cwd
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const firstCallArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const secondCallArgs = mockQuery.mock.calls[1][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(firstCallArgs.options.cwd).toBe('/var/agent-worktrees/corr-456');
+    expect(secondCallArgs.options.cwd).toBe('/var/agent-worktrees/corr-456');
   });
 
   // 8. Resume parameter — QRM6-BUG-005: passes `resume` + `sessionStore` to SDK
@@ -697,5 +920,124 @@ describe('ClaudeCodeService', () => {
     const [r1, r2] = await Promise.all([p1, p2]);
     expect(r1.success).toBe(false);
     expect(r2.success).toBe(false);
+  });
+
+  // 10. Commit-message extraction (#12)
+  describe('commit-message extraction', () => {
+    it('should extract a single <commit-message> block from the result', async () => {
+      const resultText =
+        'Implementation complete.\n\n<commit-message>\n#12: add commit-message extraction\n</commit-message>';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe('#12: add commit-message extraction');
+        expect(result.result).toBe('Implementation complete.');
+        expect(result.result).not.toContain('commit-message');
+      }
+    });
+
+    it('should leave commitMessage undefined when no block is present', async () => {
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: 'Task completed' }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBeUndefined();
+        expect(result.result).toBe('Task completed');
+      }
+    });
+
+    it('should use the last block when multiple <commit-message> blocks are present', async () => {
+      const resultText =
+        '<commit-message>first attempt</commit-message>\nRevised.\n<commit-message>#12: final message</commit-message>';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe('#12: final message');
+        expect(result.result).not.toContain('commit-message');
+        expect(result.result).toContain('Revised.');
+      }
+    });
+
+    it('should preserve multi-line commit messages verbatim', async () => {
+      const multiLine =
+        '#12: subject line\n\nBody paragraph explaining the change\nin more detail.';
+      const resultText = `Done.\n\n<commit-message>\n${multiLine}\n</commit-message>`;
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe(multiLine);
+        expect(result.result).toBe('Done.');
+      }
+    });
+
+    it('should treat a malformed block (missing close tag) as no block', async () => {
+      const resultText = 'Done.\n\n<commit-message>\n#12: unclosed block';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBeUndefined();
+        expect(result.result).toBe(resultText);
+      }
+    });
+
+    it('should preserve surrounding text when block is in the middle', async () => {
+      const resultText =
+        'Before block.\n\n<commit-message>#12: mid-text</commit-message>\n\nAfter block.';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe('#12: mid-text');
+        expect(result.result).toContain('Before block.');
+        expect(result.result).toContain('After block.');
+        expect(result.result).not.toContain('commit-message');
+      }
+    });
   });
 });

@@ -109,7 +109,18 @@ npm run test
 npm run test:watch
 npm run test:e2e
 
-# Docker — builds and starts all containers with correct host uid/gid
+# First-time setup — copy .env.example and fill in:
+#   ANTHROPIC_API_KEY        (agents)
+#   CLAUDE_CODE_OAUTH_TOKEN  (moderator, from `claude setup-token`)
+#   GH_TOKEN                 (fine-grained PAT for gh + git in every container)
+#   REPO_URL                 (HTTPS clone URL of the target repo)
+cp .env.example .env
+
+# Docker — builds and starts all containers with correct host uid/gid.
+# On first boot, the moderator and each agent clone REPO_URL into their own
+# named volumes and authenticate gh/git via GH_TOKEN. There is no host
+# workspace bind mount — all containers sync through git push/pull, and each
+# agent invocation runs inside an isolated git worktree.
 ./scripts/start.sh
 ./scripts/start.sh -d     # detached mode
 

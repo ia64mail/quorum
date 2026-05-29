@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
   CanUseTool,
@@ -21,6 +21,12 @@ import { RolePromptService } from '../prompts';
 import { McpToolBridgeService } from './mcp-tool-bridge.service';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/** Base directory for per-invocation worktrees. Each invocation gets a
+ *  subdirectory named by its correlationId. Uses tmpfs in production
+ *  (self-healing on container restart). */
+const WORKTREE_BASE = '/var/agent-worktrees';
 
 /**
  * Adapts the synchronous {@link ToolGuardResult} from the role guard hook
@@ -92,6 +98,69 @@ export class InvocationHandler {
   }
 
   private async runInvocation(request: InvokeRequest): Promise<InvokeResponse> {
+    const worktreePath = `${WORKTREE_BASE}/${request.correlationId}`;
+    const repoDir = this.config.agent.workspaceDir;
+
+    // --- Worktree setup ---
+    try {
+      await execAsync('git fetch origin', { cwd: repoDir });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `git fetch failed: correlationId=${request.correlationId} ${msg}`,
+      );
+      return {
+        success: false,
+        error: `Worktree creation failed: git fetch origin: ${msg}`,
+      };
+    }
+
+    try {
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', worktreePath, request.branch],
+        { cwd: repoDir },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `git worktree add failed: correlationId=${request.correlationId} ${msg}`,
+      );
+      return {
+        success: false,
+        error: `Worktree creation failed: ${msg}`,
+      };
+    }
+
+    // --- Symlink /app/node_modules into worktree ---
+    try {
+      await execFileAsync('ln', [
+        '-s',
+        '/app/node_modules',
+        `${worktreePath}/node_modules`,
+      ]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `node_modules symlink failed: correlationId=${request.correlationId} ${msg}`,
+      );
+      // Clean up the worktree we just created before returning error
+      try {
+        await execFileAsync(
+          'git',
+          ['worktree', 'remove', '--force', worktreePath],
+          { cwd: repoDir },
+        );
+      } catch {
+        /* best-effort cleanup */
+      }
+      return {
+        success: false,
+        error: `Worktree setup failed: node_modules symlink: ${msg}`,
+      };
+    }
+
+    // --- SDK execution (finally block ensures cleanup) ---
     try {
       const prompt = this.buildPrompt(request);
       const systemPrompt = this.promptService.getSystemPrompt(request.caller);
@@ -101,6 +170,7 @@ export class InvocationHandler {
       const result = await this.claudeCode.execute({
         prompt,
         systemPrompt,
+        cwd: worktreePath,
         mcpServers: this.bridge.createBridge(request),
         plugins: this.permissions.getPlugins(),
         disallowedTools: this.permissions.getDisallowedTools(),
@@ -109,15 +179,15 @@ export class InvocationHandler {
       });
 
       this.logResult(request, result);
-      await this.checkUncommittedChanges(request.correlationId);
 
-      return result.success
+      const response: InvokeResponse = result.success
         ? {
             success: true,
             result: result.result,
             totalCostUsd: result.totalCostUsd,
             durationMs: result.durationMs,
             sessionId: result.sessionId,
+            commitMessage: result.commitMessage,
           }
         : {
             success: false,
@@ -125,12 +195,40 @@ export class InvocationHandler {
             totalCostUsd: result.totalCostUsd,
             durationMs: result.durationMs,
           };
+
+      if (result.success) {
+        try {
+          await this.commitAndPush(worktreePath, request, response);
+        } catch (commitErr) {
+          const msg =
+            commitErr instanceof Error ? commitErr.message : String(commitErr);
+          response.success = false;
+          response.error = `Commit/push failed: ${msg}`;
+        }
+      }
+
+      return response;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(
         `SDK execution failed: correlationId=${request.correlationId} ${message}`,
       );
       return { success: false, error: `SDK execution failed: ${message}` };
+    } finally {
+      // --- Worktree cleanup (must run on success AND error) ---
+      try {
+        await execFileAsync(
+          'git',
+          ['worktree', 'remove', '--force', worktreePath],
+          { cwd: repoDir },
+        );
+      } catch (cleanupErr) {
+        const msg =
+          cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        this.logger.warn(
+          `Worktree cleanup failed: correlationId=${request.correlationId} ${msg}`,
+        );
+      }
     }
   }
 
@@ -217,24 +315,55 @@ export class InvocationHandler {
     return lines.join('\n');
   }
 
-  private async checkUncommittedChanges(
-    correlationId: string,
-  ): Promise<boolean> {
-    try {
-      const { stdout } = await execAsync('git status --porcelain', {
-        cwd: this.config.agent.workspaceDir,
-      });
-      if (stdout.trim()) {
-        this.logger.warn(
-          `Uncommitted changes after invocation: correlationId=${correlationId}\n${stdout.trim()}`,
-        );
-        return true;
-      }
-      return false;
-    } catch {
-      // git not available or not a repo — skip silently
-      return false;
+  private async commitAndPush(
+    cwd: string,
+    request: InvokeRequest,
+    response: InvokeResponse,
+  ): Promise<void> {
+    const { stdout: status } = await execAsync('git status --porcelain', {
+      cwd,
+    });
+
+    if (!status.trim()) {
+      this.logger.log(
+        `No changes to commit after invocation: correlationId=${request.correlationId}`,
+      );
+      return;
     }
+
+    let message: string;
+    if (response.commitMessage) {
+      message = response.commitMessage;
+    } else {
+      const corrIdShort = request.correlationId.substring(0, 8);
+      message = `(no-message/${corrIdShort}): changes from ${request.target} invocation`;
+      this.logger.warn(
+        `Agent did not provide commitMessage: correlationId=${request.correlationId} — using fallback`,
+      );
+    }
+
+    await execAsync('git add -A', { cwd });
+    await execAsync(`git commit -m ${this.shellQuote(message)}`, { cwd });
+
+    try {
+      await execFileAsync('git', ['push', 'origin', request.branch], { cwd });
+    } catch (pushErr) {
+      const stderr =
+        pushErr instanceof Error ? pushErr.message : String(pushErr);
+      throw new Error(`push rejected: ${stderr}`);
+    }
+
+    const { stdout: sha } = await execAsync('git rev-parse --short HEAD', {
+      cwd,
+    });
+    this.logger.log(
+      `Committed and pushed: correlationId=${request.correlationId} branch=${request.branch} sha=${sha.trim()}`,
+    );
+  }
+
+  /** Wraps a string in single quotes, escaping embedded single quotes. */
+  private shellQuote(s: string): string {
+    return "'" + s.replace(/'/g, "'\\''") + "'";
   }
 
   private logResult(request: InvokeRequest, result: ExecuteResult): void {
@@ -245,6 +374,14 @@ export class InvocationHandler {
           `turns=${result.numTurns} cost=$${result.totalCostUsd.toFixed(4)} ` +
           `duration=${result.durationMs}ms`,
       );
+      // Silent-fallback detection: resume was requested but the SDK started
+      // a fresh session instead of resuming the prior one.
+      if (request.sessionId && result.sessionId !== request.sessionId) {
+        this.logger.warn(
+          `Session resume silent fallback: correlationId=${request.correlationId} ` +
+            `requested=${request.sessionId} got=${result.sessionId}`,
+        );
+      }
     } else {
       this.logger.warn(
         `Invocation failed: ${base} error="${result.error}" ` +

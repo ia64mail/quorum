@@ -1,13 +1,13 @@
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import {
   query,
-  InMemorySessionStore,
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import { AgentConfigService } from '../config';
 import type { ExecuteParams, ExecuteResult } from './claude-code.types';
+import { FileSessionStore } from './file-session-store';
 import { createObservabilityHooks } from './sdk-hooks.factory';
 
 // QRM6-BUG-012 follow-up: bypass the SDK's broken binary picker (sdk.mjs `N7`
@@ -17,13 +17,54 @@ import { createObservabilityHooks } from './sdk-hooks.factory';
 // in the Dockerfile.
 const CLAUDE_BINARY_PATH = `/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-${process.arch}/claude`;
 
+/**
+ * Allowlist of env vars forwarded to the CC CLI subprocess.
+ * Everything NOT on this list is excluded — this is the primary defense
+ * against leaking secrets (GH_TOKEN, ANTHROPIC_API_KEY from env, etc.)
+ * into the model-visible subprocess environment.
+ */
+const SDK_ENV_ALLOWLIST: readonly string[] = [
+  // System essentials
+  'HOME',
+  'PATH',
+  'USER',
+  'SHELL',
+  'HOSTNAME',
+  // Locale & terminal
+  'TERM',
+  'LANG',
+  'LC_ALL',
+  // Runtime
+  'NODE_ENV',
+  'TMPDIR',
+  'TZ',
+  // Git identity
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+] as const;
+
+/** Pick only allowlisted keys from process.env, skipping undefined values. */
+function buildSdkEnv(allowlist: readonly string[]): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of allowlist) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key]!;
+    }
+  }
+  return env;
+}
+
 @Injectable()
 export class ClaudeCodeService implements OnApplicationShutdown {
   private readonly logger = new Logger(ClaudeCodeService.name);
   private readonly activeControllers = new Set<AbortController>();
-  private readonly sessionStore = new InMemorySessionStore();
 
-  constructor(private readonly config: AgentConfigService) {}
+  constructor(
+    private readonly config: AgentConfigService,
+    private readonly sessionStore: FileSessionStore,
+  ) {}
 
   async execute(params: ExecuteParams): Promise<ExecuteResult> {
     const controller = params.abortController ?? new AbortController();
@@ -87,7 +128,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     const gen = query({
       prompt,
       options: {
-        cwd: this.config.agent.workspaceDir,
+        cwd: params.cwd ?? this.config.agent.workspaceDir,
         model: this.config.anthropic.model,
         pathToClaudeCodeExecutable: CLAUDE_BINARY_PATH,
         // On resume, the resumed session already carries the original system
@@ -101,7 +142,7 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         settingSources: ['project'],
         includePartialMessages: false,
         env: {
-          ...process.env,
+          ...buildSdkEnv(SDK_ENV_ALLOWLIST),
           ANTHROPIC_API_KEY: this.config.anthropic.apiKey,
         },
         ...(params.maxTurns !== undefined ? { maxTurns: params.maxTurns } : {}),
@@ -202,13 +243,16 @@ export class ClaudeCodeService implements OnApplicationShutdown {
 
       case 'result':
         if (message.subtype === 'success') {
+          const { message: commitMessage, stripped } =
+            ClaudeCodeService.extractCommitMessage(message.result);
           return {
             success: true,
-            result: message.result,
+            result: stripped,
             sessionId: sessionId ?? message.session_id,
             durationMs: message.duration_ms,
             totalCostUsd: message.total_cost_usd,
             numTurns: message.num_turns,
+            ...(commitMessage !== undefined ? { commitMessage } : {}),
           };
         }
         return {
@@ -222,6 +266,32 @@ export class ClaudeCodeService implements OnApplicationShutdown {
       default:
         return null;
     }
+  }
+
+  /**
+   * Extract a `<commit-message>...</commit-message>` block from SDK result text.
+   * If multiple blocks are present, the last one wins (agent may revise mid-stream).
+   * The block is stripped from the returned text so consumers don't see metadata.
+   */
+  private static extractCommitMessage(text: string): {
+    message?: string;
+    stripped: string;
+  } {
+    const matches = [
+      ...text.matchAll(/<commit-message>([\s\S]*?)<\/commit-message>/gi),
+    ];
+
+    if (matches.length === 0) {
+      return { stripped: text };
+    }
+
+    const message = matches[matches.length - 1][1].trim();
+    const stripped = text
+      .replace(/<commit-message>[\s\S]*?<\/commit-message>/gi, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return { message: message || undefined, stripped };
   }
 }
 

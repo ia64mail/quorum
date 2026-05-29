@@ -117,14 +117,21 @@ quorum/
 
 - Node.js
 - Docker & Docker Compose
-- Anthropic API key
+- **Anthropic API key** — agent LLM, metered API billing (`ANTHROPIC_API_KEY`)
+- **Claude Code OAuth token** — moderator subscription auth, flat-rate billing (`CLAUDE_CODE_OAUTH_TOKEN`). Generate by running `claude setup-token` locally; requires a Claude.ai Pro/Max/Team/Enterprise seat
+- **GitHub fine-grained PAT** (`GH_TOKEN`) — scoped to the target repo with `Contents: read+write`, `Pull Requests: read+write`, `Metadata: read`. Used by `gh` and git in every container for clone, fetch, push, and PR operations
+- **Target repo URL** (`REPO_URL`) — HTTPS clone URL of the project Quorum will work on. Can be the Quorum repo itself when self-hosting
 
 ### Setup
 
 ```bash
 npm install
 cp .env.example .env
-# Edit .env — set ANTHROPIC_API_KEY and WORKSPACE_PATH
+# Edit .env and set:
+#   ANTHROPIC_API_KEY        sk-ant-…           (agents)
+#   CLAUDE_CODE_OAUTH_TOKEN  sk-ant-oat01-…     (moderator)
+#   GH_TOKEN                 github_pat_…       (gh CLI + git auth, all containers)
+#   REPO_URL                 https://github.com/<owner>/<repo>.git
 ```
 
 ### Development
@@ -140,15 +147,14 @@ npm run test:e2e           # Run end-to-end tests
 ### Docker
 
 ```bash
-export WORKSPACE_PATH=/path/to/your/project
 ./scripts/start.sh        # build & start all containers
 ./scripts/start.sh -d     # detached mode
 ./scripts/moderator.sh    # attach to the running moderator (Claude Code CLI)
 ```
 
-The startup script exports `HOST_UID`/`HOST_GID` from the current user so container bind-mounts (logs, workspace) have correct file ownership, then runs `docker compose build` and `docker compose up`. Extra args are forwarded to both commands.
+The startup script exports `HOST_UID`/`HOST_GID` from the current user so bind-mounted log files have correct ownership, then runs `docker compose build` and `docker compose up`. Extra args are forwarded to both commands.
 
-Starts the MCP server, the moderator container (Claude Code CLI), the agent containers, and the OpenSearch + Ollama infrastructure used by the Context Store. Agents register on startup and are ready to receive invocations.
+Starts the MCP server, the moderator container (Claude Code CLI), the agent containers, and the OpenSearch + Ollama infrastructure used by the Context Store. There is **no host bind mount of your project** — on first boot the moderator and each agent container authenticate `gh`/git from `GH_TOKEN` and `git clone $REPO_URL` into their own named volumes. All containers operate on their own clones and synchronize through the GitHub remote via `git push`/`git pull`; each agent invocation runs inside an isolated `git worktree` for the requested branch. Agents register with the MCP server on startup and are ready to receive invocations.
 
 ## Documentation
 

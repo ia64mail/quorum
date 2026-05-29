@@ -28,9 +28,13 @@ import {
 import { McpServerConfigService } from '../config';
 
 /**
- * Server-side long-poll ceiling (ms) for `invoke_agent` and `wait_invocation`
- * (QRM7-017). Must be under undici's 5 min `bodyTimeout` (300 000 ms) so each
+ * Server-side long-poll ceiling (ms) for `wait_invocation` (QRM7-017).
+ * Must be under undici's 5 min `bodyTimeout` (300 000 ms) so each
  * POST completes before the client's HTTP stack kills the response body.
+ *
+ * `invoke_agent` always returns `{ status: "pending" }` immediately for
+ * long-role dispatches (#47) — only `wait_invocation` races against this
+ * ceiling.
  */
 export const LONG_POLL_CEILING_MS = 270_000; // 4 min 30 s
 
@@ -306,9 +310,10 @@ export class McpService implements OnModuleInit {
             .describe('Block until target responds'),
           correlationId: z
             .string()
+            .uuid()
             .optional()
             .describe(
-              'Correlation ID for call chain tracing. Auto-injected from session state if omitted, generated if neither available.',
+              'Correlation ID for call chain tracing (UUID). Auto-injected from session state if omitted, generated if neither available.',
             ),
           depth: z
             .number()
@@ -321,6 +326,12 @@ export class McpService implements OnModuleInit {
             .optional()
             .describe(
               'Resume a prior SDK session. Auto-injected from session cache if omitted. Pass empty string to force a fresh session.',
+            ),
+          branch: z
+            .string()
+            .min(1)
+            .describe(
+              'Target git branch for this invocation. The agent will work in a dedicated worktree checked out to this branch.',
             ),
         },
       },
@@ -375,16 +386,18 @@ export class McpService implements OnModuleInit {
           wait: args.wait,
           depth: args.depth,
           sessionId,
+          branch: args.branch,
         };
 
         const handlerStart = Date.now();
 
-        // QRM7-017: Caller-aware long-poll racing.
+        // #47: Always-pending dispatch for long-role targets.
         // When the moderator targets a role whose ROLE_TIMEOUTS exceeds the
-        // long-poll ceiling (4m30s), race the broker against a server timer.
-        // If the broker wins, return inline (zero overhead — identical to
-        // today's sync path). If the timer wins, park the invocation in the
-        // InvocationResultStore and return { status: "pending" }.
+        // long-poll ceiling (4m30s), park the invocation immediately and
+        // return { status: "pending", invocationId }. The moderator then
+        // calls wait_invocation(invocationId) to receive the actual result.
+        // This eliminates the 0–270 s recovery gap from the old
+        // raceAgainstCeiling inline fast-path.
         const roleTimeout = ROLE_TIMEOUTS[target];
         const useLongPoll =
           callerRole === AgentRole.moderator &&
@@ -395,25 +408,7 @@ export class McpService implements OnModuleInit {
           const invocationId = randomUUID();
           const deliveryPromise = this.messageBroker.invoke(request);
 
-          const winner = await this.raceAgainstCeiling(deliveryPromise);
-
-          if (winner.type === 'result') {
-            // Broker resolved within the ceiling — sync path
-            const response = winner.response;
-            this.updateSessionCache(state, target, response);
-            this.logger.debug(
-              `invoke_agent returning (long-poll sync): correlationId=${correlationId} ` +
-                `target=${args.target} success=${response.success} ` +
-                `handlerMs=${Date.now() - handlerStart}`,
-            );
-            return {
-              content: [
-                { type: 'text' as const, text: JSON.stringify(response) },
-              ],
-            };
-          }
-
-          // Timer won — park the invocation
+          // Park the invocation immediately — no race, no inline fast-path
           const record: InvocationRecord = {
             invocationId,
             callerRole,
@@ -1075,8 +1070,8 @@ export class McpService implements OnModuleInit {
       'new_conversation',
       {
         description:
-          'Start a new conversation scope. Mints a fresh correlation ID for the current user turn ' +
-          'and clears cached agent sessions so subsequent invocations start fresh. ' +
+          'Start a new conversation scope. Mints a fresh correlation ID for the current user turn. ' +
+          'Cached agent session IDs persist across calls for cross-turn resume; pass `sessionId: ""` to `invoke_agent` to force a fresh session. ' +
           'Call this at the beginning of each new user turn.',
         inputSchema: {
           description: z
@@ -1096,31 +1091,35 @@ export class McpService implements OnModuleInit {
             `new_conversation: no session state found — returning correlationId=${correlationId} ` +
               'but it will not be auto-injected into subsequent calls',
           );
+          const reminder =
+            'Run git fetch origin && git pull --ff-only before reading any workspace files — agent commits since your last turn may not be in your local clone.';
+
           return {
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({ correlationId }),
+                text: JSON.stringify({ correlationId, reminder }),
               },
             ],
           };
         }
 
-        const clearedSessions = state.agentSessions.size;
         state.correlationId = correlationId;
-        state.agentSessions.clear();
 
         this.logger.log(
           `new_conversation: correlationId=${correlationId}` +
             `${args.description ? ` description="${args.description}"` : ''}` +
-            ` clearedSessions=${clearedSessions}`,
+            ` cachedSessions=${state.agentSessions.size}`,
         );
+
+        const reminder =
+          'Run git fetch origin && git pull --ff-only before reading any workspace files — agent commits since your last turn may not be in your local clone.';
 
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ correlationId }),
+              text: JSON.stringify({ correlationId, reminder }),
             },
           ],
         };

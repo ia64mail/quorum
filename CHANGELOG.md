@@ -4,6 +4,44 @@ All notable changes to Quorum are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely — section names are adapted to the project's needs (New Features, Bug Fixes, Documentation, Internal / Other Changes). Each entry is a one-line summary; for full milestone narrative, follow the cross-reference to the matching release note in [`releases/`](releases/).
 
+## [v0.8.0] (QRM8) — 2026-05-29 — Workspace Isolation
+
+Full milestone notes: [releases/RELEASE-QRM8.md](releases/RELEASE-QRM8.md)
+
+### New Features
+
+- **Git worktree-per-invocation isolation** (#11) — each agent invocation creates an isolated worktree at `/var/agent-worktrees/<correlationId>` on the target branch; SDK subprocess runs there instead of the shared workspace; cleanup in `finally` block eliminates cross-invocation file corruption.
+- **Handler-controlled commit and push** (#12) — `git commit` and `git push` removed from the SDK loop; `InvocationHandler` extracts a `<commit-message>` delimiter from the agent's response, commits after SDK exit, and pushes via gh credential helper; all roles now deny direct git commit/push/checkout-b.
+- **Branch-in-flight guard** (#13) — `MessageBroker` prevents two concurrent invocations from targeting the same branch; `branchLocks` map mirrors `callChains` lifecycle with descriptive error on collision.
+- **Moderator standalone git client** (#14) — moderator's workspace bind mount replaced with a git clone on a named volume; `new_conversation` returns a `reminder` field instructing `git pull` before reading files.
+- **FileSessionStore on named volumes** (#10) — `InMemorySessionStore` replaced with JSONL-backed `FileSessionStore` on per-role Docker volumes; cross-restart session resume is now durable; cross-turn resume is the default (`agentSessions.clear()` removed from `new_conversation`).
+- **PAT wiring and SDK env filtering** (#15) — fine-grained GitHub PAT wired through Docker entrypoints; SDK subprocess env uses an allowlist that excludes `GH_TOKEN`; gh credential helper handles clone/push auth transparently.
+- **Always-pending long-role dispatch** (#47) — `invoke_agent` for long-role targets always returns `{status: "pending", invocationId}` immediately, collapsing the 0–270 s recovery blind spot from QRM7's `raceAgainstCeiling` approach.
+
+### Bug Fixes
+
+- **gh auth env-ordering in entrypoints** (#27) — `GH_TOKEN` captured and unset before piping to `gh auth login --with-token`; `GIT_CONFIG_GLOBAL` redirected to tmpfs to avoid read-only `~/.gitconfig` write failure.
+- **Agent plugin never installed** (#29) — `code-review` plugin seeded to agent tmpfs in entrypoint; 109 prior teamlead invocations had fallen back to manual prose review.
+- **Tool-guard rejects namespaced plugin skills** (#31) — namespace prefix stripped before allowlist lookup; plugin path repointed from masked workspace to entrypoint-seeded tmpfs.
+- **correlationId shell-injection risk** (#39) — `z.string().uuid()` validation added to correlationId in MCP tool schema and InvokeRequest; 3 `execAsync` calls converted to `execFileAsync` (argv form).
+- **Moderator workspace volume ownership** (#42) — `/mnt/quorum/workspace` added to Dockerfile moderator stage `mkdir`/`chown` block for correct first-mount ownership.
+- **Worktree missing node_modules** (#45) — `/app/node_modules` symlinked into each worktree after creation; enables `npm run build/lint/test` from worktree cwd.
+
+### Internal / Other Changes
+
+- **Agent memory redirected to context store** (#16) — prompt-only change adding "Agent Memory" section to `SYSTEM_PREAMBLE`; CC memory writes on agent tmpfs accepted as ephemeral; persistent knowledge directed to `context_store(scope='agent')`.
+- **MCP server bind mount commented out** (#17) — workspace bind mount on mcp-server service commented with debug note; `MCP_WORKSPACE_DIR` env var dropped; `?? '.'` default handles the missing env under OpenSearch backend.
+- **PR-based workflow bootstrap** (#20) — gh CLI installed in all containers; `quorum.md` gains GitHub Workflow section with `#<N>` commit format, branch naming, and PR lifecycle conventions; `@quorum.md` symlink seeded in moderator entrypoint.
+
+### Documentation
+
+- **`quorum.md`** — GitHub Workflow section (branch naming, PR lifecycle, `#<N>` commit format), Moderator role section, code-review PR comment conventions, PR verdict comment requirement.
+- **`docker/moderator/CLAUDE.md`** — cross-turn session resume default, mandatory `branch` parameter, `git pull` turn-start discipline, credential-path deny rules, always-pending dispatch + `wait_invocation` rule.
+- **`CLAUDE.md`** — updated for QRM8 workspace model (worktrees, named volumes, `REPO_URL`, `GH_TOKEN`).
+- **`README.md`** — refreshed for QRM8 workspace model; host bind-mount references removed.
+
+---
+
 ## [v0.7.0] (QRM7) — 2026-05-15 — Stabilization
 
 Full milestone notes: [releases/RELEASE-QRM7.md](releases/RELEASE-QRM7.md)
@@ -209,6 +247,7 @@ Full milestone notes: [releases/RELEASE-QRM1.md](releases/RELEASE-QRM1.md)
 - **`docs/context-management.md`** + **`docs/context-store.md`** (new) — Context Store concepts and InMemoryStore reference.
 - **`docs/smoke-test-runbook.md`** (new) — 8 scenarios for end-to-end validation.
 
+[v0.8.0]: releases/RELEASE-QRM8.md
 [v0.7.0]: releases/RELEASE-QRM7.md
 [v0.6.0-beta]: releases/RELEASE-QRM6.md
 [v0.5.0-beta]: releases/RELEASE-QRM5.md

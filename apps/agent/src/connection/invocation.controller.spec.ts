@@ -13,12 +13,13 @@ describe('InvocationController', () => {
   let controller: InvocationController;
 
   const validBody = {
-    correlationId: 'corr-1',
+    correlationId: '550e8400-e29b-41d4-a716-446655440000',
     caller: AgentRole.moderator,
     target: AgentRole.architect,
     action: 'design API',
     wait: true,
     depth: 0,
+    branch: 'main',
   };
 
   beforeEach(async () => {

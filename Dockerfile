@@ -44,9 +44,23 @@ WORKDIR /app
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git bash ripgrep curl jq openssh-client ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+# node:*-bookworm-slim has neither curl nor ca-certificates. Install them first
+# so the GitHub CLI keyring download can succeed; then add the upstream apt
+# source + pin and install gh ≥ 2.92.0 (Debian's 2.23.0 is too old).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+      https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+ && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
+      > /etc/apt/preferences.d/github-cli \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+    git gh bash ripgrep jq openssh-client \
+ && rm -rf /var/lib/apt/lists/*
 
 # Bookworm ships groupmod/usermod — rename default `node` user and adjust uid/gid to match host
 RUN groupmod -n quorum -g ${HOST_GID} node && \
@@ -67,20 +81,18 @@ COPY --from=builder --chown=quorum:quorum /app/package*.json ./
 RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
-    /mnt/quorum/workspace/.claude/plugins \
+      /var/agent-repo /var/agent-worktrees \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
-    /mnt/quorum/workspace/.claude \
+      /var/agent-repo /var/agent-worktrees \
  && ln -s /tmp/.claude.json /home/quorum/.claude.json
 
-# Vendor code-review plugin (read-only rootfs prevents runtime installs).
-# Source: https://github.com/anthropics/claude-plugins-official/tree/main/plugins/code-review
-COPY --chown=quorum:quorum docker/plugins/code-review /mnt/quorum/workspace/.claude/plugins/code-review
-
-ENV PATH="/mnt/quorum/workspace/node_modules/.bin:$PATH"
+# Bake the agent entrypoint (gh auth bootstrap).
+COPY --chown=quorum:quorum docker/agent/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 USER quorum
 
-CMD ["sh", "-c", "mkdir -p /home/quorum/.claude/debug && exec node dist/main.js"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # --- Runtime: moderator (Claude Code CLI + MCP client config) ---
 FROM node:24-bookworm-slim AS moderator
@@ -90,9 +102,23 @@ WORKDIR /mnt/quorum/workspace
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git bash ripgrep curl jq openssh-client ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+# node:*-bookworm-slim has neither curl nor ca-certificates. Install them first
+# so the GitHub CLI keyring download can succeed; then add the upstream apt
+# source + pin and install gh ≥ 2.92.0 (Debian's 2.23.0 is too old).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && curl -fsSL -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+      https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+ && chmod 0644 /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && test -s /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && printf 'Package: gh\nPin: release o=gh\nPin-Priority: 1000\n' \
+      > /etc/apt/preferences.d/github-cli \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+    git gh bash ripgrep jq openssh-client \
+ && rm -rf /var/lib/apt/lists/*
 
 # Bookworm ships groupmod/usermod — rename default `node` user and adjust uid/gid to match host
 RUN groupmod -n quorum -g ${HOST_GID} node && \
@@ -101,10 +127,8 @@ RUN groupmod -n quorum -g ${HOST_GID} node && \
 # Install Claude Code CLI globally (pinned version from QRM6-001 spike)
 RUN npm install -g @anthropic-ai/claude-code@2.1.126
 
-RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude \
-    /mnt/quorum/workspace/.claude /etc/claude \
- && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
-    /mnt/quorum/workspace/.claude /etc/claude \
+RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude /etc/claude /mnt/quorum/workspace \
+ && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude /etc/claude /mnt/quorum/workspace \
  && ln -s /home/quorum/.claude/_claude.json /home/quorum/.claude.json
 
 # Bake settings template and moderator prompt into a read-only path; entrypoint copies them to tmpfs at runtime.

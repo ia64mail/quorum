@@ -263,7 +263,7 @@ All read methods perform **lazy TTL expiration** — there is no background clea
 
 ### File Persistence
 
-Context is persisted to a `quorum.context` JSON file in the workspace directory. This survives container restarts without requiring an external database.
+Context is persisted to a `quorum.context` JSON file at `contextStoreConfig.contextStorePath` — `$CONTEXT_STORE_PATH` if set, otherwise `${MCP_WORKSPACE_DIR:-.}/quorum.context`. Under the QRM8 docker-compose setup the mcp-server has no workspace bind mount and `MCP_WORKSPACE_DIR` is unset, so the default resolves to `/app/quorum.context` (the mcp-server's WORKDIR). The InMemoryStore backend is dev/test only — the production deployment runs `CONTEXT_STORE_BACKEND=opensearch`, in which case this code path is not loaded at all and no `quorum.context` file is created. File persistence survives container restarts without requiring an external database.
 
 **Serialization format**: JSON array of `[compositeKey, ContextItem]` tuples (round-trips with `new Map()`).
 
@@ -289,12 +289,14 @@ The **atomic write pattern** (tmp + rename) prevents partial/corrupt writes if t
 
 **Flow:**
 1. Check idempotency: if OpenSearch index already has records, skip
-2. Read `quorum.context` JSON file (same format as InMemoryStore persistence)
+2. Read `quorum.context` JSON file from `contextStoreConfig.contextStorePath` (same format as InMemoryStore persistence)
 3. Filter out expired records
 4. For each valid record: compute `embeddingText` via `toEmbeddingText()`, index to OpenSearch (no `embedding` vector — left for pipeline backfill)
 5. Preserve the `quorum.context` file as backup (not deleted)
 
 **Error handling**: Outer try/catch logs but does not throw — system starts even if migration fails. Per-record errors are logged and skipped.
+
+**Status under QRM8.** The migration is a one-shot bridge that was needed when the project was running InMemoryStore (with a host workspace bind mount providing the `quorum.context` source file) and then switched to OpenSearch. After QRM8 #17 removed the mcp-server workspace bind mount, the default path resolves to `/app/quorum.context` — which does not exist in the container. The ENOENT path in step 2 makes the service a no-op on every boot, which is the intended steady state. The code path is retained as a debug escape hatch for ad-hoc migrations.
 
 **Module init ordering** ensures migration runs before embedding backfill: `OpenSearchSetupService` (index creation) → `MigrationService` (data import) → `EmbeddingPipelineService` (vector backfill).
 
@@ -350,8 +352,8 @@ When `backend=inmemory`, `OpenSearchModule` and `EmbeddingModule` are **not impo
 
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|
-| `CONTEXT_STORE_PATH` | `${MCP_WORKSPACE_DIR}/quorum.context` | File persistence path (InMemoryStore; also read by MigrationService for import) |
-| `MCP_WORKSPACE_DIR` | `.` (current directory) | Workspace root |
+| `CONTEXT_STORE_PATH` | `${MCP_WORKSPACE_DIR:-.}/quorum.context` | Direct override for the file path used by the InMemoryStore backend and by MigrationService's source-file read. Dev/test only — not consumed under `CONTEXT_STORE_BACKEND=opensearch`. |
+| `MCP_WORKSPACE_DIR` | `.` (mcp-server WORKDIR — `/app`) | Used only as the base for the `CONTEXT_STORE_PATH` default. Not set in `docker-compose.yml` since QRM8 #17 (the workspace bind mount was removed); the default resolves to `/app` in the running container. |
 
 ### Context Query Defaults
 

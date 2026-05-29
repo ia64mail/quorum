@@ -8,13 +8,13 @@ Quorum is a multi-agent AI orchestration system for semi-autonomous software dev
 
 ```mermaid
 graph TB
-    subgraph "Host System"
-        HV[("Target Project<br/>/path/to/project")]
-    end
+    GH[("GitHub Remote<br/>$REPO_URL")]
 
     subgraph "Docker Compose Network"
         subgraph "Moderator Container"
             MOD[Claude Code CLI]
+            MODREPO[("moderator-workspace<br/>git clone")]
+            MOD -.- MODREPO
         end
 
         subgraph "MCP Server Container"
@@ -36,10 +36,13 @@ graph TB
         subgraph "Agent Containers (Hardened)"
             A1[Architect Agent]
             A2[Team Lead Agent]
-            A3[Developer Agent 1]
-            A4[Developer Agent N]
-            A5[QA Agent]
-            A6[Product Owner Agent]
+            A3[Developer Agent]
+            A4[QA Agent]
+            A5[Product Owner Agent]
+            AREPO[("per-role<br/>agent-repo")]
+            AWT[("per-invocation<br/>worktree (tmpfs)")]
+            A1 -.- AREPO
+            AREPO -.->|"git worktree add"| AWT
         end
 
         CTX -->|"hybrid search + storage"| OS
@@ -51,18 +54,13 @@ graph TB
         A3 <-->|Streamable HTTP| MCP
         A4 <-->|Streamable HTTP| MCP
         A5 <-->|Streamable HTTP| MCP
-        A6 <-->|Streamable HTTP| MCP
     end
 
-    HV -.->|"Volume Mount (rw)"| MOD
-    HV -.->|"Volume Mount (rw)"| CTX
-    HV -.->|"Volume Mount (rw)<br/>/mnt/quorum/workspace"| A1
-    HV -.->|"Volume Mount (rw)"| A2
-    HV -.->|"Volume Mount (rw)"| A3
-    HV -.->|"Volume Mount (rw)"| A4
-    HV -.->|"Volume Mount (rw)"| A5
-    HV -.->|"Volume Mount (rw)"| A6
+    MODREPO <-.->|"git fetch / git push<br/>via gh credential helper"| GH
+    AREPO <-.->|"git fetch / handler<br/>git push"| GH
 ```
+
+Under QRM8 (workspace isolation) the host filesystem is no longer in the data path. Each container holds its own git clone (or worktree); the GitHub remote at `$REPO_URL` is the only synchronization point. The moderator authenticates `gh` from `GH_TOKEN` at startup and pulls before each turn; each agent invocation runs in an isolated `git worktree` created on the requested branch, and the handler commits and pushes on completion. See [Workspace Topology](#workspace-topology) below.
 
 ## Container Components
 
@@ -75,7 +73,8 @@ The user-facing component providing a conversational interface via Claude Code C
 | **Purpose** | Orchestrate agent workflows on behalf of the user |
 | **Technology** | Claude Code CLI in a dedicated Docker container |
 | **Connection** | MCP client (Streamable HTTP) connected to MCP Server |
-| **Workspace** | Read-write mount at `/mnt/quorum/workspace` |
+| **Workspace** | Git clone at `/mnt/quorum/workspace` on the `moderator-workspace` named volume — cloned from `$REPO_URL` on first boot via the gh credential helper. Synchronizes with the remote via `git fetch` / `git pull` (typically at turn start) and `git push`. No host bind mount. |
+| **GitHub auth** | `gh auth login --with-token` in `docker/moderator/entrypoint.sh` consumes `GH_TOKEN`, persists `~/.config/gh/hosts.yml` on tmpfs, then `unset GH_TOKEN` before CC CLI starts so the model cannot read the token from its environment (QRM8 D5). |
 
 **Responsibilities:**
 - Accept user input as natural language commands
@@ -97,7 +96,7 @@ The communication backbone connecting all agents.
 | **Transport** | `StreamableHTTPServerTransport` with per-client sessions (`mcp-session-id` header) |
 | **Discovery** | Agent registry for role-based lookup |
 | **Messaging** | Message broker for agent-to-agent invocation |
-| **Workspace** | Read-write mount at `/mnt/quorum/workspace` (context file persistence) |
+| **Workspace** | No workspace bind mount under the default OpenSearch backend — context lives in the index. The `docker-compose.yml` bind mount is retained as a commented debug escape hatch, used only when switching back to the `inmemory` backend (QRM8 D8). |
 
 **MCP Tools (9):**
 
@@ -157,9 +156,11 @@ Identical Docker images configured via environment variables. Containers are har
 | **Technology** | NestJS application with Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) |
 | **Base Image** | `node:24-bookworm-slim` (Debian, glibc required for SDK toolchain); mcp-server uses `node:24-bookworm-slim` |
 | **Configuration** | `AGENT_ROLE` environment variable |
-| **Workspace** | Shared volume at `/mnt/quorum/workspace` (read-write) |
+| **Workspace** | Per-role base git clone at `/var/agent-repo` on the `{role}-agent-repo` named volume (cloned from `$REPO_URL` on first boot, HEAD detached so any branch is checkout-able). Per-invocation `git worktree` at `/var/agent-worktrees/<correlationId>` on tmpfs. The SDK subprocess `cwd` is the worktree, not the base repo. The worktree is created by `InvocationHandler.runInvocation()` before SDK execution and removed in `finally` — even on error or SIGKILL (orphans cleaned by `git worktree prune` on next boot). |
+| **Sessions** | `FileSessionStore` persists SDK transcripts to `/var/agent-sessions` on the `{role}-sessions` named volume so resume survives container restarts (QRM8 D3). Lookup is keyed by `sessionId` alone — `projectKey`/cwd is ignored, so worktree-cwd changes don't break resume. |
+| **Git auth** | `gh auth login --with-token` + `gh auth setup-git` in `docker/agent/entrypoint.sh` configure the credential helper; `unset GH_TOKEN` runs before NestJS starts. Handler-side `git clone` / `git fetch` / `git push` authenticate transparently. The SDK subprocess `env` is an **allowlist** (`ANTHROPIC_API_KEY`, `HOME`, `PATH`, `NODE_ENV`, …) that excludes `GH_TOKEN` so the model cannot read the token (QRM8 D5). |
 | **MCP Role** | Dual: client (invoke others via tool bridge) + handler (be invoked via `POST /invoke`) |
-| **Permissions** | Per-role tool restrictions enforced mechanically via `disallowedTools` + `canUseTool` hook |
+| **Permissions** | Per-role tool restrictions enforced mechanically via `disallowedTools` + `canUseTool` hook. All roles deny `git commit`, `git push`, `git checkout -b`, `git branch` — the handler is the sole committer (QRM8 D2). |
 
 **Agent Roles:**
 
@@ -179,24 +180,37 @@ The `moderator` role runs as a Claude Code CLI container (not an agent container
 
 > **Details:** See [Claude Code SDK](claude-code-sdk.md) for SDK integration, tool bridge, permission profiles, container hardening, and observability hooks.
 
-## Shared Workspace Structure
+## Workspace Topology
 
-All agents access the target project through a mounted volume:
+Under QRM8 (workspace isolation) the host filesystem is no longer mounted into any container. Every container is a git client; the GitHub remote at `$REPO_URL` is the only synchronization point.
 
-```
-/mnt/quorum/workspace/           # Target project root
-├── quorum.md                    # Project conventions & role configuration
-├── quorum.context               # Context Store persistence (JSON, managed by MCP server)
-├── docs/                        # Generated system documentation
-│   └── *.md                     # Architecture docs, design decisions
-├── tickets/                     # Implementation task tracking
-│   └── *.md                     # Individual task definitions
-└── [project files]              # Existing codebase
-```
+| Container | Path | Backing | Lifecycle |
+|-----------|------|---------|-----------|
+| Moderator | `/mnt/quorum/workspace` | `moderator-workspace` named volume | First-boot clone in `docker/moderator/entrypoint.sh`; pulled at turn start; persists across container restarts |
+| Each agent (base repo) | `/var/agent-repo` | `{role}-agent-repo` named volume | First-boot clone in `docker/agent/entrypoint.sh`; HEAD detached so any branch can be checked out into a worktree; `git worktree prune` runs on every boot to clean orphans |
+| Each agent (worktree) | `/var/agent-worktrees/<correlationId>` | tmpfs declared in `x-agent-security` | Created per invocation by `InvocationHandler.runInvocation()` from the current ref of `request.branch`; removed in `finally` |
+| Each agent (sessions) | `/var/agent-sessions` | `{role}-sessions` named volume | Survives container restarts; backs `FileSessionStore` for cross-turn / cross-restart SDK resume |
+| MCP server | — | — | No workspace mount under the OpenSearch backend (bind mount commented out in `docker-compose.yml`) |
+
+### Worktree per invocation
+
+Each `invoke_agent` call carries a required `branch` field. The `InvocationHandler`:
+
+1. Runs `git fetch origin` in `/var/agent-repo` so the requested branch ref is current
+2. Creates a worktree at `/var/agent-worktrees/<correlationId>` on that branch
+3. Calls `claudeCode.execute({ cwd: <worktree path>, ... })` — the SDK subprocess sees only the worktree
+4. After execution, runs `git status --porcelain`; if dirty, `git add -A && git commit -m <message>` (commit message authored by the agent and returned in `InvokeResponse.commitMessage`, with a deterministic fallback) and `git push origin <branch>`
+5. `git worktree remove` in `finally` — runs even on error/crash; orphans from SIGKILL are cleaned by `git worktree prune` on next container boot
+
+Two concurrent invocations targeting the same branch are rejected up-front by the Message Broker's **branch-in-flight guard** (`branchLocks` map; see [Message Broker — Safeguards](message-broker.md)). Cross-branch concurrency is unrestricted — multiple worktrees coexist on the same agent container.
+
+### How agents see each other's work
+
+Agents do **not** share a filesystem within a turn — each invocation is isolated to its own worktree. Cross-agent visibility flows through the GitHub remote: agent A's handler pushes; the moderator (or agent B in a later invocation) sees the change after the next `git fetch` / `git pull`. The moderator runs `git pull --ff-only` at the start of each turn, reminded mechanically by the `reminder` field that the `new_conversation` MCP tool returns on every turn boundary (QRM8 D10).
 
 ### quorum.md Configuration File
 
-The `quorum.md` file is the project-wide configuration that agents read for conventions, workflow, and role-specific instructions. It defines how the target project is developed — not what feature is being built.
+The `quorum.md` file is the project-wide configuration that agents read for conventions, workflow, and role-specific instructions. It defines how the target project is developed — not what feature is being built. It lives at the workspace root in every container's clone and is loaded from whichever path the SDK is currently in (worktree for agents, the moderator's clone for the moderator).
 
 **Contents:**
 - Tech stack and build commands
@@ -205,7 +219,7 @@ The `quorum.md` file is the project-wide configuration that agents read for conv
 - Codebase conventions (import patterns, testing patterns, code style)
 - Review protocol (eligibility, multi-pass review, verdict format)
 - Role configurations (architect, team lead, developer — responsibilities, escalation rules, boundaries)
-- Constraints (shared workspace rules, git discipline, context store usage)
+- Constraints (git workflow rules, commit discipline, context store usage)
 
 This file is:
 - **Project-wide**: Describes the target project's conventions and development process, not a specific feature
@@ -367,16 +381,19 @@ quorum/
 
 The Dockerfile uses a multi-target build: `default` target for mcp-server, `agent` target for agents, and `moderator` target for the Claude Code CLI moderator. All accept `HOST_UID`/`HOST_GID` build args to align container user ownership with the host. Use `./scripts/start.sh` to launch — it exports these automatically.
 
-Two YAML anchors provide shared configuration:
+Three YAML anchors provide shared configuration:
 
 | Anchor | Purpose |
 |--------|---------|
-| `x-shared-env` | Common env vars (Anthropic API, MCP server URL, logging) |
-| `x-agent-security` | Security constraints (read-only fs, dropped caps, tmpfs mounts) |
+| `x-git-identity` | Author/committer name + email for every git operation, shared by agents and moderator |
+| `x-shared-env` | Common env vars: `ANTHROPIC_API_KEY`, `GH_TOKEN`, `REPO_URL`, MCP server URL, logging — applied to agents and the MCP server. The moderator deliberately does **not** inherit this anchor |
+| `x-base-security` / `x-agent-security` | Security constraints (read-only rootfs, dropped caps, `no-new-privileges`); the agent variant adds the `/var/agent-worktrees` tmpfs |
 
-Agents authenticate via `ANTHROPIC_API_KEY` on `x-shared-env` (metered Anthropic API billing). The moderator authenticates separately via `CLAUDE_CODE_OAUTH_TOKEN` in its own environment block (flat-rate subscription-seat billing). These are deliberately separate billing tiers — the subscription token must never appear on `x-shared-env` to prevent billing-path conflation (see [QRM7-007](../tickets/QRM7-007-moderator-subscription-auth.md), [QRM7-013](../tickets/QRM7-013-moderator-oauth-refresh-on-idle.md)).
+Agents authenticate via `ANTHROPIC_API_KEY` on `x-shared-env` (metered Anthropic API billing). The moderator authenticates separately via `CLAUDE_CODE_OAUTH_TOKEN` in its own environment block (flat-rate subscription-seat billing) and deliberately does **not** inherit `x-shared-env` — that would re-introduce `ANTHROPIC_API_KEY`, which CC CLI prefers over the OAuth credentials and would silently route moderator turns to metered billing. The subscription token must never appear on `x-shared-env` (see [QRM7-007](../tickets/QRM7-007-moderator-subscription-auth.md), [QRM7-013](../tickets/QRM7-013-moderator-oauth-refresh-on-idle.md)).
 
-**Services** (8 deployed): `mcp-server` (port 3000, default target), `moderator` (moderator target), `architect`, `teamlead`, `developer` (each port 3002, agent target), `opensearch` (port 9200), `ollama` (port 11434), `ollama-init` (init container, runs to completion). All agent containers share `x-agent-security` constraints and mount the workspace read-write. All services write logs to a shared bind-mounted `./logs` directory. Named volumes `opensearch-data`, `ollama-data`, and `moderator-claude-data` persist index data, model weights, and moderator state.
+Every container with `GH_TOKEN` exchanges it for a persisted `gh` credential helper in its entrypoint (`unset GH_TOKEN` runs before the main process starts). Agents additionally **filter** `GH_TOKEN` out of the SDK subprocess `env` via an allowlist in `claude-code.service.ts` — defense-in-depth so the model cannot read the token even if the credential helper is bypassed (QRM8 D5).
+
+**Services** (8 deployed): `mcp-server` (port 3000, default target), `moderator` (moderator target), `architect`, `teamlead`, `developer` (each port 3002, agent target), `opensearch` (port 9200), `ollama` (port 11434), `ollama-init` (init container, runs to completion). All agent containers share `x-agent-security` constraints. There are no host workspace bind mounts on agents or the moderator — each container holds its own git clone (or worktree) on a named volume; sync flows through the GitHub remote. The single remaining bind mount is `./logs:/app/logs`. Named volumes: `opensearch-data`, `ollama-data`, `moderator-claude-data` (CC CLI state), `moderator-workspace` (moderator git clone), `{architect,teamlead,developer}-agent-repo` (per-role base clones), `{architect,teamlead,developer}-sessions` (per-role FileSessionStore).
 
 The qa and productowner roles are fully defined (permissions, prompts, timeouts) but not yet added as compose services.
 
@@ -391,7 +408,10 @@ The qa and productowner roles are fully defined (permissions, prompts, timeouts)
 | **Streamable HTTP transport** | Session-based, works through proxies; per-client `mcp-session-id` headers |
 | **In-process tool bridge** | Connects Claude Code subprocess to remote MCP server without exposing raw MCP client ([details](claude-code-sdk.md#mcp-tool-bridge)) |
 | **Mechanical permission enforcement** | `disallowedTools` + `canUseTool` hooks enforce per-role restrictions; container hardening is the security boundary ([details](claude-code-sdk.md#role-permission-profiles)) |
-| **Shared volume workspace** | All agents see same files, enables real collaboration |
+| **Git-as-transport workspace** | No host bind mount — every container is a git client. The moderator and each agent hold their own clone on a named volume; the GitHub remote is the sole synchronization point. Eliminates the host as an implicit dependency and enables remote deployment (QRM8 D4) |
+| **Worktree-per-invocation isolation** | Each invocation runs in its own `git worktree` keyed by `correlationId`. Two concurrent invocations on different branches cannot collide, and the branch-in-flight guard rejects same-branch concurrency at the broker (QRM8 D1, D6) |
+| **Handler-controlled commits** | Agent SDK subprocess cannot run `git commit`, `git push`, `git checkout -b`, or `git branch` — denied across every role profile. `InvocationHandler` is the sole committer: it runs `git add -A && git commit` (message authored by the agent and returned in `InvokeResponse.commitMessage`) and `git push origin <branch>` after each successful invocation (QRM8 D2) |
+| **PAT with env-filtered SDK subprocess** | A fine-grained `GH_TOKEN` is consumed by every container's entrypoint, persisted as a `gh` credential helper, then `unset` before the main process starts. The SDK subprocess `env` is an allowlist that excludes `GH_TOKEN` so the model cannot read the token (QRM8 D5) |
 | **quorum.md configuration** | Project conventions and role instructions live in the target project, keeping Quorum apps universal |
 | **NestJS monorepo** | Consistent tooling, shared libraries, easier deployment |
 | **Docker Compose** | Simple orchestration, suitable for single-host development |

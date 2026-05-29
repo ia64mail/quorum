@@ -11,6 +11,10 @@ export interface ExecuteParams {
   prompt: string;
   /** System prompt prepended to the conversation. */
   systemPrompt: string;
+  /** Working directory for the SDK subprocess. When set, overrides the
+   *  default `agent.workspaceDir` — used by worktree-per-invocation (#11)
+   *  to run the agent inside a dedicated git worktree. */
+  cwd?: string;
   /** In-process MCP servers to expose to the agent session. When provided,
    *  the prompt is delivered as a streaming `AsyncIterable<SDKUserMessage>`.
    *  Quorum agents always use in-process SDK servers created by the bridge —
@@ -60,6 +64,9 @@ export type ExecuteResult =
       totalCostUsd: number;
       /** Number of conversation turns consumed. */
       numTurns: number;
+      /** Agent-authored commit message for handler-controlled commit.
+       *  Populated when the agent modified files and provided a message. */
+      commitMessage?: string;
     }
   | {
       success: false;
