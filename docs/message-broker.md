@@ -7,7 +7,7 @@ This document covers the implementation details of Quorum's Message Broker. For 
 The Message Broker is a NestJS injectable service inside the MCP Server that:
 
 1. Receives `invoke_agent` requests from any connected agent
-2. Applies safeguards (depth, circular call, availability)
+2. Applies safeguards (depth, availability, circular call, branch-in-flight, role timeout)
 3. Looks up the target agent in the Registry
 4. Delivers the request via HTTP POST to the agent's callback URL
 5. Enforces role-based timeouts on the response
@@ -49,16 +49,22 @@ interface InvokeRequest {
   bootstrapContext?: BootstrapContext;  // Injected by broker — project + conversation context
   wait: boolean;
   depth: number;               // 0-based, incremented at each hop
+  sessionId?: string;          // Resume a prior SDK session; empty string forces fresh (QRM8 D9)
+  branch: string;              // Required — target git branch for this invocation's worktree (QRM8 #11)
 }
 
 interface InvokeResponse {
   success: boolean;
   result?: string;             // Present on success
   error?: string;              // Present on failure
+  totalCostUsd?: number;       // API cost for this invocation
+  durationMs?: number;         // Wall-clock duration in milliseconds
+  sessionId?: string;          // SDK session ID — moderator caches this for cross-turn resume (QRM8 D9)
+  commitMessage?: string;      // Agent-authored commit message consumed by InvocationHandler (QRM8 D2)
 }
 ```
 
-> The `BootstrapContext` and `BootstrapContextMeta` types are defined in `libs/common/src/messaging/invoke.types.ts`.
+> The `BootstrapContext` and `BootstrapContextMeta` types are defined in `libs/common/src/messaging/invoke.types.ts`. The zod schema (`invokeRequestSchema`) rejects requests without `branch` at validation time — the field is structurally required for every `invoke_agent` call, no exceptions.
 
 ### AgentRole Constants
 
@@ -109,9 +115,11 @@ class MessageBroker {
 }
 ```
 
-The `invoke()` method applies four safeguards in order, then delivers:
+The `invoke()` method applies five safeguards in order, then delivers (numbering matches `message-broker.service.ts`):
 
 ## Safeguards
+
+The broker runs five guards in order before passing the request to the target's `handle()`. Numbering matches the execution order in `apps/mcp-server/src/messaging/message-broker.service.ts`:
 
 ### 1. Call Depth Limit
 
@@ -127,34 +135,7 @@ if (depth >= config.broker.maxCallDepth) {
 |---------------------|---------|---------|
 | `BROKER_MAX_CALL_DEPTH` | `5` | Maximum allowed call depth |
 
-### 2. Circular Call Prevention
-
-Track the call chain per `correlationId` and reject cycles:
-
-```typescript
-private readonly callChains = new Map<string, Set<AgentRole>>();
-
-// In invoke():
-const chain = this.callChains.get(correlationId) ?? new Set<AgentRole>();
-
-if (chain.has(target)) {
-  return { success: false, error: `Circular call: ${[...chain].join(' → ')} → ${target}` };
-}
-
-chain.add(caller);
-this.callChains.set(correlationId, chain);
-
-try {
-  return await this.deliverWithTimeout(agent.handle(request, timeout), timeout, target);
-} finally {
-  chain.delete(caller);
-  if (chain.size === 0) this.callChains.delete(correlationId);
-}
-```
-
-The chain tracks callers (not targets), so A → B → C is allowed but A → B → A is rejected.
-
-### 3. Agent Availability
+### 2. Agent Availability
 
 Fail immediately if the target is not registered or not connected:
 
@@ -165,9 +146,57 @@ if (!agent) return { success: false, error: `Agent ${target} not registered` };
 if (!agent.isConnected()) return { success: false, error: `Agent ${target} not connected` };
 ```
 
-There is no queuing or deferred delivery — if the target is unavailable, the caller gets an immediate error regardless of the `wait` flag.
+Availability runs **before** the circular check so the broker knows the connection type (HTTP vs. elicitation) — the next guard exempts elicitation. There is no queuing or deferred delivery; if the target is unavailable, the caller gets an immediate error regardless of the `wait` flag.
 
-### 4. Role-Based Timeouts
+### 3. Circular Call Prevention
+
+Track the call chain per `correlationId` and reject cycles, with one exemption for the moderator-elicitation path:
+
+```typescript
+private readonly callChains = new Map<string, Set<AgentRole>>();
+
+// In invoke():
+const chain = this.callChains.get(correlationId) ?? new Set<AgentRole>();
+const isElicitation = agent instanceof McpElicitationConnection;
+
+if (!isElicitation && chain.has(target)) {
+  return { success: false, error: `Circular call: ${[...chain].join(' → ')} → ${target}` };
+}
+
+chain.add(caller);
+this.callChains.set(correlationId, chain);
+// chain.delete(caller) runs in the outer finally block, alongside branch-lock release
+```
+
+The chain tracks callers (not targets), so A → B → C is allowed but A → B → A is rejected. **Elicitation exemption:** when the registered connection for `target` is an `McpElicitationConnection` (the moderator's user-prompt channel), the cycle check is skipped — the QRM6 clarification flow (`moderator → developer → moderator`) routes through a human prompt, not a recursive LLM call, so it cannot itself emit further `invoke_agent` chains.
+
+### 4. Branch-in-Flight Guard (QRM8 D6)
+
+Prevent two concurrent invocations from operating on the same git branch. Under worktree-per-invocation isolation, same-branch concurrency would race on `git add`/`git commit`/`git push`:
+
+```typescript
+private readonly branchLocks = new Map<
+  string,                                        // branch name
+  { correlationId: string; target: AgentRole }
+>();
+
+// In invoke(), after the circular check:
+const existingLock = this.branchLocks.get(request.branch);
+if (existingLock && existingLock.correlationId !== correlationId) {
+  return {
+    success: false,
+    error: `Branch '${request.branch}' is already in-flight (target=${existingLock.target}, correlationId=${existingLock.correlationId})`,
+  };
+}
+this.branchLocks.set(request.branch, { correlationId, target });
+// branchLocks.delete(request.branch) runs in the outer finally block
+```
+
+The lock is keyed by branch name. The mismatch is on `correlationId`, not just branch presence — nested invocations within the **same** call chain (same `correlationId`) sharing a branch do not deadlock, because the broker recognises them as part of the same logical operation. Cross-branch concurrency is unrestricted: agent A on branch `feature/auth` and agent B on branch `feature/payments` can run in parallel on the same target container, each in its own worktree.
+
+Cleanup mirrors the circular-call chain — `branchLocks.delete(branch)` runs in the outer `finally` whether delivery succeeded, failed, timed out, or threw. Locks are intentionally non-durable: broker process restart drops the in-memory map entirely. They protect against concurrent in-flight calls, not across-restart state.
+
+### 5. Role-Based Timeouts
 
 Different agents have different expected response times. The broker wraps delivery in a timeout promise:
 
@@ -301,7 +330,7 @@ sequenceDiagram
     participant A as Target Agent
 
     C->>B: invoke(request)
-    Note over B: Safeguards pass (depth, circular, availability)
+    Note over B: Safeguards pass (depth, availability, circular, branch-in-flight)
 
     alt request.sessionId is empty (fresh)
         B->>BCS: assemble(correlationId)
