@@ -34,7 +34,7 @@ A custom Halstead entropy report was built to fill this gap. During analysis, a 
 
 *To be implemented.* — Already implemented.
 
-- Generated report: `tools/entropy-report/reports/entropy-20260325-031531.html`
+- Generated report: `tools/entropy-report/reports/entropy-20260325-031531.html` (pre-#50 lexer — absolute figures biased; see Implementation Notes and the in-report banner)
 - LLM analysis section populated with 5-paragraph assessment covering complexity trajectory, Volume/Difficulty relationship, estimated bugs, per-app distribution, and AI code entropy observations.
 - Report titled "Post QRM2 Analysis" to mark the milestone boundary.
 
@@ -54,3 +54,7 @@ A custom Halstead entropy report was built to fill this gap. During analysis, a 
 - [x] Post-QRM2 HTML report generated with LLM analysis section populated
 - [ ] Future: cyclomatic complexity tooling integrated
 - [ ] Future: CI quality gate or automated trend monitoring
+
+## Implementation Notes
+
+- **2026-05-29 — Halstead correctness pass** ([#50](50-entropy-report-halstead-correctness.md)): a follow-up review found the formulas were right but the *lexical input* and *aggregation* were systematically biased. Fixed in that ticket: the regex/`stripComments` tokenizer was replaced with a character-scanning lexer that recurses into template-literal `${…}` interpolations, recognises regex literals as single operands, normalises string quote styles and numeric separators, and computes per-app Volume from per-app union maps (so the "Volume by Application" chart is honest about not summing to the project total). The LLM prompt and HTML report now share one first-source-commit anchor, `Avg Difficulty` skips empty leading commits, and Estimated Bugs uses Halstead's canonical `B = E^(2/3) / 3000`. Tokenizer behaviour is now covered by `tools/entropy-report/entropy-report.test.mjs`.

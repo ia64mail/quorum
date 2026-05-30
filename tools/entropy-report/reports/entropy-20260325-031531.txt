@@ -1,3 +1,9 @@
+************************************************************
+*** PRE-#50 REPORT — built on the uncorrected entropy-report lexer.
+*** Absolute Halstead figures below are systematically biased (ticket #50).
+*** Trend direction is valid; for corrected numbers see entropy-20260530-013740.{txt,html}.
+************************************************************
+
 ============================================================
 LLM ANALYSIS PROMPT
 ============================================================

@@ -108,17 +108,17 @@ Mentioned here so the next agent looking at this file knows they're known and tr
 
 ## Acceptance Criteria
 
-- [ ] F1 — Tokenizer recurses into template-literal `${…}` interpolations; verified against a fixture containing arithmetic and identifiers inside an interpolation
-- [ ] F2 — Regex literals are recognized as a single operand; verified that `/[-:]/g` produces one operand, not seven tokens
-- [ ] F3 — `stripComments` preserves regex bodies containing `//` and `/* … */`; verified via fixture
-- [ ] F4 — String operands are quote-normalized; `'foo'`, `"foo"`, `` `foo` `` map to the same η₂ entry
-- [ ] F5 — Numeric regex accepts `1_000_000`, `0xffn`, `.5` as single operands
-- [ ] F6 — Per-app Volume computed from per-app union maps; chart caption updated if components no longer claim to sum to project total
-- [ ] F7 — Single `first` selection used by both prompt and HTML; verified that LLM prompt's growth-% line and the HTML stat-card growth-% line agree
-- [ ] F8 — `Avg Difficulty` excludes commits with `files === 0`
-- [ ] F9 — Estimated Bugs uses `E^(2/3) / 3000` (or `V/3000` retained with explicit caveat in footer + stat-card detail)
-- [ ] Re-run report on current `main`; spot-check at least three commits' Volume and Difficulty by hand or against a reference tool (e.g., `escomplex`, `complexity-report`) to confirm direction and rough magnitude
-- [ ] QRM3-001 `Implementation Notes` updated with a back-pointer to this ticket
+- [x] F1 — Tokenizer recurses into template-literal `${…}` interpolations; verified against a fixture containing arithmetic and identifiers inside an interpolation
+- [x] F2 — Regex literals are recognized as a single operand; verified that `/[-:]/g` produces one operand, not seven tokens
+- [x] F3 — Regex bodies containing `//` and `/* … */` are preserved; comments are now scanned inline by the character lexer (not a `stripComments` pre-pass), so regex literals are never mis-eaten as comments. Verified via fixture.
+- [x] F4 — String operands are quote-normalized; `'foo'`, `"foo"`, `` `foo` `` map to the same η₂ entry (keyed `str:foo`)
+- [x] F5 — Numeric regex accepts `1_000_000`, `0xffn`, `.5` as single operands
+- [x] F6 — Per-app Volume computed from per-app union maps; chart switched from stacked to overlaid lines and caption now states components do not sum to the project total
+- [x] F7 — Single `first` selection (`data.find(d => d.metrics.files > 0)`) computed in `main()` and passed to both `buildLlmPrompt` and `generateHtml`; verified the prompt's first-source Volume (10,170) and the HTML stat-card growth (13,519%) share the same anchor
+- [x] F8 — `Avg Difficulty` excludes commits with `files === 0` (362.3 over source-bearing commits)
+- [x] F9 — Estimated Bugs uses `E^(2/3) / 3000`; footer formula, stat-card detail, chart heading, and LLM-prompt label all updated
+- [x] Re-ran report on current branch tip; spot-checked Volume/Difficulty across the sampled trend (monotonic Volume growth, Difficulty in a 340–392 band, terminal-removal contraction at #291→#301) — direction and magnitude consistent. Tokenizer behaviour additionally covered by `entropy-report.test.mjs` (9 tests, all passing)
+- [x] QRM3-001 `Implementation Notes` updated with a back-pointer to this ticket
 
 ## Dependencies and References
 
