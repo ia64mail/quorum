@@ -57,7 +57,7 @@ tools/entropy-report/
 | Volume | V = N × log₂(η) | Information content of the program |
 | Difficulty | D = (η₁/2) × (N₂/η₂) | How hard the code is to understand |
 | Effort | E = D × V | Mental effort to develop/maintain |
-| Estimated Bugs | B = V / 3000 | Halstead's bug predictor |
+| Estimated Bugs | B = E^(2/3) / 3000 | Halstead's delivered-bugs predictor |
 
 Where: N = total operators + operands, η = unique operators + operands, η₁ = unique operators, η₂ = unique operands, N₂ = total operands.
 
@@ -67,18 +67,33 @@ Where: N = total operators + operands, η = unique operators + operands, η₁ =
 2. **Halstead Difficulty** — maintenance complexity trend
 3. **Lines of Code & File Count** — growth tracking (dual axis)
 4. **Volume per File** — normalized complexity (detects bloat vs healthy growth)
-5. **Estimated Bugs** — Halstead's V/3000 predictor
-6. **Volume by Application** — stacked area showing per-app complexity distribution
+5. **Estimated Bugs** — Halstead's E^(2/3)/3000 predictor
+6. **Volume by Application** — overlaid (non-stacked) lines of per-app complexity. Each app's Volume is computed from its own union vocabulary, so the lines are **not additive** to the project total
 7. **Volume Delta** — per-commit complexity change (red = increase, green = decrease)
 
 ## Tokenizer
 
-The script uses a custom regex-based TypeScript tokenizer that classifies tokens as:
+The script uses a custom character-scanning TypeScript lexer (`tokenizeInto`) that classifies tokens as:
 
 - **Operators**: TypeScript keywords (`if`, `class`, `import`, etc.) + symbol operators (`+`, `===`, `=>`, etc.)
-- **Operands**: identifiers, string/template literals, numeric literals, boolean literals
+- **Operands**: identifiers, string/template literals, regex literals, numeric literals, boolean literals
 
-Comments are stripped. The tokenizer is optimized for consistency across commits rather than academic precision — trends are meaningful even if absolute numbers differ slightly from a full AST-based parser.
+The lexer scans comments inline (no separate strip pass) and handles the cases a flat regex tokenizer got wrong (ticket #50):
+
+- **Template-literal interpolations** are tokenized — operators and identifiers inside `${…}` are counted, not swallowed into one operand.
+- **Regex literals** (`/[-:]/g`) count as a single operand instead of being split into operator soup; a precedes-token heuristic distinguishes regex-open from division.
+- **String operands are quote-normalized** — `'foo'`, `"foo"` and `` `foo` `` collapse to one entry.
+- **Numeric literals** accept `_` separators, BigInt suffixes on all bases, and leading-dot decimals (`1_000_000`, `0xffn`, `.5`) as single operands.
+
+The lexer is optimized for consistency across commits rather than academic precision — trends are meaningful even if absolute numbers differ slightly from a full AST-based parser.
+
+### Tests
+
+Tokenizer behaviour is covered by `entropy-report.test.mjs`:
+
+```bash
+node --test tools/entropy-report/entropy-report.test.mjs
+```
 
 ## Fixed: aggregate Halstead collapse at `921d39f`
 
@@ -86,11 +101,22 @@ The report previously showed a dramatic drop in aggregate Volume (609,880 → 19
 
 **Fix**: `analyzeCommit()` now tokenizes each file independently and merges the operator/operand `Map`s across files before computing aggregate Halstead metrics. This avoids cross-file `stripComments` interference entirely — the regex never sees content from multiple files at once.
 
+## Fixed (#50): Halstead lexing & aggregation correctness
+
+A follow-up review found the formulas were right but the lexical input and some aggregation choices were systematically biased. Ticket #50 replaced the regex tokenizer with the character-scanning lexer described under [Tokenizer](#tokenizer) and corrected the report wiring:
+
+- **Per-app Volume** is now computed from per-app union maps (same method as the project total), not summed from per-file Volumes — so the "Volume by Application" chart no longer understates. Per-app lines are overlaid, not stacked, because they don't sum to the project total.
+- **A single `first` anchor** (the first source-bearing commit) is shared by both the LLM prompt and the HTML report, so their growth figures agree.
+- **Avg Difficulty** excludes empty leading (scaffolding) commits.
+- **Estimated Bugs** uses Halstead's canonical `B = E^(2/3) / 3000` rather than the simplified `V/3000`, which overstated as Volume grew.
+
+Reports generated before this fix carry an in-report banner and are not numerically comparable to later ones; the first corrected report is `reports/entropy-20260530-013740.html`.
+
 ## Scope
 
 Analyzes `.ts` files in `apps/` and `libs/` (excluding `.d.ts`). Per-app breakdown covers:
 
-- `apps/terminal/` — Terminal App
+- `apps/terminal/` — Terminal App (legacy; removed in QRM6-009, still classified for historical commits)
 - `apps/mcp-server/` — MCP Server
 - `apps/agent/` — Agent App
 - `libs/common/` — Common Library

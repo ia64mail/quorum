@@ -172,6 +172,15 @@ QRM8 sets a new high-water mark for tests (839, +81 vs QRM7's 758, +79 vs QRM5's
 | `README.md` | Refreshed for QRM8 workspace model — removed host bind-mount references, documented named volumes and git-as-transport model |
 | `.env.example` | Added `GH_TOKEN` and `REPO_URL` placeholders; dropped stale `WORKSPACE_PATH` and `AGENT_WORKSPACE_DIR` |
 
+## Entropy Report
+
+A source-code entropy report was generated at milestone close: `tools/entropy-report/reports/entropy-20260530-013740.html`. This is the **first report on the corrected entropy-report lexer** (ticket #50) — template-literal interpolations are now tokenized, regex literals count as single operands, string quote styles and numeric separators are normalized, per-app Volume is computed from per-app union maps, and Estimated Bugs uses Halstead's canonical `E^(2/3)/3000`. Its absolute figures are a new, more faithful baseline and are **not comparable** to the pre-#50 numbers quoted in the QRM6/QRM7 notes. Key findings (534 commits, full history):
+
+- **Halstead Volume reached 1,385,067** across 17,518 LOC in 147 files. Over the QRM8 window (roadmap relocation at #401, V≈1.24M → tip #534, V=1.39M) Volume grew ~12% through steady handler-level feature work — no single-commit spikes.
+- **Difficulty is flat at ~391** (387.4 at the QRM7/QRM8 boundary → 391.0 at tip; project-wide average 362.3). The tight 340–392 band the project has held since QRM2 persists: QRM8's worktree-isolation and commit/push logic was built largely from the existing operator/identifier vocabulary, not new constructs.
+- **Per-app distribution** (union-map method, deliberately **not additive** to the project total): `mcp-server` 736,049 Volume (75 files, 9,815 LOC), `agent` 418,588 (40 files, 5,754 LOC), `common` 107,574 (32 files, 1,949 LOC). The MCP server remains the complexity center (7 tools, 2 resources, registry, broker, context store); QRM8's net growth landed in the `agent` app, where worktree-per-invocation isolation, handler-controlled commit/push, and the branch-in-flight guard were implemented.
+- **Estimated Bugs (E^(2/3)/3000) reads 221.5** — roughly half the inflated ~455 the old `V/3000` variant reported. As an aggregate over a 147-file monorepo it remains a trend signal, not a count: the realized record across QRM4 → QRM8 is **0 bugs in new feature code** and a **0% post-review fix rate**.
+
 ---
 
 *This release note documents the QRM8 milestone — the workspace isolation layer that decouples all containers from the host filesystem via git worktree-per-invocation, handler-controlled commits, and named-volume git clones. Validated through 121 commits, 16 closed tickets, 7 bug-class defects resolved, zero post-review fixes, and 839 passing tests across 47 suites. It continues tracking the effectiveness and reliability of multi-agent self-implementing development through the Quorum dogfooding process.*
