@@ -200,6 +200,14 @@
 </style>
 </head>
 <body>
+<div style="background:#2d2410;border:1px solid #d29922;border-left:4px solid #d29922;color:#e6edf3;padding:0.9rem 1.2rem;border-radius:8px;margin-bottom:1.5rem;font-size:0.9rem;line-height:1.6;">
+  <strong style="color:#d29922;">&#9888; Pre-#50 report &mdash; built on the uncorrected lexer.</strong>
+  Generated before the Halstead-correctness fix (ticket #50). Absolute Volume, Difficulty, per-app,
+  and Estimated-Bugs figures are systematically biased &mdash; un-tokenized template-literal
+  interpolations, regex literals split into operator soup, quote/numeric mis-keying, and per-app
+  Volume summed from per-file figures. <strong>Trend direction remains valid; treat the absolute
+  numbers as indicative only.</strong> For corrected figures see <code>entropy-20260530-013740.html</code>.
+</div>
 
 <header>
   <h1>Quorum — Source Code Entropy Report</h1>

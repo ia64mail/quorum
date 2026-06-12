@@ -9,7 +9,7 @@
 > - **Anthropic SDK and the Model Context Protocol** — a deep dive into the Claude Agent SDK, the MCP server/protocol, transport semantics (Streamable HTTP, sessions, elicitation), tool bridging, and per-role permission enforcement.
 > - **Context management in multi-agent environments** — a pull-based context model with scoped storage (project / conversation / agent), hybrid BM25 + vector retrieval, asynchronous embedding, and context postprocessing (bootstrap assembly, summarization, token-budget control) so agents collaborate without ever forwarding full conversation histories.
 >
-> The remainder of this README describes the system that emerged from these experiments.
+> The methodology behind it is written up in **[Ticket-Driven Development in an Agentic World](https://github.com/ia64mail/quorum/wiki/Ticket-Driven-Development-in-an-Agentic-World)** — start there for the *why*. The remainder of this README describes the system that emerged from these experiments.
 
 Multi-agent AI orchestration for semi-autonomous software development. Quorum coordinates a fleet of role-based AI agents — Architect, Team Lead, Developer, QA, Product Owner — that collaborate on real engineering work, mediated by a Moderator that talks to the user. The Moderator runs as a Claude Code CLI container; each agent is a NestJS app driving Claude through the Agent SDK (`@anthropic-ai/claude-agent-sdk`), with filesystem, bash, and git access. They all communicate through an MCP server using a pull-based context model, so no agent ever forwards another's conversation history.
 

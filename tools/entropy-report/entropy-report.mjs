@@ -22,12 +22,19 @@
 import { execSync } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../..');
 const REPORTS_DIR = resolve(__dirname, 'reports');
 const SOURCE_DIRS = ['apps/', 'libs/'];
+
+// Sample identity & scope — shared with cyclomatic-report.mjs so both reports
+// describe exactly the same source set.
+//   SAMPLE_LABEL  — development MODE/PERIOD of this sample (not the repo).
+//   EXCLUDE_PATHS — optional path prefixes under SOURCE_DIRS to drop ([] = none).
+const SAMPLE_LABEL = 'Quorum · research project, AI-authored, ticket-driven agent fleet';
+const EXCLUDE_PATHS = [];
 
 // Timestamp for output filenames
 const now = new Date();
@@ -70,69 +77,252 @@ const SYMBOL_RE_PART = SYMBOL_OPERATORS
   .map(op => op.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
   .join('|');
 
-// Combined tokenizer regex — processes strings, numbers, symbols, and words
-// in a single pass. Order matters: strings first (to avoid matching operators
-// inside strings), then numbers, then multi-char symbols, then words.
-const TOKEN_RE = new RegExp(
-  [
-    // Group 1: String/template literals
-    '(`(?:[^`\\\\]|\\\\.)*`|\'(?:[^\'\\\\]|\\\\.)*\'|"(?:[^"\\\\]|\\\\.)*")',
-    // Group 2: Numeric literals (hex, octal, binary, decimal, bigint)
-    '(\\b(?:0x[\\da-fA-F]+|0o[0-7]+|0b[01]+|\\d+(?:\\.\\d+)?(?:e[+-]?\\d+)?n?)\\b)',
-    // Group 3: Symbol operators
-    `(${SYMBOL_RE_PART})`,
-    // Group 4: Words (identifiers / keywords)
-    '(\\b[a-zA-Z_$][\\w$]*\\b)',
-  ].join('|'),
-  'g',
-);
+// Sticky (anchored) sub-lexers, advanced explicitly by the character scanner.
+const reString1 = /'(?:[^'\\]|\\.)*'/y;
+const reString2 = /"(?:[^"\\]|\\.)*"/y;
+// Regex literal: a non-empty body (escapes and character classes honoured),
+// closing slash, then optional flags. Newlines are excluded so a stray `/`
+// never swallows the rest of the file.
+const reRegex = /\/(?:[^/\\\n[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[a-zA-Z]*/y;
+// Numeric literal: hex/oct/bin (each BigInt-capable), or decimal/leading-dot
+// with optional exponent and BigInt suffix. `_` separators allowed everywhere.
+const reNumber = /0[xX](?:_?[\da-fA-F])+n?|0[oO](?:_?[0-7])+n?|0[bB](?:_?[01])+n?|(?:(?:\d(?:_?\d)*)?\.\d(?:_?\d)*|\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?n?/y;
+const reWord = /[a-zA-Z_$][\w$]*/y;
+const reSymbol = new RegExp(SYMBOL_RE_PART, 'y');
+const WORD_START = /[a-zA-Z_$]/;
 
 /**
- * Strip comments while preserving strings.
- * Uses a single-pass regex that matches strings (preserved) and comments (removed).
+ * Normalize a string-literal lexeme to its underlying value so that quote
+ * style is irrelevant: 'foo', "foo" and `foo` collapse to one operand (F4).
+ * Escapes are flattened — fidelity is unnecessary, equivalence is the point.
  */
-function stripComments(source) {
-  return source.replace(
-    /(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
-    (match, str) => str || ' ',
-  );
+function normalizeStr(lexeme) {
+  return lexeme.slice(1, -1).replace(/\\(.)/g, '$1');
+}
+
+/**
+ * Normalize a numeric lexeme so separators and casing don't fork operands:
+ * 1_000_000 == 1000000, 0xFF == 0xff (F5).
+ */
+function normalizeNum(lexeme) {
+  return lexeme.replace(/_/g, '').toLowerCase();
+}
+
+/**
+ * Decide whether a `/` at the cursor opens a regex literal or is division.
+ * Heuristic on the preceding significant token: regex cannot follow a value
+ * (identifier, literal, `)`, `]`, postfix `++`/`--`); it can follow anything
+ * that expects an expression (operators, keywords, `{`, `(`, `,`, `=`, …).
+ * Sufficient for the accuracy this tool reports (F2).
+ */
+function regexAllowedAfter(prevType, prevVal) {
+  if (prevType === null) return true;
+  if (prevType === 'operand') return false;
+  return prevVal !== ')' && prevVal !== ']' && prevVal !== '++' && prevVal !== '--';
+}
+
+/**
+ * Find the index just past the `}` that closes a `${` interpolation, skipping
+ * nested braces, strings, template literals and comments so brace counting
+ * stays balanced. `src[open]` must be the `{`.
+ */
+function findInterpolationEnd(src, open) {
+  let depth = 0;
+  let i = open;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === '{') { depth++; i++; }
+    else if (c === '}') { depth--; i++; if (depth === 0) return i; }
+    else if (c === "'" || c === '"') { i = skipQuoted(src, i, c); }
+    else if (c === '`') { i = skipTemplate(src, i); }
+    else if (c === '/' && src[i + 1] === '/') { while (i < n && src[i] !== '\n') i++; }
+    else if (c === '/' && src[i + 1] === '*') { i += 2; while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i++; i += 2; }
+    else { i++; }
+  }
+  return i;
+}
+
+/** Skip a single/double-quoted string starting at the opening quote. */
+function skipQuoted(src, i, quote) {
+  i++;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === '\\') { i += 2; continue; }
+    if (c === quote) return i + 1;
+    i++;
+  }
+  return i;
+}
+
+/** Skip a template literal (including nested `${…}`) starting at its backtick. */
+function skipTemplate(src, i) {
+  i++;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === '\\') { i += 2; continue; }
+    if (c === '`') return i + 1;
+    if (c === '$' && src[i + 1] === '{') { i = findInterpolationEnd(src, i + 1); continue; }
+    i++;
+  }
+  return i;
+}
+
+/**
+ * Scan a template literal at `src[i] === '\`'`, emitting each literal chunk as
+ * one normalized string operand and recursing into every `${…}` interpolation
+ * so the operators and identifiers inside are counted (F1). Returns the index
+ * just past the closing backtick.
+ */
+function scanTemplate(src, i, operators, operands) {
+  i++;
+  let chunk = '';
+  const n = src.length;
+  const flush = () => {
+    if (chunk.length > 0) {
+      const key = 'str:' + chunk.replace(/\\(.)/g, '$1');
+      operands.set(key, (operands.get(key) || 0) + 1);
+    }
+    chunk = '';
+  };
+  while (i < n) {
+    const c = src[i];
+    if (c === '\\') { chunk += c + (src[i + 1] ?? ''); i += 2; continue; }
+    if (c === '`') { i++; break; }
+    if (c === '$' && src[i + 1] === '{') {
+      flush();
+      const end = findInterpolationEnd(src, i + 1);
+      tokenizeInto(src.slice(i + 2, end - 1), operators, operands);
+      i = end;
+      continue;
+    }
+    chunk += c;
+    i++;
+  }
+  flush();
+  return i;
+}
+
+/**
+ * Character-scanning tokenizer. Walks the source once, classifying each token
+ * as an operator or operand and accumulating counts into the supplied maps.
+ * Comments are skipped inline (no separate stripping pass), which keeps regex
+ * literal bodies containing `//` or `/* … *​/` intact (F3). Reused recursively
+ * for template-interpolation contents.
+ */
+function tokenizeInto(src, operators, operands) {
+  const addOperator = (op) => operators.set(op, (operators.get(op) || 0) + 1);
+  const addOperand = (op) => operands.set(op, (operands.get(op) || 0) + 1);
+
+  let prevType = null;   // 'operator' | 'operand' | null
+  let prevVal = null;
+  let i = 0;
+  const n = src.length;
+
+  while (i < n) {
+    const c = src[i];
+
+    // Whitespace and comments — skipped, do not affect prev-token state.
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v') { i++; continue; }
+    if (c === '/' && src[i + 1] === '/') { i += 2; while (i < n && src[i] !== '\n') i++; continue; }
+    if (c === '/' && src[i + 1] === '*') { i += 2; while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i++; i += 2; continue; }
+
+    // String literals — one normalized operand each (F4).
+    if (c === "'" || c === '"') {
+      const re = c === "'" ? reString1 : reString2;
+      re.lastIndex = i;
+      const m = re.exec(src);
+      const lexeme = m ? m[0] : src.slice(i);
+      addOperand('str:' + normalizeStr(lexeme));
+      i = m ? re.lastIndex : n;
+      prevType = 'operand'; prevVal = lexeme;
+      continue;
+    }
+
+    // Template literals — recurse into interpolations (F1).
+    if (c === '`') {
+      i = scanTemplate(src, i, operators, operands);
+      prevType = 'operand'; prevVal = '`';
+      continue;
+    }
+
+    // Regex literal vs division (F2/F3).
+    if (c === '/' && regexAllowedAfter(prevType, prevVal)) {
+      reRegex.lastIndex = i;
+      const m = reRegex.exec(src);
+      if (m) {
+        addOperand('re:' + m[0]);
+        i = reRegex.lastIndex;
+        prevType = 'operand'; prevVal = m[0];
+        continue;
+      }
+    }
+
+    // Numeric literals (F5).
+    if ((c >= '0' && c <= '9') || (c === '.' && src[i + 1] >= '0' && src[i + 1] <= '9')) {
+      reNumber.lastIndex = i;
+      const m = reNumber.exec(src);
+      if (m && m[0].length > 0) {
+        addOperand('num:' + normalizeNum(m[0]));
+        i = reNumber.lastIndex;
+        prevType = 'operand'; prevVal = m[0];
+        continue;
+      }
+    }
+
+    // Identifiers / keywords.
+    if (WORD_START.test(c)) {
+      reWord.lastIndex = i;
+      const w = reWord.exec(src)[0];
+      i = reWord.lastIndex;
+      if (TS_KEYWORD_OPERATORS.has(w)) {
+        addOperator(w);
+        prevType = 'operator'; prevVal = w;
+      } else {
+        // identifiers and literal operands (true/null/…) alike count as operands
+        addOperand(w);
+        prevType = 'operand'; prevVal = w;
+      }
+      continue;
+    }
+
+    // Symbol operators (longest match — SYMBOL_OPERATORS is length-sorted).
+    reSymbol.lastIndex = i;
+    const m = reSymbol.exec(src);
+    if (m) {
+      addOperator(m[0]);
+      i = reSymbol.lastIndex;
+      prevType = 'operator'; prevVal = m[0];
+      continue;
+    }
+
+    // Unknown character — skip without affecting prev-token state.
+    i++;
+  }
 }
 
 /**
  * Tokenize TypeScript source and return raw operator/operand maps.
  */
 function tokenize(source) {
-  const cleaned = stripComments(source);
-
   const operators = new Map();   // operator -> count
   const operands = new Map();    // operand -> count
-
-  const addOperator = (op) => operators.set(op, (operators.get(op) || 0) + 1);
-  const addOperand = (op) => operands.set(op, (operands.get(op) || 0) + 1);
-
-  let match;
-  TOKEN_RE.lastIndex = 0;
-  while ((match = TOKEN_RE.exec(cleaned)) !== null) {
-    const [, stringLit, numLit, symbol, word] = match;
-
-    if (stringLit) {
-      addOperand(stringLit);
-    } else if (numLit) {
-      addOperand(numLit);
-    } else if (symbol) {
-      addOperator(symbol);
-    } else if (word) {
-      if (TS_KEYWORD_OPERATORS.has(word)) {
-        addOperator(word);
-      } else if (TS_LITERAL_OPERANDS.has(word)) {
-        addOperand(word);
-      } else {
-        addOperand(word);
-      }
-    }
-  }
-
+  tokenizeInto(source, operators, operands);
   return { operators, operands };
+}
+
+/**
+ * Strip comments and string bodies for line counting only.
+ * Not used by the tokenizer (which scans comments inline); kept lightweight
+ * because countLoc only needs to know whether a line has non-blank content.
+ */
+function stripComments(source) {
+  return source.replace(
+    /(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
+    (match, str) => str || ' ',
+  );
 }
 
 /**
@@ -149,7 +339,9 @@ function halsteadFromMaps(operators, operands) {
   const volume = eta > 0 ? N * Math.log2(eta) : 0;
   const difficulty = eta2 > 0 ? (eta1 / 2) * (N2 / eta2) : 0;
   const effort = difficulty * volume;
-  const estimatedBugs = volume / 3000;
+  // Halstead's canonical delivered-bugs predictor B = E^(2/3) / 3000 (F9).
+  // The simplified V/3000 variant overstates as Volume grows linearly with size.
+  const estimatedBugs = Math.pow(effort, 2 / 3) / 3000;
 
   return { N1, N2, eta1, eta2, N, eta, volume, difficulty, effort, estimatedBugs };
 }
@@ -200,7 +392,8 @@ function getFilesAtCommit(hash) {
     const dirArgs = SOURCE_DIRS.map(d => `"${d}"`).join(' ');
     const output = exec(`git ls-tree -r --name-only ${hash} -- ${dirArgs} 2>/dev/null`);
     return output.trim().split('\n')
-      .filter(f => f.endsWith('.ts') && !f.endsWith('.d.ts'));
+      .filter(f => f.endsWith('.ts') && !f.endsWith('.d.ts'))
+      .filter(f => !EXCLUDE_PATHS.some(prefix => f.startsWith(prefix)));
   } catch {
     return [];
   }
@@ -236,13 +429,17 @@ function analyzeCommit(hash) {
   const aggOperators = new Map();
   const aggOperands = new Map();
 
+  // Per-app union maps — so each app's Volume is a proper Halstead figure
+  // computed the same way as the project total, not a sum of per-file Volumes
+  // (which understates because per-file vocabularies are smaller). See F6.
+  const perAppMaps = {};
+
   for (const file of files) {
     const content = getFileContent(hash, file);
     if (!content) continue;
 
     const loc = countLoc(content);
     const { operators, operands } = tokenize(content);
-    const halstead = halsteadFromMaps(operators, operands);
     const app = classifyApp(file);
 
     totalLoc += loc;
@@ -251,10 +448,23 @@ function analyzeCommit(hash) {
     mergeMaps(aggOperators, operators);
     mergeMaps(aggOperands, operands);
 
-    if (!perApp[app]) perApp[app] = { files: 0, loc: 0, volume: 0 };
+    if (!perApp[app]) {
+      perApp[app] = { files: 0, loc: 0, volume: 0 };
+      perAppMaps[app] = { operators: new Map(), operands: new Map() };
+    }
     perApp[app].files++;
     perApp[app].loc += loc;
-    perApp[app].volume += halstead.volume;
+    mergeMaps(perAppMaps[app].operators, operators);
+    mergeMaps(perAppMaps[app].operands, operands);
+  }
+
+  // Compute per-app Volume from per-app union maps (same method as project).
+  // Per-app volumes therefore do NOT sum to project Volume — the vocabularies
+  // are overlapping subsets — but each is an honest Halstead figure (F6).
+  for (const app of Object.keys(perApp)) {
+    perApp[app].volume = halsteadFromMaps(
+      perAppMaps[app].operators, perAppMaps[app].operands,
+    ).volume;
   }
 
   // Compute aggregate Halstead from merged maps
@@ -291,8 +501,7 @@ async function analyzeAll(commits) {
 // LLM PROMPT BUILDER
 // ============================================================================
 
-function buildLlmPrompt(data) {
-  const first = data[0];
+function buildLlmPrompt(data, first) {
   const last = data[data.length - 1];
 
   const deltas = data.map((d, i) => ({
@@ -324,7 +533,7 @@ METRICS SUMMARY:
 - Files: ${first.metrics.files} → ${last.metrics.files}
 - Halstead Volume: ${first.metrics.halstead.volume.toFixed(0)} → ${last.metrics.halstead.volume.toFixed(0)}
 - Halstead Difficulty: ${first.metrics.halstead.difficulty.toFixed(1)} → ${last.metrics.halstead.difficulty.toFixed(1)}
-- Estimated Bugs (V/3000): ${first.metrics.halstead.estimatedBugs.toFixed(1)} → ${last.metrics.halstead.estimatedBugs.toFixed(1)}
+- Estimated Bugs (E^⅔/3000): ${first.metrics.halstead.estimatedBugs.toFixed(1)} → ${last.metrics.halstead.estimatedBugs.toFixed(1)}
 
 TOP 10 COMMITS BY VOLUME CHANGE:
 ${topChanges}
@@ -385,8 +594,7 @@ ${JSON.stringify(jsonData, null, 2)}
 // HTML REPORT GENERATOR
 // ============================================================================
 
-function generateHtml(data, llmSummary) {
-  const first = data.find(d => d.metrics.files > 0) || data[0];
+function generateHtml(data, llmSummary, first) {
   const last = data[data.length - 1];
   const firstIdx = data.indexOf(first);
 
@@ -419,7 +627,12 @@ function generateHtml(data, llmSummary) {
     ? ((last.metrics.halstead.volume / first.metrics.halstead.volume - 1) * 100).toFixed(0)
     : 'N/A';
 
-  const avgDifficulty = (data.reduce((s, d) => s + d.metrics.halstead.difficulty, 0) / data.length).toFixed(1);
+  // Average Difficulty over source-bearing commits only — empty leading
+  // (scaffolding) commits contribute D=0 and would drag the headline down (F8).
+  const sourceCommits = data.filter(d => d.metrics.files > 0);
+  const avgDifficulty = sourceCommits.length > 0
+    ? (sourceCommits.reduce((s, d) => s + d.metrics.halstead.difficulty, 0) / sourceCommits.length).toFixed(1)
+    : '0.0';
 
   const llmSection = llmSummary
     ? `<div class="card llm-summary">
@@ -689,7 +902,7 @@ function generateHtml(data, llmSummary) {
   <div class="stat-card">
     <div class="label">Estimated Bugs</div>
     <div class="value" style="color: var(--red)">${last.metrics.halstead.estimatedBugs.toFixed(1)}</div>
-    <div class="detail">B = V / 3000 (Halstead predictor)</div>
+    <div class="detail">B = E<sup>2/3</sup> / 3000 (Halstead predictor)</div>
   </div>
   <div class="stat-card">
     <div class="label">Volume per File</div>
@@ -733,7 +946,7 @@ ${llmSection}
     </div>
   </div>
   <div class="card">
-    <h2>Estimated Bugs (V / 3000)</h2>
+    <h2>Estimated Bugs (E<sup>2/3</sup> / 3000)</h2>
     <div class="chart-container">
       <canvas id="bugsChart"></canvas>
     </div>
@@ -743,6 +956,11 @@ ${llmSection}
 <!-- Per-App Breakdown -->
 <div class="card">
   <h2>Volume by Application &mdash; Complexity Distribution</h2>
+  <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+    Each line is that app's own Halstead Volume (computed from its union vocabulary,
+    same method as the project total). Lines are overlaid, <strong>not stacked</strong> —
+    per-app volumes do not sum to the project Volume because the apps share vocabulary.
+  </p>
   <div class="chart-container large">
     <canvas id="appChart"></canvas>
   </div>
@@ -776,7 +994,7 @@ ${llmSection}
 
 <footer>
   Generated ${new Date().toISOString().split('T')[0]} by entropy-report.mjs &middot;
-  Halstead metrics: V = N &times; log&#8322;(&eta;), D = (&eta;&#8321;/2)(&eta;&#8322;/N&#8322;), E = D &times; V, B = V/3000
+  Halstead metrics: V = N &times; log&#8322;(&eta;), D = (&eta;&#8321;/2)(N&#8322;/&eta;&#8322;), E = D &times; V, B = E<sup>2/3</sup>/3000
 </footer>
 
 <script>
@@ -969,7 +1187,7 @@ new Chart(document.getElementById('bugsChart'), {
   }
 });
 
-// 6. Per-App Volume (Stacked Area)
+// 6. Per-App Volume (overlaid lines — NOT stacked; see chart caption)
 new Chart(document.getElementById('appChart'), {
   type: 'line',
   data: {
@@ -979,29 +1197,29 @@ new Chart(document.getElementById('appChart'), {
         label: 'Terminal',
         data: ${JSON.stringify(perAppVolumes['terminal'])},
         borderColor: '#58a6ff',
-        backgroundColor: 'rgba(88, 166, 255, 0.3)',
-        fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+        backgroundColor: 'rgba(88, 166, 255, 0.08)',
+        fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
       },
       {
         label: 'MCP Server',
         data: ${JSON.stringify(perAppVolumes['mcp-server'])},
         borderColor: '#3fb950',
-        backgroundColor: 'rgba(63, 185, 80, 0.3)',
-        fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+        backgroundColor: 'rgba(63, 185, 80, 0.08)',
+        fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
       },
       {
         label: 'Agent',
         data: ${JSON.stringify(perAppVolumes['agent'])},
         borderColor: '#d29922',
-        backgroundColor: 'rgba(210, 153, 34, 0.3)',
-        fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+        backgroundColor: 'rgba(210, 153, 34, 0.08)',
+        fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
       },
       {
         label: 'Common Lib',
         data: ${JSON.stringify(perAppVolumes['common'])},
         borderColor: '#bc8cff',
-        backgroundColor: 'rgba(188, 140, 255, 0.3)',
-        fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+        backgroundColor: 'rgba(188, 140, 255, 0.08)',
+        fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
       },
     ]
   },
@@ -1011,7 +1229,7 @@ new Chart(document.getElementById('appChart'), {
     plugins: { tooltip: commonTooltip },
     scales: {
       ...commonScales,
-      y: { ...commonScales.y, stacked: true },
+      y: { ...commonScales.y, stacked: false },
     }
   }
 });
@@ -1065,10 +1283,14 @@ async function main() {
   const data = await analyzeAll(commits);
   console.log();
 
-  const prompt = buildLlmPrompt(data);
+  // Single "first" anchor — the first source-bearing commit — shared by both
+  // the LLM prompt and the HTML report so their growth figures agree (F7).
+  const first = data.find(d => d.metrics.files > 0) || data[0];
+
+  const prompt = buildLlmPrompt(data, first);
 
   console.log('3. Generating HTML report...');
-  const html = generateHtml(data, null);
+  const html = generateHtml(data, null, first);
   writeFileSync(HTML_FILE, html, 'utf-8');
   console.log(`   ${HTML_FILE}\n`);
 
@@ -1083,7 +1305,17 @@ async function main() {
   console.log(`See tools/entropy-report/README.md for post-processing instructions.`);
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// Run only when invoked directly (`node entropy-report.mjs`), so the module
+// can be imported by tests without kicking off a full git analysis.
+const invokedDirectly =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
+
+export { tokenize, tokenizeInto, computeHalstead, halsteadFromMaps, normalizeStr, normalizeNum };
+export { SOURCE_DIRS, EXCLUDE_PATHS, SAMPLE_LABEL };
