@@ -1,11 +1,19 @@
 # Entropy Report — Source Code Complexity Analysis
 
-Measures Halstead complexity metrics across git history and generates an interactive HTML report.
+Measures source-code complexity across two complementary lenses. A complete analysis runs **both** scripts (see [Halstead vs Cyclomatic](#appendix-halstead-vs-cyclomatic-complexity)):
+
+| Script | Lens | Scope |
+|--------|------|-------|
+| `entropy-report.mjs` | Halstead information density | Whole git history, per commit → interactive HTML report |
+| `cyclomatic-report.mjs` | Cyclomatic decision paths | Single snapshot of current HEAD → aggregate stats |
+
+Both read the **same source set** — `SOURCE_DIRS`, `EXCLUDE_PATHS`, and the `.ts`/`.d.ts` rules are defined once in `entropy-report.mjs` and imported by `cyclomatic-report.mjs`, so the two reports always describe exactly the same files.
 
 ## Prerequisites
 
 - Node.js 20+
 - git
+- [`lizard`](https://github.com/terryyin/lizard) — only for `cyclomatic-report.mjs` (`pipx install lizard` or `pip install --user lizard`); must be on `PATH`
 
 ## Usage
 
@@ -37,15 +45,38 @@ The HTML report includes a placeholder for an LLM-generated analysis section. To
 
 The `.txt` file also contains the full raw JSON dataset under `RAW DATA (JSON)`, enabling re-analysis with different prompts or models without re-running the script.
 
+### 3. Generate the cyclomatic complexity snapshot
+
+A complete analysis is **both** reports. Halstead density alone cannot tell *concise* dense code from *overloaded* dense code — the cyclomatic snapshot supplies the decision-path dimension over the identical source set, so always run it as part of the analysis:
+
+```bash
+node tools/entropy-report/cyclomatic-report.mjs
+```
+
+This produces `reports/cyclomatic-{timestamp}.txt` — anonymous **aggregate** statistics only (no file or function names), matching the entropy report's anonymity contract:
+
+| Field | Meaning |
+|-------|---------|
+| `avgCcn` / `medianCcn` / `p90Ccn` / `p99Ccn` / `maxCcn` | Cyclomatic complexity distribution across all functions |
+| `pctFnCcnOver10` / `over15` / `over25` | Share of functions above each risk threshold |
+| `functionsPerFile` (derived) | Decomposition — how finely the code is split into units |
+| `avgFunctionNloc` / `maxFunctionNloc` | Function-length distribution |
+| `avgParams` / `maxParams` | Interface width |
+
+Read the two reports **together**: Halstead answers "is the codebase trending denser/harder over time?" (macro, whole-history); cyclomatic answers "is that density branchy or just expressive?" (micro, current snapshot). Neither is conclusive alone — see [Halstead vs Cyclomatic](#appendix-halstead-vs-cyclomatic-complexity).
+
 ## Output structure
 
 ```
 tools/entropy-report/
-  entropy-report.mjs       # The script
+  entropy-report.mjs       # Halstead history report (also exports the shared scope config)
+  cyclomatic-report.mjs    # Cyclomatic HEAD snapshot (imports scope from entropy-report.mjs)
+  entropy-report.test.mjs  # Tokenizer tests
   README.md                # This file
   reports/
     entropy-20260324-*.html
     entropy-20260324-*.txt
+    cyclomatic-20260324-*.txt
 ```
 
 ## What it measures
@@ -123,7 +154,7 @@ Analyzes `.ts` files in `apps/` and `libs/` (excluding `.d.ts`). Per-app breakdo
 
 ## Appendix: Halstead vs Cyclomatic Complexity
 
-This tool computes **Halstead metrics**. A complementary approach is **cyclomatic complexity** (available via `lizard`). They measure different things:
+The two scripts here compute **Halstead metrics** (`entropy-report.mjs`) and **cyclomatic complexity** (`cyclomatic-report.mjs`, via `lizard`). They measure different things, which is why a complete analysis runs both:
 
 **Halstead** — measures **information content**. Counts operators and operands, computes Volume/Difficulty/Effort. Answers: "how much stuff is in this code and how hard is it to read?"
 
@@ -144,13 +175,13 @@ Halstead tracks **growth trends** well — "is the codebase getting harder to ma
 
 Cyclomatic catches **individual problem functions** — "this 40-line handler has CC=25, it's a bug magnet." That is what lizard does (micro lens).
 
-### Available tools comparison
+### The two scripts
 
-| Feature | This script (Halstead) | lizard (cyclomatic) |
+| Feature | `entropy-report.mjs` (Halstead) | `cyclomatic-report.mjs` (cyclomatic, via `lizard`) |
 |---|---|---|
 | Metrics | Volume, Difficulty, Effort, Est. Bugs | Cyclomatic complexity, NLOC, token count, param count, nesting depth |
-| Scope | Codebase-wide trends across git history | Per-function snapshot |
-| TypeScript support | Yes (custom tokenizer) | Yes (native) |
+| Scope | Codebase-wide trends across git history | Per-function distribution, current HEAD |
+| TypeScript support | Yes (custom tokenizer) | Yes (`lizard` native) |
 | Git history | Yes (built-in) | No (single snapshot) |
-| Output | HTML + Chart.js, TXT | XML, CSV, HTML |
-| Maintenance | In-house | Active open-source (2.3k stars) |
+| Output | HTML + Chart.js, TXT | TXT (anonymous aggregate JSON) |
+| Engine | In-house tokenizer | `lizard` (active open-source, 2.3k stars) driven by in-house script |
