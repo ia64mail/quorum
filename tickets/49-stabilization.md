@@ -10,6 +10,8 @@ Catch-all stabilization wave for assorted, **unrelated** correctness and hygiene
 |--------|-------|--------|
 | [#50](50-entropy-report-halstead-correctness.md) | Entropy report — Halstead score & chart calculation correctness | Spec |
 | [#51](51-ticket-library-verification-discipline.md) | Ticket library — "truth about a change, not current state" consumption discipline | Spec |
+| [#55](55-bootstrap-getall-recency-ordering.md) | Bootstrap context — recency ordering broken under OpenSearch backend | Spec |
+| [#56](56-bootstrap-budget-sizing.md) | Bootstrap context — token budget excludes project-notes records (depends on #55) | Spec |
 
 ## References
 
