@@ -29,6 +29,13 @@ const REPO_ROOT = resolve(__dirname, '../..');
 const REPORTS_DIR = resolve(__dirname, 'reports');
 const SOURCE_DIRS = ['apps/', 'libs/'];
 
+// Sample identity & scope — shared with cyclomatic-report.mjs so both reports
+// describe exactly the same source set.
+//   SAMPLE_LABEL  — development MODE/PERIOD of this sample (not the repo).
+//   EXCLUDE_PATHS — optional path prefixes under SOURCE_DIRS to drop ([] = none).
+const SAMPLE_LABEL = 'Quorum · research project, AI-authored, ticket-driven agent fleet';
+const EXCLUDE_PATHS = [];
+
 // Timestamp for output filenames
 const now = new Date();
 const TIMESTAMP = now.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
@@ -385,7 +392,8 @@ function getFilesAtCommit(hash) {
     const dirArgs = SOURCE_DIRS.map(d => `"${d}"`).join(' ');
     const output = exec(`git ls-tree -r --name-only ${hash} -- ${dirArgs} 2>/dev/null`);
     return output.trim().split('\n')
-      .filter(f => f.endsWith('.ts') && !f.endsWith('.d.ts'));
+      .filter(f => f.endsWith('.ts') && !f.endsWith('.d.ts'))
+      .filter(f => !EXCLUDE_PATHS.some(prefix => f.startsWith(prefix)));
   } catch {
     return [];
   }
@@ -1310,3 +1318,4 @@ if (invokedDirectly) {
 }
 
 export { tokenize, tokenizeInto, computeHalstead, halsteadFromMaps, normalizeStr, normalizeNum };
+export { SOURCE_DIRS, EXCLUDE_PATHS, SAMPLE_LABEL };
