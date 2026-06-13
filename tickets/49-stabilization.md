@@ -12,6 +12,7 @@ Catch-all stabilization wave for assorted, **unrelated** correctness and hygiene
 | [#51](51-ticket-library-verification-discipline.md) | Ticket library — "truth about a change, not current state" consumption discipline | Spec |
 | [#55](55-bootstrap-getall-recency-ordering.md) | Bootstrap context — recency ordering broken under OpenSearch backend | Spec |
 | [#56](56-bootstrap-budget-sizing.md) | Bootstrap context — token budget excludes project-notes records (depends on #55) | Spec |
+| [#59](59-agent-scope-role-keyed-partition.md) | Context Store — agent scope provides no cross-invocation role persistence (keyed on correlationId, not role) | Spec |
 
 ## References
 
