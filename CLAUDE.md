@@ -59,6 +59,8 @@ The `tickets/` directory is an **implementation timeline knowledge base** — no
 
 Tickets complement `docs/` — documentation describes the current system; tickets explain the sequence of decisions that built it. See [tickets/README.md](tickets/README.md) for naming conventions, structure requirements, and writing guidelines.
 
+A ticket is the truth about a *change* at its authoring moment, not a live description of the present — reconcile its concrete claims (`file:line`, payloads, flag names) across the ticket chain and confirm them against current code/runtime before relying on them, and once you open a ticket to act on it, read it in full rather than a grepped fragment (the corrections to its own earlier claims sit at the end). See [A Ticket Is the Truth About a Change, Not About the Present](tickets/README.md#a-ticket-is-the-truth-about-a-change-not-about-the-present) for the full consumption discipline.
+
 ### Research Tools
 
 The `tools/` directory holds developer scripts for analyzing the codebase and runtime behavior — not part of the runtime system, but used to understand and report on it.
