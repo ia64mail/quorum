@@ -35,6 +35,7 @@ Add a subsection (after **Tickets vs Documentation**, before **Naming Convention
 - A ticket records an accurate transition from **state A → state B** at the moment it was authored. It is the truth about *that change*, not a live description of current behavior. The current state is the **composition of every transaction in the chain**; code and the running system are the final ground truth for it.
 - **A claim true at its transaction may be stale now.** `file:line` references, payload/type shapes, log strings, flag names, and behavioral descriptions were accurate for the change the ticket recorded. They are not standing facts about the present — a later change may have moved them. Don't treat "true then" as "true now"; confirm the present A→B state before relying on it (e.g., read a flag's current value rather than assuming the ticket's).
 - **Read the chain, not one ticket.** One ticket is one transaction. The change that superseded an earlier ticket is itself recorded by a *later* ticket — this is how tickets reinforce each other. To reconstruct current state, follow referenced/predecessor tickets and the chronological numbering across A→B→C→…→now; a single ticket in isolation gives you one transaction, possibly already superseded.
+- **Read a ticket whole, not a fragment.** This is the intra-ticket form of the same discipline. A ticket is a deliberately ordered A→B narrative, and the parts that *qualify or override* its earlier plan — `Implementation Notes`, `Deviations from Ticket Spec`, the flipped acceptance-criteria checkboxes — sit at the **end**. Grepping for a symbol and reading only the surrounding lines surfaces the plan and misses its corrections, reproducing "true then" vs "true now" *inside a single ticket*. Tickets are deliberately small (typically ~100–300 lines) and form a complete story start to end, so reading one in full is cheap. Use search to *locate* the right ticket; once it is the one you will act on, read it end to end rather than acting on a matched excerpt.
 - **Reconcile across the chain, confirm against code.** Use `docs/` for current-state architecture and the code/running system for ground truth; use `tickets/` for the **why** and the **evolution path** — the ordered record of how the code reached its present shape.
 
 Cross-reference the existing `Implementation Notes` / `Deviations from Ticket Spec` convention as the mechanism that keeps tickets honest about where they intentionally diverge from the merged code.
@@ -43,19 +44,19 @@ Cross-reference the existing `Implementation Notes` / `Deviations from Ticket Sp
 
 The **Ticket Library** subsection exists, near-identically, in **two** files: the root `CLAUDE.md` (developer-facing, under Project Structure) and `docker/moderator/CLAUDE.md` (the in-container moderator persona, under its Project Structure section). Both must get the pointer, kept consistent between them.
 
-In each Ticket Library subsection, add one sentence making the discipline visible at session start and pointing to the new README subsection — e.g. that a ticket is the truth about a change at its authoring moment (not the present state), so claims should be reconciled across the ticket chain and confirmed against current code/runtime, with the detail in `tickets/README.md`. Keep it to a sentence or two; the README holds the full guidance. The two pointers can be worded identically.
+In each Ticket Library subsection, add one sentence making the discipline visible at session start and pointing to the new README subsection — e.g. that a ticket is the truth about a change at its authoring moment (not the present state), so claims should be reconciled across the ticket chain and confirmed against current code/runtime, with the detail in `tickets/README.md`. Fold in a brief clause that a ticket, once opened to rely on, is read in full rather than as a grepped fragment — the corrections to its own earlier claims live at the end. Keep it to a sentence or two; the README holds the full guidance. The two pointers can be worded identically.
 
 Keep both edits abstract about motivation — state the discipline and its rationale (a transaction read as current state; one ticket read in isolation) in general terms. Do not narrate a specific incident.
 
 ## Acceptance Criteria
 
-- [ ] `tickets/README.md` has a new subsection establishing tickets as the truth about a change (A→B) but not about current state, covering: a claim true at its transaction may be stale now, read-the-chain (not one ticket), and reconcile-across-the-chain-confirm-against-code
-- [ ] The subsection cross-references the existing `Implementation Notes` / `Deviations from Ticket Spec` convention as the implementation-drift mitigation it complements
-- [ ] The Ticket Library section in **both** the root `CLAUDE.md` and `docker/moderator/CLAUDE.md` gains a one-to-two-sentence pointer to the new guidance, worded consistently between them
-- [ ] No multi-repository / cross-repo language introduced anywhere
-- [ ] Motivation is stated abstractly; no specific incident or external document is referenced
-- [ ] Wording matches the existing voice of each file; numbering scheme references use Quorum's `QRM<N>-NNN` / `#NNN` convention
-- [ ] This ticket's `Implementation Notes` section added on completion
+- [x] `tickets/README.md` has a new subsection establishing tickets as the truth about a change (A→B) but not about current state, covering: a claim true at its transaction may be stale now, read-the-chain (not one ticket), read-a-ticket-whole (not a grepped fragment, since corrections sit at the end), and reconcile-across-the-chain-confirm-against-code
+- [x] The subsection cross-references the existing `Implementation Notes` / `Deviations from Ticket Spec` convention as the implementation-drift mitigation it complements
+- [x] The Ticket Library section in **both** the root `CLAUDE.md` and `docker/moderator/CLAUDE.md` gains a one-to-two-sentence pointer to the new guidance, worded consistently between them
+- [x] No multi-repository / cross-repo language introduced anywhere
+- [x] Motivation is stated abstractly; no specific incident or external document is referenced
+- [x] Wording matches the existing voice of each file; numbering scheme references use Quorum's `QRM<N>-NNN` / `#NNN` convention
+- [x] This ticket's `Implementation Notes` section added on completion
 
 ## Dependencies and References
 
@@ -64,3 +65,26 @@ Keep both edits abstract about motivation — state the discipline and its ratio
 - `docker/moderator/CLAUDE.md` — in-container moderator persona; carries a duplicate Ticket Library subsection that must receive the same pointer
 - Related existing mechanism: post-implementation `Implementation Notes` + `Deviations from Ticket Spec` (README §Post-Implementation Update) — drift mitigation this discipline complements
 - `docs/knowledge-management.md` — knowledge-domain framing that the source-of-truth hierarchy here is consistent with
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-06-13
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `tickets/README.md` | Modified | New subsection *"A Ticket Is the Truth About a Change, Not About the Present"* between **Tickets vs Documentation** and **Naming Convention**; five bullets (transition A→B, claim-may-be-stale, read-the-chain, read-a-ticket-whole, reconcile-confirm-against-code) plus a closing paragraph cross-referencing the `Implementation Notes` / `Deviations from Ticket Spec` convention |
+| `CLAUDE.md` (root) | Modified | Ticket Library subsection gains a two-sentence pointer to the new README subsection, including the read-in-full clause |
+| `docker/moderator/CLAUDE.md` | Modified | Same pointer added to the duplicate Ticket Library subsection, worded identically to the root file |
+
+### Deviations from Ticket Spec
+
+- **Added a fourth discipline bullet, "Read a ticket whole, not a fragment," not present in the original spec.** Refined during spec review: it is the intra-ticket corollary of failure mode #1 (a fragment read surfaces the plan but misses the `Implementation Notes` / `Deviations` corrections that sit at the ticket's end, reproducing "true then" vs "true now" inside one ticket). The spec's §1, §2, and first acceptance criterion were updated to include it before implementation, so the delivered docs match the refined spec.
+
+### Verification
+
+- Documentation-only change — no build/lint/test impact. `tickets/`, root `CLAUDE.md`, and `docker/moderator/CLAUDE.md` are not part of any compiled or tested unit.
+- Verified the two CLAUDE.md pointers are byte-identical and that the in-document anchor (`#a-ticket-is-the-truth-about-a-change-not-about-the-present`) matches the new README heading.
