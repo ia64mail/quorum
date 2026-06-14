@@ -19,6 +19,18 @@ Tickets and documentation serve different roles:
 
 Tickets **complement** documentation. Documentation describes the current state of the system; tickets explain the sequence of decisions that got it there. Together they give an agent full context: the architecture (docs) and the reasoning trail (tickets).
 
+## A Ticket Is the Truth About a Change, Not About the Present
+
+A ticket *is* a source of truth — but for **how the system changed over time**, not for its **current state**. Reading it as a live description of the system is the most common way to misuse the library. The discipline below applies whenever you consume a ticket.
+
+- **A ticket records a transition, A → B, at the moment it was authored.** It is the truth about *that change*, not a standing description of current behavior. The current state is the **composition of every transaction in the chain**; the code and the running system are the final ground truth for it.
+- **A claim true at its transaction may be stale now.** `file:line` references, payload and type shapes, log strings, flag names, and behavioral descriptions were accurate for the change the ticket recorded. They are not standing facts about the present — a later change may have moved them. Don't treat "true then" as "true now"; confirm the present state before relying on a concrete claim (read a flag's current value rather than assuming the ticket's).
+- **Read the chain, not one ticket.** One ticket is one transaction. The change that superseded an earlier ticket is itself recorded by a *later* ticket — this is how the library reinforces itself. To reconstruct the present, follow referenced and predecessor tickets and the chronological numbering across A → B → C → … → now. A single mid-history ticket read in isolation reconstructs a state that may already be superseded.
+- **Read a ticket whole, not a fragment.** This is the intra-ticket form of the same rule. A ticket is a deliberately ordered narrative, and the parts that *qualify or override* its own earlier plan — `Implementation Notes`, `Deviations from Ticket Spec`, and the flipped acceptance-criteria checkboxes — sit at the **end**. Grepping for a symbol and reading only the surrounding lines surfaces the plan and misses its corrections, reproducing "true then" vs "true now" *within a single ticket*. Tickets are deliberately small — typically ~100–300 lines, a complete story from start to end — so a full read is cheap. Use search to *locate* the right ticket; once it is the one you will act on, read it end to end rather than acting on a matched excerpt.
+- **Reconcile across the chain, confirm against code.** Use `docs/` for current-state architecture and the code and running system as ground truth; use `tickets/` for the **why** and the **evolution path** — the ordered record of how the code reached its present shape.
+
+This complements, rather than replaces, the post-implementation `Implementation Notes` / `Deviations from Ticket Spec` convention (see [Post-Implementation Update](#post-implementation-update)). That convention keeps an individual ticket honest about where the merged code intentionally diverged from its spec; the discipline here governs the *temporal* case — a ticket accurate for its own transaction, later superseded by subsequent ones.
+
 ## Naming Convention
 
 ### Ticket ID
