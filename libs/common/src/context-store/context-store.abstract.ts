@@ -79,9 +79,17 @@ export abstract class ContextStore {
    *
    * Expired items are excluded and lazily cleaned up.
    *
+   * **Ordering contract:** items MUST be returned in `createdAt` ascending
+   * (oldest-first) order. The returned `Record` relies on JS string-key
+   * insertion order to carry this, so callers can `.reverse()` to prefer the
+   * newest (e.g. `BootstrapContextService.applyBudget`). Backends that query an
+   * unordered store must apply an explicit sort — a filter-only query does not
+   * satisfy this contract (see #55).
+   *
    * @param scope - Context scope to enumerate.
    * @param id    - `correlationId` or `agentId`. Omit for project scope.
-   * @returns A record keyed by item key (not composite key) mapped to its value.
+   * @returns A record keyed by item key (not composite key) mapped to its value,
+   *          ordered oldest-first by `createdAt`.
    */
   abstract getAll(
     scope: ContextScope,

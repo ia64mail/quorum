@@ -150,7 +150,7 @@ The `value` field has indexing disabled (`enabled: false`) — it is stored for 
 |--------|----------|
 | `set()` | Builds composite key, pre-renders `embeddingText` via `toEmbeddingText()`, indexes with `refresh: true` (BM25-immediate), emits `'context.change'` event (triggers async embedding) |
 | `get()` | Fetches by composite key document ID. Lazy-expires: if `expiresAt <= now`, deletes and emits `'expire'` event |
-| `getAll()` | Filtered query by scope + id prefix, excludes expired items, excludes `embedding`/`embeddingText` from response |
+| `getAll()` | Filtered query by scope + id prefix, sorted `createdAt` ascending (oldest-first — the `ContextStore.getAll` ordering contract), excludes expired items, excludes `embedding`/`embeddingText` from response |
 | `search()` | Hybrid query (BM25 + k-NN) through `hybrid-search` pipeline; falls back to BM25-only when Ollama unavailable. Applies token budget |
 | `getStats()` | Counts live items and estimates tokens. Aggregates across all scopes if `scope` omitted |
 

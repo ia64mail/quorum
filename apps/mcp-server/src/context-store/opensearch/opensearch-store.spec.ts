@@ -466,6 +466,18 @@ describe('OpenSearchStore', () => {
       expect(arg.body._source.excludes).toEqual(['embedding', 'embeddingText']);
     });
 
+    it('should sort by createdAt ascending to honor the recency contract (#55)', async () => {
+      mockSearch.mockResolvedValue(makeHits([]));
+      const { store } = createStore();
+
+      await store.getAll(ContextScope.project);
+
+      const arg = firstCallArg<{
+        body: { sort: Array<Record<string, unknown>> };
+      }>(mockSearch);
+      expect(arg.body.sort).toEqual([{ createdAt: 'asc' }]);
+    });
+
     it('should return empty record on OpenSearch failure', async () => {
       mockSearch.mockRejectedValue(new Error('connection refused'));
       const { store } = createStore();
