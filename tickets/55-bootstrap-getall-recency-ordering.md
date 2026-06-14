@@ -71,11 +71,11 @@ Note: `createdAt` must be mapped as a numeric/date field for the sort to work �
 
 ## Acceptance Criteria
 
-1. - [ ] `OpenSearchStore.getAll()` includes `sort: [{ createdAt: 'asc' }]` in the search body.
-2. - [ ] `ContextStore.getAll` contract documented: items returned in `createdAt` ascending order.
-3. - [ ] Unit test: `OpenSearchStore.getAll` passes the sort clause to the client (assert on the mocked client's request body).
-4. - [ ] Unit test (or existing-test audit): `BootstrapContextService` selects the newest items when `getAll` returns oldest→newest and the budget forces a cut.
-5. - [ ] `npm run build`, `npm run lint`, `npm run test` pass with no regressions.
+1. - [x] `OpenSearchStore.getAll()` includes `sort: [{ createdAt: 'asc' }]` in the search body.
+2. - [x] `ContextStore.getAll` contract documented: items returned in `createdAt` ascending order.
+3. - [x] Unit test: `OpenSearchStore.getAll` passes the sort clause to the client (assert on the mocked client's request body).
+4. - [x] Unit test (or existing-test audit): `BootstrapContextService` selects the newest items when `getAll` returns oldest→newest and the budget forces a cut.
+5. - [x] `npm run build`, `npm run lint`, `npm run test` pass with no regressions.
 6. - [ ] Manual verification on the live `quorum-context` index: a bootstrap assembly after the fix injects the most recent small-enough project records instead of the static QRM6-era set.
 
 ## Dependencies and References
@@ -90,3 +90,29 @@ Note: `createdAt` must be mapped as a numeric/date field for the sort to work �
 - Budget sizing and ratio changes — [#56](56-bootstrap-budget-sizing.md).
 - Query-aware / task-relevant bootstrap selection (bootstrap is assembled before the task is known to the store; any relevance ranking is a larger design change).
 - Cleanup of stale store records (`elicitation-test-A`, `qrm6-rerun-elicit-A`) — worth doing, but data hygiene, not code.
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Date:** 2026-06-13
+
+### Files Created/Modified
+
+| File | Action | Notes |
+|------|--------|-------|
+| `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts` | Modified | `getAll()` search body gains `sort: [{ createdAt: 'asc' }]` (oldest-first), with a comment pointing at the contract and #55. |
+| `libs/common/src/context-store/context-store.abstract.ts` | Modified | `getAll` JSDoc now states the ordering contract (items returned `createdAt` ascending; callers `.reverse()` to prefer newest). |
+| `docs/context-store.md` | Modified | OpenSearch behavior table `getAll()` row notes the createdAt-ascending sort and the ordering contract. |
+| `apps/mcp-server/src/context-store/opensearch/opensearch-store.spec.ts` | Modified | New test asserts `getAll` passes `sort: [{ createdAt: 'asc' }]` to the client request body. |
+
+### Deviations from Ticket Spec
+
+None. Implemented exactly as specified — single-line sort addition on the store boundary, no change to `BootstrapContextService`. AC #4 was satisfied by audit: the existing `bootstrap-context.service.spec.ts` "item recency ordering" test already exercises newest-preference over an oldest→newest input under a tight budget, which is exactly the behavior this fix restores at the backend boundary.
+
+### Verification
+
+- `npm run build` — compiles successfully (3 webpack bundles)
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 840 tests passing (1 new + 839 existing), 47 suites
+- AC #6 (live-index manual verification) left unchecked — requires a running OpenSearch/Ollama deployment, deferred to runtime smoke verification.

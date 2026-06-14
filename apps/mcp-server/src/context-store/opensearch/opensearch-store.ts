@@ -172,6 +172,11 @@ export class OpenSearchStore extends ContextStore {
         index: this.osConfig.index,
         body: {
           query: { bool: { filter: filters } },
+          // Oldest-first so the result map preserves createdAt-ascending
+          // insertion order — the contract consumers rely on (see getAll
+          // contract on ContextStore). A filter-only query otherwise returns
+          // hits in arbitrary Lucene-internal order. (#55)
+          sort: [{ createdAt: 'asc' }],
           size: 10000,
           _source: { excludes: ['embedding', 'embeddingText'] },
         },
