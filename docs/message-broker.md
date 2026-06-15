@@ -304,8 +304,8 @@ Before delivering an invocation, the broker calls `BootstrapContextService.assem
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|
 | `BOOTSTRAP_ENABLED` | `true` | Master toggle — when `false`, assembly returns `null` |
-| `BOOTSTRAP_MAX_TOKENS` | `1000` | Total token budget for the assembled bootstrap payload |
-| `BOOTSTRAP_PROJECT_RATIO` | `0.6` | Fraction of budget allocated to project-scope items (remainder goes to conversation) |
+| `BOOTSTRAP_MAX_TOKENS` | `5000` | Total token budget for the assembled bootstrap payload |
+| `BOOTSTRAP_PROJECT_RATIO` | `0.8` | Fraction of budget allocated to project-scope items (remainder goes to conversation) |
 
 These are set in `docker-compose.yml` on the `mcp-server` service and read by the config factory in `apps/mcp-server/src/config/bootstrap.config.ts`.
 
