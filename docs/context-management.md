@@ -342,7 +342,7 @@ sequenceDiagram
 
 **How it works:**
 
-The broker calls `BootstrapContextService.assemble(correlationId)` after safeguard checks pass. The service queries `ContextStore.getAll()` for project-scope items (always) and conversation-scope items (when a `correlationId` is present). A token budget (`BOOTSTRAP_MAX_TOKENS`, default 1000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.6). Items are selected via greedy bin-packing in reverse insertion order (newer items preferred). Unused project budget reclaims to the conversation allocation.
+The broker calls `BootstrapContextService.assemble(correlationId)` after safeguard checks pass. The service queries `ContextStore.getAll()` for project-scope items (always) and conversation-scope items (when a `correlationId` is present). A token budget (`BOOTSTRAP_MAX_TOKENS`, default 5000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.8, i.e. a 4000-token project budget). Items are selected via greedy bin-packing in reverse insertion order (newer items preferred). Unused project budget reclaims to the conversation allocation.
 
 The assembled `BootstrapContext` is attached to `request.bootstrapContext`. On the agent side, `InvocationHandler.buildPrompt()` renders it as a `## Prior Decisions` section (with `### Project Context` and `### Conversation Context` subsections) prepended before the task description. The `meta` field (item count, estimated tokens, scopes queried) is not rendered — it is internal bookkeeping.
 
@@ -351,8 +351,8 @@ The assembled `BootstrapContext` is attached to `request.bootstrapContext`. On t
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|
 | `BOOTSTRAP_ENABLED` | `true` | Master toggle — `false` disables assembly entirely |
-| `BOOTSTRAP_MAX_TOKENS` | `1000` | Total token budget for the bootstrap payload |
-| `BOOTSTRAP_PROJECT_RATIO` | `0.6` | Fraction of budget for project-scope items |
+| `BOOTSTRAP_MAX_TOKENS` | `5000` | Total token budget for the bootstrap payload |
+| `BOOTSTRAP_PROJECT_RATIO` | `0.8` | Fraction of budget for project-scope items |
 
 These are configured in `docker-compose.yml` on the `mcp-server` service. The config factory is in `apps/mcp-server/src/config/bootstrap.config.ts`.
 
