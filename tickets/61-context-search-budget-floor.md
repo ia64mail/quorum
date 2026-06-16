@@ -81,12 +81,12 @@ Risk of not fixing: the one retrieval path the QRM8 audit found working (project
 
 ## Acceptance Criteria
 
-1. - [ ] `OpenSearchStore.search` and `InMemoryStore.search` return the top-ranked hit even when it alone exceeds the token budget (no empty result set when ≥1 hit matches).
-2. - [ ] Non-top hits still follow skip-and-stop (ranked prefix; no size-based reordering).
-3. - [ ] `CONTEXT_DEFAULT_MAX_TOKENS` default raised `2000 → 3000`; Zod schema unchanged (env-overridable).
-4. - [ ] `.env.example` and `docs/context-management.md` updated to the new default and the floor behavior.
-5. - [ ] Unit tests (both backends): (a) an oversized sole hit is returned; (b) an oversized top hit followed by smaller hits returns the top hit and stops; (c) normal multi-hit budgeting unchanged. Trace assertions for `includedInResult` / `truncatedByTokenBudget`.
-6. - [ ] `npm run build`, `npm run lint`, `npm run test` pass with no regressions.
+1. - [x] `OpenSearchStore.search` and `InMemoryStore.search` return the top-ranked hit even when it alone exceeds the token budget (no empty result set when ≥1 hit matches).
+2. - [x] Non-top hits still follow skip-and-stop (ranked prefix; no size-based reordering).
+3. - [x] `CONTEXT_DEFAULT_MAX_TOKENS` default raised `2000 → 3000`; Zod schema unchanged (env-overridable).
+4. - [x] `.env.example` and `docs/context-management.md` updated to the new default and the floor behavior.
+5. - [x] Unit tests (both backends): (a) an oversized sole hit is returned; (b) an oversized top hit followed by smaller hits returns the top hit and stops; (c) normal multi-hit budgeting unchanged. Trace assertions for `includedInResult` / `truncatedByTokenBudget`.
+6. - [x] `npm run build`, `npm run lint`, `npm run test` pass with no regressions.
 
 ## Dependencies and References
 
@@ -102,3 +102,32 @@ Risk of not fixing: the one retrieval path the QRM8 audit found working (project
 - Per-record write-time size caps or warnings.
 - Query-aware budget adaptation or relevance-threshold cutoffs.
 - Stale-record cleanup in the store.
+
+## Implementation Notes
+
+**Status:** Complete
+**Date:** 2026-06-16
+**PR:** #62
+
+### Files Created/Modified
+
+| File | Change |
+|------|--------|
+| `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts` | Added `isTopHit` floor: first ranked hit admitted even when exceeding `tokenBudget`, then `budgetExhausted` set. `includedInResult` trace field updated from `fits` to `include`. |
+| `apps/mcp-server/src/context-store/in-memory-store.ts` | Same floor logic adapted for decremental `tokenBudget` pattern. |
+| `apps/mcp-server/src/config/context.config.ts` | Default `CONTEXT_DEFAULT_MAX_TOKENS` changed `2000` → `3000`. |
+| `apps/mcp-server/src/config/context.config.spec.ts` | Default assertion updated to `3000`. |
+| `apps/mcp-server/src/context-store/opensearch/opensearch-store.spec.ts` | 3 new tests in `describe('top-hit floor (#61)')`: oversized sole hit, oversized top hit + followers, normal multi-hit preserved. All include trace assertions. |
+| `apps/mcp-server/src/context-store/in-memory-store.spec.ts` | 3 new tests mirroring the OpenSearch suite for the InMemory backend. |
+| `.env.example` | `CONTEXT_DEFAULT_MAX_TOKENS=3000` |
+| `docs/context-management.md` | Search mode table, hybrid search §4, and `context_summarize` budget calc all updated with top-hit floor semantics and new 3000 default. |
+
+### Deviations from Ticket Spec
+
+None. Implementation follows the ticket's proposed code shape exactly.
+
+### Verification
+
+- `npm run build` — 3 webpack compilations, 0 errors
+- `npm run lint` — 0 errors, 0 warnings
+- `npm run test` — 854 tests passed across 48 suites (848 baseline + 6 new)
