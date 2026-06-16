@@ -513,6 +513,109 @@ describe('InMemoryStore', () => {
       expect(included.length).toBe(1);
       expect(excluded.length).toBeGreaterThan(0);
     });
+
+    describe('top-hit floor (#61)', () => {
+      it('should return an oversized sole hit even when it exceeds the budget', async () => {
+        // Store a single large item: "x".repeat(100) → ceil(104/4) = 26 tokens
+        await store.set({
+          scope: ContextScope.project,
+          key: 'large-record',
+          value: 'x'.repeat(100),
+        });
+        let trace: SearchTrace | undefined;
+
+        const results = await store.search(
+          ContextScope.project,
+          'large-record',
+          undefined,
+          5, // budget = 5 tokens, item ≈ 26 tokens
+          (t) => {
+            trace = t;
+          },
+        );
+
+        expect(results).toHaveLength(1);
+        expect(results[0].key).toBe('large-record');
+        expect(trace).toBeDefined();
+        expect(trace!.hitCountReturned).toBe(1);
+        expect(trace!.results[0].includedInResult).toBe(true);
+        expect(trace!.truncatedByTokenBudget).toBe(false); // sole hit, no truncation
+      });
+
+      it('should return only the oversized top hit and stop when smaller hits follow', async () => {
+        // Large top hit + smaller hit that would fit on its own
+        await store.set({
+          scope: ContextScope.project,
+          key: 'big-design-notes',
+          value: 'design '.repeat(50), // ~ceil(354/4) = 89 tokens
+        });
+        await store.set({
+          scope: ContextScope.project,
+          key: 'small-note',
+          value: 'design tip', // ~ceil(12/4) = 3 tokens
+        });
+        let trace: SearchTrace | undefined;
+
+        const results = await store.search(
+          ContextScope.project,
+          'design',
+          undefined,
+          10, // budget = 10, top hit ≈ 89 tokens
+          (t) => {
+            trace = t;
+          },
+        );
+
+        // Only the top hit (first match) should be returned
+        expect(results).toHaveLength(1);
+        expect(results[0].key).toBe('big-design-notes');
+        expect(trace).toBeDefined();
+        expect(trace!.hitCountRaw).toBe(2);
+        expect(trace!.hitCountReturned).toBe(1);
+        expect(trace!.truncatedByTokenBudget).toBe(true);
+        expect(trace!.results[0].includedInResult).toBe(true);
+        expect(trace!.results[1].includedInResult).toBe(false);
+      });
+
+      it('should preserve normal multi-hit budgeting when top hit fits', async () => {
+        // Three items that all match, budget fits first two
+        await store.set({
+          scope: ContextScope.project,
+          key: 'item-alpha',
+          value: 'alpha data', // ceil(12/4) = 3 tokens
+        });
+        await store.set({
+          scope: ContextScope.project,
+          key: 'item-alpha-2',
+          value: 'alpha info', // ceil(12/4) = 3 tokens
+        });
+        await store.set({
+          scope: ContextScope.project,
+          key: 'item-alpha-3',
+          value: 'alpha note', // ceil(12/4) = 3 tokens
+        });
+        let trace: SearchTrace | undefined;
+
+        const results = await store.search(
+          ContextScope.project,
+          'alpha',
+          undefined,
+          6, // budget = 6 tokens, fits two items (3+3)
+          (t) => {
+            trace = t;
+          },
+        );
+
+        expect(results).toHaveLength(2);
+        expect(trace).toBeDefined();
+        expect(trace!.hitCountRaw).toBe(3);
+        expect(trace!.hitCountReturned).toBe(2);
+        expect(trace!.truncatedByTokenBudget).toBe(true);
+        expect(trace!.results[0].includedInResult).toBe(true);
+        expect(trace!.results[1].includedInResult).toBe(true);
+        expect(trace!.results[2].includedInResult).toBe(false);
+      });
+    });
   });
 
   describe('getStats', () => {

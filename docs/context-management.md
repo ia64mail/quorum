@@ -172,7 +172,7 @@ server.registerTool('context_query', {
 | Mode | Behavior | Returns |
 |------|----------|---------|
 | `keys` | Calls `get()` for each key individually | `Record<string, unknown>` (key → value, `undefined` for missing) |
-| `search` | Hybrid BM25 + k-NN vector search with token budget (OpenSearch backend); substring match fallback (InMemory backend) | `ContextItem[]` ranked by relevance (within `maxTokens` budget, defaults to `CONTEXT_DEFAULT_MAX_TOKENS`) |
+| `search` | Hybrid BM25 + k-NN vector search with token budget (OpenSearch backend); substring match fallback (InMemory backend). The top-ranked hit is always returned even if it alone exceeds the budget (top-hit floor); subsequent hits follow skip-and-stop admission. | `ContextItem[]` ranked by relevance (within `maxTokens` budget, defaults to `CONTEXT_DEFAULT_MAX_TOKENS` = 3000) |
 | `get-all` | Returns all items in the scope | `Record<string, unknown>` |
 
 **Search behavior (OpenSearch backend):**
@@ -182,7 +182,7 @@ With the OpenSearch backend active, `search` mode uses **hybrid semantic search*
 1. The query is embedded via `EmbeddingService.embedQuery()` using the `mxbai-embed-large` model (with an asymmetric instruction prefix for retrieval quality)
 2. A hybrid query executes both a **BM25 full-text leg** (matching against pre-rendered `embeddingText`) and a **k-NN vector leg** (cosine similarity on embedding vectors)
 3. Results are fused via the `hybrid-search` pipeline using min-max normalization and weighted combination (30% BM25, 70% k-NN)
-4. Results are **ranked by relevance** — not just filtered by keyword presence — and accumulated within the `maxTokens` budget
+4. Results are **ranked by relevance** — not just filtered by keyword presence — and accumulated within the `maxTokens` budget. The top-ranked hit is always admitted even if it alone exceeds the budget (top-hit floor), ensuring search never returns empty when matches exist; subsequent hits follow skip-and-stop admission (ranked prefix, no bin-packing)
 
 **Graceful degradation:** If Ollama is unavailable, search falls back to BM25-only (still superior to substring matching since it uses tokenized full-text search with TF-IDF ranking). A record written moments ago that hasn't been embedded yet is still found via BM25; it participates in hybrid search once its vector is computed (~300ms async).
 
@@ -211,7 +211,7 @@ server.registerTool('context_summarize', {
 **Handler logic:**
 1. Fetches all items for the conversation via `getAll()`
 2. Splits items into `preserved` (matching `preserveKeys`) and `rest`
-3. Calculates budget: `totalCharBudget = maxTokens × tokenCharRatio` (defaults: 2000 × 4 = 8000 chars)
+3. Calculates budget: `totalCharBudget = maxTokens × tokenCharRatio` (defaults: 3000 × 4 = 12000 chars)
 4. Subtracts preserved items' size from budget
 5. Accumulates non-preserved items until remaining budget exhausted
 6. Stores result as `_summary` key in the conversation scope

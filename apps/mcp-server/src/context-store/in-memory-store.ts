@@ -219,9 +219,12 @@ export class InMemoryStore
         terms.every((term) => searchable.includes(term))
       ) {
         const tokens = this.estimateTokens(item.value);
-        if (!budgetExhausted && tokens <= tokenBudget) {
+        const isTopHit = results.length === 0;
+        const fits = tokens <= tokenBudget;
+        if (!budgetExhausted && (fits || isTopHit)) {
           tokenBudget -= tokens;
           results.push(item);
+          if (!fits) budgetExhausted = true; // oversized top hit — stop here
           traceHits.push({
             key: item.key,
             score: null,
