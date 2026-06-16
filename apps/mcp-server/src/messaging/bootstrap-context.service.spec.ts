@@ -12,8 +12,8 @@ describe('BootstrapContextService', () => {
 
   const defaultBootstrapConfig = {
     enabled: true,
-    maxTokens: 1000,
-    projectRatio: 0.6,
+    maxTokens: 5000,
+    projectRatio: 0.8,
   };
 
   const mockConfig = {
@@ -212,6 +212,33 @@ describe('BootstrapContextService', () => {
       expect(result!.project['key-a']).toBe(smallValue);
       expect(result!.project['key-c']).toBe(smallValue);
       expect(result!.project['key-b']).toBeUndefined();
+    });
+
+    it('should admit the six newest project-notes-sized records under the default 4000-token project budget (#56)', async () => {
+      // Use the new defaults: maxTokens 5000 × projectRatio 0.8 = 4000 project budget.
+      // Seven ~600-token records (the upper end of the *-project-notes family
+      // measured on the live index) total 4200 tokens — the budget admits the
+      // six newest and skips the oldest. The pre-#56 600-token budget could not
+      // fit a single full-size project-notes record.
+      const value = 'x'.repeat(2398); // JSON adds 2 quote chars -> ceil(2400/4) = 600 tokens
+      expect(estimateTokens(value)).toBe(600);
+
+      // Insertion order key-0 (oldest) .. key-6 (newest); applyBudget reverses
+      // to prefer newest, so key-0 is the one dropped.
+      const items: Record<string, unknown> = {};
+      for (let i = 0; i < 7; i++) {
+        items[`key-${i}`] = value;
+      }
+
+      mockContextStore.getAll.mockResolvedValue(items);
+
+      const result = await service.assemble();
+
+      expect(result).not.toBeNull();
+      expect(Object.keys(result!.project)).toHaveLength(6);
+      expect(result!.project['key-0']).toBeUndefined(); // oldest dropped
+      expect(result!.project['key-6']).toBe(value); // newest kept
+      expect(result!.meta.estimatedTokens).toBe(3600);
     });
   });
 

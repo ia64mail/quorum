@@ -73,7 +73,7 @@ Context is shared through a central Context Store, not by passing full histories
   - **agent** scope — Private working memory for the current agent only. Use it to checkpoint progress during long tasks: save research findings, implementation steps completed, and decisions made. If your session is retried, the next attempt can query agent-scope context to pick up where you left off instead of re-researching from scratch.
 **Writing effective context values:**
 - **Knowledge and decision records** (design decisions, implementation results, findings) — write as natural-language text. Prose embeds well for semantic search; JSON syntax tokens do not.
-  - Good: \`"Bootstrap context uses greedy bin-packing with reverse insertion order. The 1000-token default budget is configurable via BOOTSTRAP_CONTEXT_BUDGET."\`
+  - Good: \`"Bootstrap context uses greedy bin-packing with reverse insertion order. The 5000-token default budget is configurable via BOOTSTRAP_MAX_TOKENS."\`
   - Poor: \`{"approach": "greedy bin-packing", "order": "reverse insertion", "budget": 1000}\`
 - **Operational status records** (progress checkpoints, structured metadata) — JSON is acceptable when the structure serves the consumer.
 - **context_query** — Retrieve stored context by scope, keys, or natural-language query. Always query before assuming — another agent may have already decided what you need.
