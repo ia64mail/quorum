@@ -46,6 +46,7 @@ Design-level conclusions from the audit. Concrete specs are split into the sub-i
 2. **Agent scope must be role-keyed** (`agent:<role>:<key>`) to deliver on its stated purpose (#59). The planned agent-scope quality upgrades (bootstrap injection, summarization, TTL) all presuppose a stable partition and do not address the addressing defect.
 3. **Conversation scope has no cross-invocation addressing for agents** — only the moderator can reach a foreign partition today. Whether to make cross-agent sharing a first-class capability (e.g. reusing one conversation id across the agents collaborating on a single ticket, at the moderator's discretion) is an open design question — *deferred to a follow-up decision, not specced here.*
 4. **Bootstrap is recency-driven but not task-aware.** Even with #55/#56 fixed, bootstrap pushes "recent project knowledge" generically rather than knowledge relevant to the specific ticket. Task-relevance is the search channel's job. *(Note: #55's recency fix is itself a stopgap — `OpenSearchStore.getAll` sorts `createdAt` ascending under the existing `size: 10000` cap, so a scope that ever exceeds 10k live records would return the **oldest** 10k and silently drop the newest, inverting the very recency the fix restores. Latent today (~117 project records), and moot once bootstrap selection is reworked per this conclusion.)*
+5. **The search channel has a correctness defect of its own (#61).** Surfaced during the #56 budget analysis, not the original audit: `context_query mode=search` uses skip-and-stop budget admission, so a single record larger than the whole budget (live `*-design-notes` reach ~2180 tok vs the 2000 default) as the top-ranked hit empties the result set. The one retrieval path the audit found working silently fails exactly when the most relevant record is also the largest — the search-channel analogue of #56's bootstrap mismatch.
 
 ### Evidence
 
@@ -61,8 +62,9 @@ Vendored from the QRM8 context-usage research. Host log paths (`logs/…`) are r
 | Issue | Title | Status |
 |-------|-------|--------|
 | [#55](https://github.com/ia64mail/quorum/issues/55) | Bootstrap context — recency ordering broken under OpenSearch (`getAll` unsorted) · PR #57 | Done |
-| [#56](https://github.com/ia64mail/quorum/issues/56) | Bootstrap context — token budget excludes project-notes records (depends on #55) · PR #58 | Spec |
+| [#56](https://github.com/ia64mail/quorum/issues/56) | Bootstrap context — token budget excludes project-notes records (depends on #55) · PR #58 | Done |
 | [#59](https://github.com/ia64mail/quorum/issues/59) | Context Store — agent scope provides no cross-invocation role persistence; role-key the partition · PR #60 | Spec |
+| [#61](https://github.com/ia64mail/quorum/issues/61) | Context search — `context_query` skip-and-stop budget empties result set when the top-ranked record exceeds the budget; add return-at-least-one floor · PR #62 | Spec |
 
 ### Residual hygiene (unrelated to context)
 
