@@ -9,7 +9,7 @@ const schema = z.object({
 export const contextConfig = registerAs('context', () =>
   schema.parse({
     defaultMaxTokens: parseInt(
-      process.env.CONTEXT_DEFAULT_MAX_TOKENS || '2000',
+      process.env.CONTEXT_DEFAULT_MAX_TOKENS || '3000',
       10,
     ),
     tokenCharRatio: parseInt(process.env.CONTEXT_TOKEN_CHAR_RATIO || '4', 10),
