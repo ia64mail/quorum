@@ -71,7 +71,7 @@ Vendored from the QRM8 context-usage research. Host log paths (`logs/…`) are r
 | Issue | Title | Status |
 |-------|-------|--------|
 | [#50](../50-entropy-report-halstead-correctness.md) | Entropy report — Halstead score & chart calculation correctness | Done (closed) |
-| [#51](https://github.com/ia64mail/quorum/issues/51) | Ticket library — "truth about a change, not current state" consumption discipline | Spec |
+| [#51](../51-ticket-library-verification-discipline.md) | Ticket library — "truth about a change, not current state" consumption discipline | Done (closed) |
 
 ## Deferred
 
