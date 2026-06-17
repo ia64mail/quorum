@@ -105,7 +105,7 @@ server.registerResource(
 
 ### Agent Scope (No Resource)
 
-Agent scope is intentionally excluded from MCP resources. Agent-scoped items are private working memory for a single agent instance — exposing them as a browsable resource would break that isolation. Agents access their own agent-scoped items through the `context_store` and `context_query` tools instead.
+Agent scope is intentionally excluded from MCP resources. Agent-scoped items are durable per-role memory — keyed as `agent:<role>:<key>`, not by `correlationId`. Records persist across invocations of the same role, making agent scope the channel for patterns, preferences, and constraints that survive across tickets. Exposing it as a browsable resource would break role isolation. Agents access their own role partition through the `context_store` and `context_query` tools instead.
 
 ### Resource Subscriptions (Not Yet Implemented)
 
@@ -137,8 +137,12 @@ server.registerTool('context_store', {
 
 **Handler logic:**
 - Conversation scope **requires** `correlationId` (returns error if missing)
+- Agent scope **requires** a resolvable role (session role or explicit `agentRole` arg — returns error if missing)
 - Project scope **ignores** `correlationId` — items are always global (`id = undefined`)
-- Conversation/agent scope uses `correlationId` as the `id` partition
+- Scope partition id is resolved via a shared `resolveScopeId()` helper used by both `context_store` and `context_query`:
+  - **project** → `undefined` (global)
+  - **agent** → `state.role ?? args.agentRole` (role-partitioned, session-role-bound — `agentRole` is a fallback, not an override)
+  - **conversation** → `args.correlationId ?? state.correlationId` (per-task chain)
 
 **Usage by agent:**
 ```
@@ -160,7 +164,9 @@ server.registerTool('context_query', {
     query: z.string().optional()
       .describe('Search query (mode=search)'),
     correlationId: z.string().optional()
-      .describe('Scope identifier (correlationId or agentId)'),
+      .describe('Scope identifier for conversation scope'),
+    agentRole: z.enum([...AgentRole]).optional()
+      .describe('Agent role for agent-scope queries'),
     maxTokens: z.number().int().min(1).optional()
       .describe('Token budget for search results'),
   }
@@ -368,7 +374,9 @@ These are configured in `docker-compose.yml` on the `mcp-server` service. The co
 
 ## Agent Identity
 
-Since the MCP SDK doesn't expose client identity in tool handlers, agents must self-identify. The `context_store` tool accepts an optional `agentRole` parameter (from the `AgentRole` enum) to record who created each item. The `invoke_agent` tool uses `callerRole` for the same purpose.
+Since the MCP SDK doesn't expose client identity in tool handlers, agents must self-identify. The `context_store` and `context_query` tools accept an optional `agentRole` parameter (from the `AgentRole` enum). For `context_store`, this records who created each item (`createdBy`) and serves as a fallback for agent-scope partition resolution. For `context_query`, it enables agent-scope queries when no session role is available. The `invoke_agent` tool uses `callerRole` for the same purpose.
+
+Agent-scope partition resolution is **session-role-bound**: the session role (set at `register_agent` time) takes priority over any explicit `agentRole` argument. The explicit argument is a fallback for callers without a session, not an override — an agent cannot write to or read from another role's agent-scope partition.
 
 When agents are invoked through the tool bridge in agent containers, the bridge auto-injects `correlationId` as a default (overridable by the agent for cross-conversation queries). See [Claude Code SDK — Parameter Augmentation](claude-code-sdk.md#parameter-augmentation) for details.
 

@@ -783,10 +783,22 @@ export class McpService implements OnModuleInit {
         }
 
         const scope = args.scope as ContextScope;
+        const id = this.resolveScopeId(scope, state, {
+          correlationId,
+          agentRole,
+        });
 
-        // Project scope is global — never include an id in the key.
-        // Conversation/agent scopes use correlationId as the id partition.
-        const id = scope === ContextScope.project ? undefined : correlationId;
+        if (scope === ContextScope.agent && !id) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: 'A resolvable agent role is required for agent scope. Register the agent session or pass agentRole explicitly.',
+              },
+            ],
+            isError: true,
+          };
+        }
 
         await this.contextStore.set({
           scope,
@@ -811,6 +823,7 @@ export class McpService implements OnModuleInit {
 
   private registerContextQueryTool(server: McpServer): void {
     const scopeValues = Object.values(ContextScope) as [string, ...string[]];
+    const agentRoleValues = Object.values(AgentRole) as [string, ...string[]];
 
     server.registerTool(
       'context_query',
@@ -830,6 +843,12 @@ export class McpService implements OnModuleInit {
             .describe(
               'Scope identifier. Auto-injected from session state if omitted.',
             ),
+          agentRole: z
+            .enum(agentRoleValues)
+            .optional()
+            .describe(
+              'Agent role for agent-scope queries. Auto-injected from session identity if omitted.',
+            ),
           maxTokens: z
             .number()
             .int()
@@ -844,8 +863,39 @@ export class McpService implements OnModuleInit {
         // Resolve correlationId: explicit > session state
         const correlationId = args.correlationId ?? state?.correlationId;
 
+        // Resolve agentRole: session state > explicit (session-role-bound)
+        const agentRole =
+          (args.agentRole as AgentRole | undefined) ?? state?.role;
+
         const scope = args.scope as ContextScope;
-        const id = scope === ContextScope.project ? undefined : correlationId;
+        const id = this.resolveScopeId(scope, state, {
+          correlationId,
+          agentRole,
+        });
+
+        if (scope === ContextScope.conversation && !id) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: 'correlationId is required for conversation scope',
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (scope === ContextScope.agent && !id) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: 'A resolvable agent role is required for agent scope. Register the agent session or pass agentRole explicitly.',
+              },
+            ],
+            isError: true,
+          };
+        }
 
         if (args.mode === 'keys') {
           const results: Record<string, unknown> = {};
@@ -1153,6 +1203,34 @@ export class McpService implements OnModuleInit {
         timer.unref();
       }),
     ]);
+  }
+
+  /**
+   * Resolve the partition `id` for a given context scope.
+   *
+   * - **project** → `undefined` (global, no partition)
+   * - **agent** → role string (session-role-bound; `args.agentRole` is a
+   *   fallback for callers without a session, NOT an override — an agent
+   *   cannot write to another role's partition)
+   * - **conversation** → correlationId (explicit arg overrides session state,
+   *   allowing cross-conversation queries)
+   *
+   * The resolver does NOT throw on missing values — callers gate on
+   * the returned `undefined` and produce the appropriate error response.
+   */
+  private resolveScopeId(
+    scope: ContextScope,
+    state: McpSessionState | undefined,
+    args: { correlationId?: string; agentRole?: AgentRole },
+  ): string | undefined {
+    if (scope === ContextScope.project) return undefined;
+    if (scope === ContextScope.agent) {
+      // Session role is authoritative; explicit agentRole is a fallback
+      // for callers without a session (e.g. direct MCP clients in tests).
+      return state?.role ?? args.agentRole;
+    }
+    // conversation — explicit correlationId overrides session state
+    return args.correlationId ?? state?.correlationId;
   }
 
   /** Cache the target's sessionId from an invoke response (idempotent no-op guard). */
