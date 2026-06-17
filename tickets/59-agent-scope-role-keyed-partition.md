@@ -123,23 +123,23 @@ The QRM8 roadmap defers "background summarization, agent-scope bootstrap injecti
 
 ## Acceptance Criteria
 
-- [ ] `context_store` and `context_query` resolve the agent-scope partition id to the agent **role**, not `correlationId`, via a single shared resolver used by both tools.
-- [ ] A role-`A` invocation can read agent-scope records written by a **prior** role-`A` invocation that ran under a **different** `correlationId`.
-- [ ] Role-`B` cannot read role-`A`'s agent-scope records (role isolation preserved).
-- [ ] Conversation-scope and project-scope behavior is unchanged (regression-covered).
-- [ ] Agent scope rejects (or safely handles) a call with no resolvable role, with a clear message mirroring the conversation-scope guard.
-- [ ] `docs/context-store.md` and `docs/context-management.md` describe agent scope as role-partitioned and durable.
-- [ ] `npm run build && npm run lint && npm run test` pass; new tests cover cross-invocation, same-role persistence and cross-role isolation.
-- [ ] **(8a)** `role-prompt-templates.ts:73` — SYSTEM_PREAMBLE Shared Context agent-scope bullet describes durable role memory (not per-task checkpointing).
-- [ ] **(8b)** `role-prompt-templates.ts:113-118` — SYSTEM_PREAMBLE Progress Checkpointing section relocated to **conversation** scope; "On retry" bullet qualified with "within the same invocation chain (same correlationId)".
-- [ ] **(8c)** `role-prompt-templates.ts:120-122` — SYSTEM_PREAMBLE Agent Memory section expanded with content rubric, specimen example, and new addressing semantics note.
-- [ ] **(8d)** `role-prompt-templates.ts:349-351` — Developer template Context Management bullets reference **conversation** scope for per-task checkpointing (not agent scope).
-- [ ] **(8e)** `role-prompt-templates.ts:220-223` — Moderator template Failure Recovery no longer references agent-scope `get-all` by correlationId for task-checkpoint recovery.
-- [ ] **(8f)** `docker/moderator/CLAUDE.md:187-190` — Moderator persona Failure Recovery updated in sync with site 8e.
-- [ ] The revised preamble includes a content rubric for `agent:<role>` writes — what counts as durable role knowledge vs. what does not, with at least one positive example (a recurring gotcha or stable preference) and one negative example (ticket-specific file lists, commit SHAs).
-- [ ] At least one ~150-token specimen example of a well-sized durable-role-memory write is embedded verbatim in the revised preamble's rubric as a positive shape demonstration.
-- [ ] The revised preamble notes the new addressing semantics (`agent:<role>:<key>` — durable across invocations of the same role) so agents understand the channel actually persists.
-- [ ] Existing `role-prompt-templates.spec.ts` tests pass; new assertions cover: (a) the content rubric text is present in `SYSTEM_PREAMBLE`, (b) the per-task checkpointing instruction (`research_findings`, `steps_completed`) is absent from `agent` scope guidance and relocated to `conversation` scope, (c) the developer template checkpointing bullets reference `conversation` scope, (d) the specimen example is present in `SYSTEM_PREAMBLE`.
+- [x] `context_store` and `context_query` resolve the agent-scope partition id to the agent **role**, not `correlationId`, via a single shared resolver used by both tools.
+- [x] A role-`A` invocation can read agent-scope records written by a **prior** role-`A` invocation that ran under a **different** `correlationId`.
+- [x] Role-`B` cannot read role-`A`'s agent-scope records (role isolation preserved).
+- [x] Conversation-scope and project-scope behavior is unchanged (regression-covered).
+- [x] Agent scope rejects (or safely handles) a call with no resolvable role, with a clear message mirroring the conversation-scope guard.
+- [x] `docs/context-store.md` and `docs/context-management.md` describe agent scope as role-partitioned and durable.
+- [x] `npm run build && npm run lint && npm run test` pass; new tests cover cross-invocation, same-role persistence and cross-role isolation.
+- [x] **(8a)** `role-prompt-templates.ts:73` — SYSTEM_PREAMBLE Shared Context agent-scope bullet describes durable role memory (not per-task checkpointing).
+- [x] **(8b)** `role-prompt-templates.ts:113-118` — SYSTEM_PREAMBLE Progress Checkpointing section relocated to **conversation** scope; "On retry" bullet qualified with "within the same invocation chain (same correlationId)".
+- [x] **(8c)** `role-prompt-templates.ts:120-122` — SYSTEM_PREAMBLE Agent Memory section expanded with content rubric, specimen example, and new addressing semantics note.
+- [x] **(8d)** `role-prompt-templates.ts:349-351` — Developer template Context Management bullets reference **conversation** scope for per-task checkpointing (not agent scope).
+- [x] **(8e)** `role-prompt-templates.ts:220-223` — Moderator template Failure Recovery no longer references agent-scope `get-all` by correlationId for task-checkpoint recovery.
+- [x] **(8f)** `docker/moderator/CLAUDE.md:187-190` — Moderator persona Failure Recovery updated in sync with site 8e.
+- [x] The revised preamble includes a content rubric for `agent:<role>` writes — what counts as durable role knowledge vs. what does not, with at least one positive example (a recurring gotcha or stable preference) and one negative example (ticket-specific file lists, commit SHAs).
+- [x] At least one ~150-token specimen example of a well-sized durable-role-memory write is embedded verbatim in the revised preamble's rubric as a positive shape demonstration.
+- [x] The revised preamble notes the new addressing semantics (`agent:<role>:<key>` — durable across invocations of the same role) so agents understand the channel actually persists.
+- [x] Existing `role-prompt-templates.spec.ts` tests pass; new assertions cover: (a) the content rubric text is present in `SYSTEM_PREAMBLE`, (b) the per-task checkpointing instruction (`research_findings`, `steps_completed`) is absent from `agent` scope guidance and relocated to `conversation` scope, (c) the developer template checkpointing bullets reference `conversation` scope, (d) the specimen example is present in `SYSTEM_PREAMBLE`.
 
 ## Dependencies and References
 
@@ -159,3 +159,34 @@ The QRM8 roadmap defers "background summarization, agent-scope bootstrap injecti
 - **Agent-scope bootstrap injection** — deferred to QRM9; this ticket fixes addressing and content policy only.
 - **Migrating existing `agent:<correlationId>:*` orphan records to `agent:<role>:*` partitions** — the 7 session orphans were per-task scratch under the old policy and have no durable value; they are already unreachable and will age out. No migration needed.
 - **Mechanical enforcement of the content rubric** — the rubric is prompt guidance only (same approach as #16). Schema-level validation (e.g. rejecting oversized writes or ticket-number-anchored keys) is a potential follow-on but not part of this ticket.
+
+## Implementation Notes
+
+**Status:** Implemented; PR #60 reviewed and accepted.
+
+**Implementation commits:**
+- `009a184` — Unit 1: addressing fix (resolver, guards, docs, 14 tests).
+- `0770ceb` — Unit 2: SYSTEM_PREAMBLE six-site content discipline + specimen, 12 tests.
+
+**Files modified (7 files, +583/−23):**
+
+| File | Role |
+|------|------|
+| `apps/mcp-server/src/mcp/mcp.service.ts` | `resolveScopeId()` private helper; agent-scope validation guards in both `context_store` and `context_query` handlers; added `agentRole` to `context_query` input schema |
+| `apps/mcp-server/src/mcp/mcp.service.spec.ts` | +14 tests: cross-invocation same-role persistence, cross-role isolation, no-role rejection, scope regression |
+| `docs/context-store.md` | Role-partitioned semantics for agent scope |
+| `docs/context-management.md` | `agentRole` parameter for `context_query`, session-role-bound description |
+| `libs/common/src/prompts/role-prompt-templates.ts` | Six-site revision per item 6 table (sites 1–5: Shared Context bullet, Progress Checkpointing → conversation, Agent Memory + rubric + specimen, developer template checkpointing → conversation, moderator Failure Recovery) |
+| `libs/common/src/prompts/role-prompt-templates.spec.ts` | +12 tests: rubric presence, scope relocation, developer template alignment, moderator recovery update |
+| `docker/moderator/CLAUDE.md` | Moderator persona Failure Recovery — site 6, kept in sync with site 5 |
+
+**Verification:** `npm run build && npm run lint && npm run test` clean. Test baseline 874/48 (was 848/48, +26 net).
+
+**Deviations from spec:** none. Three minor judgement calls during implementation noted and accepted in code review:
+1. Moderator Failure Recovery (sites 5/6): step 1 retained with "per-task checkpoints live here" annotation rather than bare numbered list (clearer).
+2. `execFileAsync` example in rubric: dropped the `(#39 defense-in-depth pattern)` parenthetical for concision.
+3. `context_query` gained a conversation-scope no-correlationId validation guard paralleling `context_store`'s existing guard — closing a latent asymmetry. Acceptable scope creep.
+
+**Pre-existing gap noted:** `context_stats` tool still uses the old two-branch scope-id expression and stale `agentId` terminology. Out of scope for #59; follow-on fix recommended.
+
+**Project synthesis stored:** `59-project-notes` in project scope (patterns established: shared resolver, session-role-bound partitioning, six-site prompt/code coordination lesson, content rubric).
