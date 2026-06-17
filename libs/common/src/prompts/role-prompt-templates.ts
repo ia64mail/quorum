@@ -70,7 +70,7 @@ Context is shared through a central Context Store, not by passing full histories
 - **context_store** — Record a decision, result, or fact for other agents to find later. Choose the right scope:
   - **project** scope — Durable, session-wide decisions (tech stack, architectural choices, constraints). Accessible to all agents.
   - **conversation** scope — Task-chain-specific state (task breakdowns, implementation notes). Tied to the current correlation.
-  - **agent** scope — Private working memory for the current agent only. Use it to checkpoint progress during long tasks: save research findings, implementation steps completed, and decisions made. If your session is retried, the next attempt can query agent-scope context to pick up where you left off instead of re-researching from scratch.
+  - **agent** scope — Durable role memory. Patterns, preferences, and constraints that survive across invocations of the same role. Keyed as \`agent:<role>:<key>\`.
 **Writing effective context values:**
 - **Knowledge and decision records** (design decisions, implementation results, findings) — write as natural-language text. Prose embeds well for semantic search; JSON syntax tokens do not.
   - Good: \`"Bootstrap context uses greedy bin-packing with reverse insertion order. The 5000-token default budget is configurable via BOOTSTRAP_MAX_TOKENS."\`
@@ -112,14 +112,34 @@ Multi-line messages are supported (subject + body separated by blank line). The 
 
 ## Progress Checkpointing
 For tasks that involve significant research or multi-step implementation:
-- **After research**: Store key findings in **agent** scope (e.g., "research_findings": { files read, patterns discovered, constraints identified })
+- **After research**: Store key findings in **conversation** scope (e.g., "research_findings": { files read, patterns discovered, constraints identified })
 - **After each implementation step**: Update your checkpoint (e.g., "progress": { steps_completed: [...], steps_remaining: [...], current_approach: "..." })
-- **On retry**: Query **agent** scope first — a previous attempt may have left findings and progress that save you from re-doing work
+- **On retry**: Query **conversation** scope first — within the same invocation chain (same correlationId), a previous attempt may have left findings and progress that save you from re-doing work
 This costs one tool call per checkpoint but can save dozens of tool calls on retry.
 
 ## Agent Memory
 
-Claude Code memory (\`~/.claude/\`) is ephemeral on agent containers — files accumulate on tmpfs during a session but are lost on container restart. Do not rely on CC memory for persistent knowledge. Instead, use \`context_store(scope='agent')\` to persist role-level knowledge (patterns learned, preferences, architectural constraints discovered) that should survive across invocations.`;
+Claude Code memory (\`~/.claude/\`) is ephemeral on agent containers — files accumulate on tmpfs during a session but are lost on container restart. Do not rely on CC memory for persistent knowledge. Instead, use \`context_store(scope='agent')\` to persist **durable role memory** — patterns, preferences, and constraints that should survive across invocations of the same role.
+
+**Content rubric for agent-scope writes:**
+- **Write only what future-you (any role-X invocation on a different ticket) cannot find in \`docs/\` or \`tickets/\`.** If the next sentence restates the ticket spec, don't write it.
+- **Atomic and ≤ ~400 tokens** — one pattern per write, not one digest per ticket. The ≤400-token cap is calibrated against \`CONTEXT_DEFAULT_MAX_TOKENS=3000\`; if that budget changes, revisit this cap manually.
+- **What counts as "patterns / preferences / constraints":**
+  - A recurring multi-site gotcha: e.g. "changing \`InvokeRequest\` schema requires touching \`invoke.types.ts\` *and* \`mcp.service.ts\` together."
+  - A stable implementation preference: e.g. "use \`execFileAsync\` over \`execAsync\` for child_process calls that interpolate request-supplied values."
+  - An architectural constraint discovered mid-task that future invocations need to know.
+- **What does NOT count (belongs in conversation scope or the ticket file, not agent scope):**
+  - Ticket-specific file/line modification lists ("Pass A files modified: …")
+  - Commit SHAs or PR URLs (recoverable from git)
+  - "Research complete for ticket N" status markers
+  - Current-state inventories ("SYSTEM_PREAMBLE has N sections: …")
+- **Note the new addressing semantics:** Agent scope is keyed as \`agent:<role>:<key>\` — records survive across invocations of the same role. A developer writing a finding today will find it in agent scope on the next developer invocation, even under a different \`correlationId\`.
+
+*Example — a well-sized durable-role-memory write (~140 tok):*
+
+*Key:* \`invoke-schema-touch-points\`
+
+*Value:* "When extending \`InvokeRequest\` or \`InvokeResponse\`, the contract is replicated at three sites that must change together: the Zod schema in \`libs/common/src/messaging/invoke.types.ts\`, the MCP tool inputSchema in \`apps/mcp-server/src/mcp/mcp.service.ts\` (the \`registerInvokeAgentTool\` block), and the broker forwarding logic in \`apps/mcp-server/src/messaging/message-broker.service.ts\`. Adding a field to one without the other two leads to silent schema-validation failures only visible on the agent side. Verified on #11 (branch field) and #44 (depth field)."`;
 
 /**
  * Generic fallback template for agent roles without a specific prompt template.
@@ -218,8 +238,7 @@ Use natural language \`action\` only for non-review tasks (implementation, data 
 
 ## Failure Recovery
 When an agent invocation fails (especially \`error_max_turns\`), the agent may have stored progress before the failure. To discover checkpoints:
-1. Query **conversation** scope with \`mode=get-all\` (not search) using the same correlationId
-2. Query **agent** scope with \`mode=get-all\` using the same correlationId
+1. Query **conversation** scope with \`mode=get-all\` (not search) using the same correlationId — per-task checkpoints live here
 Use \`get-all\` because search requires matching specific terms — the checkpoint key and content may not match your search query. If a checkpoint shows the work is complete (e.g., \`status: "complete"\` with passing verification), do not blindly retry — acknowledge the result.
 
 ## Constraints
@@ -346,9 +365,9 @@ You are the implementation specialist. You write code, run tests, and deliver wo
 ## Context Management
 - **Query project context first** — check for architectural decisions, tech stack, constraints, and patterns before writing any code
 - **Query conversation context** — check for task-specific decisions, dependencies, and prior work in this chain
-- **Query agent context on start** — a previous attempt at this task may have left research findings and progress checkpoints. If found, use them instead of re-reading files
-- **Checkpoint after research** — once you have read and understood the relevant code, store a summary of findings in **agent** scope (key files, patterns, constraints, approach). This is your insurance against session interruption
-- **Checkpoint after implementation milestones** — after creating/modifying files, update your agent-scope checkpoint with completed steps. Keep it concise: file paths and one-line descriptions, not full code
+- **Query conversation context on start** — within the same invocation chain (same correlationId), a previous attempt at this task may have left research findings and progress checkpoints. If found, use them instead of re-reading files
+- **Checkpoint after research** — once you have read and understood the relevant code, store a summary of findings in **conversation** scope (key files, patterns, constraints, approach). This is your insurance against session interruption
+- **Checkpoint after implementation milestones** — after creating/modifying files, update your conversation-scope checkpoint with completed steps. Keep it concise: file paths and one-line descriptions, not full code
 - **Store** implementation decisions in **conversation** scope so reviewers and downstream agents understand your approach
 - Write knowledge values as natural-language text — prose produces better search results than JSON structures (see shared context guidelines above)
 - Do NOT guess at requirements — if context is missing, query for it or ask the architect

@@ -113,6 +113,94 @@ describe('getRolePromptTemplate', () => {
     it('should note single-commit-per-invocation constraint', () => {
       expect(SYSTEM_PREAMBLE).toContain('one commit per invocation');
     });
+
+    describe('agent-scope content rubric (#59)', () => {
+      it('should include the content rubric with future-you cross-ticket utility guidance', () => {
+        expect(SYSTEM_PREAMBLE).toContain(
+          'Write only what future-you (any role-X invocation on a different ticket)',
+        );
+      });
+
+      it('should include the ≤400-token atomic write cap', () => {
+        expect(SYSTEM_PREAMBLE).toContain('Atomic and ≤ ~400 tokens');
+        expect(SYSTEM_PREAMBLE).toContain('CONTEXT_DEFAULT_MAX_TOKENS=3000');
+      });
+
+      it('should include positive-shape categories (recurring gotcha, stable preference, architectural constraint)', () => {
+        expect(SYSTEM_PREAMBLE).toContain('A recurring multi-site gotcha');
+        expect(SYSTEM_PREAMBLE).toContain('A stable implementation preference');
+        expect(SYSTEM_PREAMBLE).toContain(
+          'An architectural constraint discovered mid-task',
+        );
+      });
+
+      it('should include negative-shape categories (ticket-specific lists, commit SHAs, status markers)', () => {
+        expect(SYSTEM_PREAMBLE).toContain(
+          'Ticket-specific file/line modification lists',
+        );
+        expect(SYSTEM_PREAMBLE).toContain(
+          'Commit SHAs or PR URLs (recoverable from git)',
+        );
+        expect(SYSTEM_PREAMBLE).toContain(
+          '"Research complete for ticket N" status markers',
+        );
+      });
+
+      it('should include the invoke-schema-touch-points specimen', () => {
+        expect(SYSTEM_PREAMBLE).toContain('invoke-schema-touch-points');
+        expect(SYSTEM_PREAMBLE).toContain(
+          'the contract is replicated at three sites that must change together',
+        );
+        expect(SYSTEM_PREAMBLE).toContain(
+          'Verified on #11 (branch field) and #44 (depth field)',
+        );
+      });
+
+      it('should note the new addressing semantics (agent:<role>:<key>)', () => {
+        expect(SYSTEM_PREAMBLE).toContain('agent:<role>:<key>');
+        expect(SYSTEM_PREAMBLE).toContain(
+          'records survive across invocations of the same role',
+        );
+      });
+    });
+
+    describe('progress checkpointing scope relocation (#59)', () => {
+      it('should reference conversation scope (not agent scope) for per-task checkpointing', () => {
+        // Extract the Progress Checkpointing section from SYSTEM_PREAMBLE
+        const checkpointSection = SYSTEM_PREAMBLE.slice(
+          SYSTEM_PREAMBLE.indexOf('## Progress Checkpointing'),
+          SYSTEM_PREAMBLE.indexOf('## Agent Memory'),
+        );
+        expect(checkpointSection).toContain('**conversation** scope');
+        expect(checkpointSection).not.toContain('**agent** scope');
+      });
+
+      it('should qualify the On retry bullet with same-correlationId caveat', () => {
+        expect(SYSTEM_PREAMBLE).toContain(
+          'within the same invocation chain (same correlationId)',
+        );
+      });
+
+      it('should not reference research_findings or steps_completed in agent-scope guidance', () => {
+        // The Agent Memory section should not contain per-task checkpoint patterns
+        const agentMemorySection = SYSTEM_PREAMBLE.slice(
+          SYSTEM_PREAMBLE.indexOf('## Agent Memory'),
+        );
+        expect(agentMemorySection).not.toContain('research_findings');
+        expect(agentMemorySection).not.toContain('steps_completed');
+      });
+    });
+
+    describe('shared context agent-scope bullet (#59)', () => {
+      it('should describe agent scope as durable role memory, not per-task checkpointing', () => {
+        expect(SYSTEM_PREAMBLE).toContain(
+          '**agent** scope — Durable role memory',
+        );
+        expect(SYSTEM_PREAMBLE).not.toContain(
+          '**agent** scope — Private working memory',
+        );
+      });
+    });
   });
 
   describe('specific templates', () => {
@@ -151,6 +239,27 @@ describe('getRolePromptTemplate', () => {
       expect(template).toContain('git checkout -b');
       expect(template).toContain('git branch');
       expect(template).toContain('rm -rf /');
+    });
+
+    describe('checkpointing scope (#59)', () => {
+      it('should reference conversation scope for per-task checkpointing, not agent scope', () => {
+        const template = getRolePromptTemplate(AgentRole.developer);
+        // Extract the Context Management section from the developer template
+        const ctxSection = template.slice(
+          template.indexOf('## Context Management'),
+          template.indexOf('## Communication Style'),
+        );
+        expect(ctxSection).toContain(
+          'store a summary of findings in **conversation** scope',
+        );
+        expect(ctxSection).toContain('conversation-scope checkpoint');
+        expect(ctxSection).toContain('Query conversation context on start');
+        expect(ctxSection).not.toContain(
+          'store a summary of findings in **agent** scope',
+        );
+        expect(ctxSection).not.toContain('agent-scope checkpoint');
+        expect(ctxSection).not.toContain('Query agent context on start');
+      });
     });
   });
 
@@ -249,6 +358,21 @@ describe('getRolePromptTemplate', () => {
       const template = getRolePromptTemplate(AgentRole.moderator);
       expect(template).toContain('clarification');
       expect(template).toContain("do not answer on the user's behalf");
+    });
+
+    describe('failure recovery scope (#59)', () => {
+      it('should not reference agent-scope get-all by correlationId for task-checkpoint recovery', () => {
+        const template = getRolePromptTemplate(AgentRole.moderator);
+        const failureSection = template.slice(
+          template.indexOf('## Failure Recovery'),
+          template.indexOf('## Constraints'),
+        );
+        // Step 2 (agent scope query by correlationId) should be removed
+        expect(failureSection).not.toContain('Query **agent** scope with');
+        // Step 1 (conversation scope) should remain
+        expect(failureSection).toContain('Query **conversation** scope with');
+        expect(failureSection).toContain('per-task checkpoints live here');
+      });
     });
   });
 

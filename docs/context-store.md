@@ -57,14 +57,14 @@ Key design decisions:
 enum ContextScope {
   project = 'project',       // Entire session lifetime
   conversation = 'conversation', // Single task chain (correlationId)
-  agent = 'agent',           // Per-agent working memory
+  agent = 'agent',           // Durable per-role memory (keyed by role, not correlationId)
 }
 
 interface ContextItem {
   key: string;               // Item key within scope
   value: unknown;            // JSON-serializable payload
   scope: ContextScope;
-  id?: string;               // correlationId (conversation) or agentId (agent)
+  id?: string;               // correlationId (conversation) or role (agent)
   createdBy?: string;        // Agent role that created this item
   createdAt: number;         // Epoch milliseconds
   expiresAt?: number;        // Epoch milliseconds (undefined = no expiry)
@@ -74,7 +74,7 @@ interface SetParams {
   scope: ContextScope;
   key: string;
   value: unknown;
-  id?: string;               // correlationId or agentId
+  id?: string;               // correlationId (conversation) or role (agent)
   createdBy?: string;
   ttl?: number;              // Milliseconds, converted to expiresAt
 }
@@ -101,7 +101,7 @@ Centralized scope-aware key construction in `libs/common`. Ensures consistent ke
 **Rules**:
 - **project** scope: `id` is always stripped -> `project:_:key` (even if provided)
 - **conversation** scope: `id` required -> `conversation:{correlationId}:key`
-- **agent** scope: `id` required -> `agent:{agentId}:key`
+- **agent** scope: `id` required -> `agent:{role}:key` (role-partitioned — durable across invocations of the same role)
 - **Throws** if conversation/agent scope is missing `id`
 
 ```typescript
