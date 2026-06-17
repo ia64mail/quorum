@@ -68,35 +68,38 @@ The QRM8 roadmap defers "background summarization, agent-scope bootstrap injecti
 
 5. **Out of scope (follow-on, QRM9):** injecting `agent:<role>` records into the dispatched role's bootstrap. This ticket fixes *addressing only*; bootstrap injection is the separately-tracked quality upgrade that this unblocks.
 
-6. **SYSTEM_PREAMBLE content-discipline tweak** (`libs/common/src/prompts/role-prompt-templates.ts`). The addressing fix (items 1–4) makes the partition stable; this item fixes what agents put in it. The problem is that two SYSTEM_PREAMBLE sections give contradictory guidance about agent scope's purpose:
+6. **SYSTEM_PREAMBLE and role-template content-discipline fix** (`libs/common/src/prompts/role-prompt-templates.ts` and `docker/moderator/CLAUDE.md`). The addressing fix (items 1–4) makes the partition stable; this item fixes what agents put in it. The problem is that two SYSTEM_PREAMBLE sections give contradictory guidance about agent scope's purpose, and those signals are amplified by role-specific bullets in the developer and moderator templates.
 
-   **Current text to replace (`:113-122`):**
+   **Chosen approach: (b) — relocate per-task checkpointing to conversation scope; reserve agent scope strictly for durable role memory.** Per-task checkpoints are correlation-bound by nature (they help retry within the same invocation chain, not across invocations). Conversation scope is already keyed by `correlationId` and scoped to the task chain. The architect verified all four retry-correlation shapes (see `59-design-notes` in project-scope context for the full analysis):
+   - **Shape 1** (wait_invocation retries): same correlationId — trivially safe.
+   - **Shape 2a** (same-turn re-dispatch after failure): same correlationId — conversation-scope checkpoints from the failed attempt ARE readable.
+   - **Shape 2b** (cross-turn retry): fresh correlationId — acceptable; the moderator can bridge by relaying findings from the prior turn's conversation context.
+   - **Shape 3** (SDK-internal session restarts): same correlationId — the MCP tool bridge captures correlationId in closure.
+   - **Shape 4** (concurrent same-role siblings): same correlationId if dispatched in the same moderator turn — write-collision risk mitigated by the branch-in-flight guard.
 
-   ```
-   ## Progress Checkpointing
-   For tasks that involve significant research or multi-step implementation:
-   - **After research**: Store key findings in **agent** scope (e.g., "research_findings": { files read, patterns discovered, constraints identified })
-   - **After each implementation step**: Update your checkpoint (e.g., "progress": { steps_completed: [...], steps_remaining: [...], current_approach: "..." })
-   - **On retry**: Query **agent** scope first — a previous attempt may have left findings and progress that save you from re-doing work
-   This costs one tool call per checkpoint but can save dozens of tool calls on retry.
+   The common retry path (same-turn re-dispatch) shares the correlationId, so conversation-scoped checkpointing serves the "On retry" use case adequately.
 
-   ## Agent Memory
+   > *Rejected alternative (a):* Single section, two-bucket key convention within `agent:<role>:*` — `scratch:<ticketId>:<label>` keys for per-task checkpoints, bare keys for durable role memory. Convention-only, no schema change. Rejected because it relies on agents consistently following a naming convention under prompt pressure, which #16's audit showed they do not.
 
-   Claude Code memory (`~/.claude/`) is ephemeral on agent containers — files accumulate on tmpfs during a session but are lost on container restart. Do not rely on CC memory for persistent knowledge. Instead, use `context_store(scope='agent')` to persist role-level knowledge (patterns learned, preferences, architectural constraints discovered) that should survive across invocations.
-   ```
+   **The guidance lives in six locations, not one.** Without updating all six, the louder role-template cues will override SYSTEM_PREAMBLE changes — the same structural defeat #16 suffered (it addressed only SYSTEM_PREAMBLE without coordinating with role templates that gave competing signals). The developer MUST update every row:
 
-   "Progress Checkpointing" directs agents to write per-task scratch (file/line inventories, `steps_completed` lists, `research_findings`) to agent scope. "Agent Memory" directs them to write durable role knowledge (patterns, preferences, constraints) to the same scope. These are different content types with different lifetimes — the first is per-ticket ephemera, the second is cross-ticket institutional memory. Agents in the QRM8 session responded to the louder, more concrete "Progress Checkpointing" cue: all 7 agent-scope writes were per-ticket reconnaissance, zero were durable role knowledge (`research-qrm8-context-usage-index.md §5 F2`).
+   | # | Location | Current text | Required change under (b) |
+   |---|----------|--------------|---------------------------|
+   | 1 | `role-prompt-templates.ts:73` — SYSTEM_PREAMBLE Shared Context bullet | "**agent** scope — Private working memory for the current agent only. Use it to checkpoint progress during long tasks: save research findings, implementation steps completed, and decisions made." | Replace with durable role memory description: "**agent** scope — Durable role memory. Patterns, preferences, and constraints that survive across invocations of the same role. Keyed as `agent:<role>:<key>`." |
+   | 2 | `role-prompt-templates.ts:113-118` — SYSTEM_PREAMBLE Progress Checkpointing section | "After research / After each step / On retry" → all reference **agent** scope | Relocate entire section to use **conversation** scope; keep the use case intact; add qualifier "within the same invocation chain (same correlationId)" to the "On retry" bullet |
+   | 3 | `role-prompt-templates.ts:120-122` — SYSTEM_PREAMBLE Agent Memory section | "use `context_store(scope='agent')` to persist role-level knowledge (patterns learned, preferences, architectural constraints discovered)" | Keep and expand: merge with rubric, attach the content-discipline rubric and specimen here; this becomes the single authoritative section for agent-scope guidance |
+   | 4 | `role-prompt-templates.ts:349-351` — Developer role template Context Management | "Query agent context on start — a previous attempt at this task may have left research findings and progress checkpoints"; "Checkpoint after research — store a summary of findings in **agent** scope"; "Checkpoint after implementation milestones — update your agent-scope checkpoint" | Switch all three bullets to **conversation** scope — **load-bearing**: these are the "louder cue" agents actually followed in QRM8; without this change, role-keyed agent scope accumulates per-task scratch across ALL tickets in a single growing partition (worse than status quo, per architect review) |
+   | 5 | `role-prompt-templates.ts:220-223` — Moderator role template Failure Recovery | "Query **agent** scope with `mode=get-all` using the same correlationId" (step 2 of recovery) | Remove the agent-scope recovery step or rephrase: agent scope is now role-keyed durable memory (not correlationId-keyed task checkpoints); per-task checkpoints are in conversation scope, so step 1 already covers recovery |
+   | 6 | `docker/moderator/CLAUDE.md:187-190` — Moderator persona Failure Recovery | Verbatim duplicate of site #5 | Same fix as #5 |
 
-   **Resolution approach — evaluate candidates (a) and (b); the developer/architect should refine:**
+   **Note:** Sites #5 and #6 are duplicate moderator-side Failure Recovery guidance — one in the role template (compiled into the agent's system prompt at dispatch), one in the moderator's in-container persona file. Any change to one MUST be mirrored in the other.
 
-   **(a) Single section, two-bucket key convention** within `agent:<role>:*` — define a naming convention where `scratch:<ticketId>:<label>` keys are per-task checkpoints (expect TTL or overwrite on next task) and bare keys (no `scratch:` prefix) are durable role memory. Cheap, convention-only, no schema change. Downside: relies on agents consistently following a naming convention under prompt pressure.
+   **Lesson from #16 the developer must apply:** grep for `agent.*scope` and `checkpoint` across all templates and the moderator persona file, and update every occurrence. #16 failed because it addressed only SYSTEM_PREAMBLE without coordinating with role templates that gave competing signals. After implementation, verify no stale agent-scope checkpointing references remain.
 
-   **(b) Repurpose Progress Checkpointing to conversation scope** — per-task checkpoints are correlation-bound by nature (they help retry within the same invocation chain, not across invocations). Move the "After research / After each step / On retry" guidance to use **conversation** scope, which is already keyed by `correlationId` and scoped to the task chain. Reserve agent scope strictly for durable role memory. This is the cleanest semantic split. The developer should verify with the architect that conversation scope's `correlationId` keying supports per-task retry adequately — the "On retry" use case assumes a fresh invocation can find the prior attempt's checkpoint, which requires the retry to share the same `correlationId` or the moderator to pass it. If retry correlation is not wired today, note it as a follow-on gap rather than blocking.
-
-   **Regardless of which approach is chosen, the revised text must include a content rubric for agent-scope writes:**
+   **Content rubric for agent-scope writes** (to be embedded in the revised SYSTEM_PREAMBLE Agent Memory section):
 
    - **Write only what future-you (any role-X invocation on a different ticket) cannot find in `docs/` or `tickets/`.** If the next sentence restates the ticket spec, don't write it.
-   - **Atomic and ≤ ~400 tokens** — one pattern per write, not one digest per ticket. The QRM8 audits show oversized notes are silently dropped by the bootstrap budget (#56); three specimens (#31 at 674 tok, #11 at ~770 tok, #12 at 617 tok) never entered any bootstrap.
+   - **Atomic and ≤ ~400 tokens** — one pattern per write, not one digest per ticket. The ≤400-token cap is calibrated against `CONTEXT_DEFAULT_MAX_TOKENS=3000` (post-#61); if that budget changes, revisit this cap manually. The QRM8 audits show oversized notes are silently dropped by the bootstrap budget (#56); three specimens (#31 at 674 tok, #11 at ~770 tok, #12 at 617 tok) never entered any bootstrap.
    - **What counts as "patterns / preferences / constraints":**
      - A recurring multi-site gotcha: e.g. "changing `InvokeRequest` schema requires touching `invoke.types.ts:68` *and* `mcp.service.ts:282` together — they share a validated contract but have no shared type."
      - A stable implementation preference: e.g. "use `execFileAsync` over `execAsync` for any child_process call that interpolates request-supplied values (#39 defense-in-depth pattern)."
@@ -108,7 +111,15 @@ The QRM8 roadmap defers "background summarization, agent-scope bootstrap injecti
      - Current-state inventories ("SYSTEM_PREAMBLE has N sections: …")
    - **Note the new addressing semantics** so agents understand the channel actually persists: agent scope is now keyed as `agent:<role>:<key>` — records survive across invocations of the same role. A developer writing a finding today will find it in agent scope on the next developer invocation, even under a different `correlationId`.
 
-   **Test expectations (for item 6):** existing `role-prompt-templates.spec.ts` tests pass; new assertions verify the rubric text is present in `SYSTEM_PREAMBLE` and the per-task checkpointing instruction no longer references `agent` scope (or is relocated to conversation scope).
+   **Specimen example** — a well-sized durable-role-memory write (~140 tokens) to embed verbatim in the revised preamble as the rubric's anchor positive demonstration:
+
+   > *Key:* `invoke-schema-touch-points`
+   >
+   > *Value:* "When extending `InvokeRequest` or `InvokeResponse`, the contract is replicated at three sites that must change together: the Zod schema in `libs/common/src/messaging/invoke.types.ts`, the MCP tool inputSchema in `apps/mcp-server/src/mcp/mcp.service.ts` (the `registerInvokeAgentTool` block), and the broker forwarding logic in `apps/mcp-server/src/messaging/message-broker.service.ts`. Adding a field to one without the other two leads to silent schema-validation failures only visible on the agent side. Verified on #11 (branch field) and #44 (depth field)."
+
+   This specimen demonstrates: atomic single-pattern, under the ≤400-token cap, cross-ticket utility, names concrete file anchors, not redoable from `docs/` or `tickets/` alone.
+
+   **Test expectations (for item 6):** existing `role-prompt-templates.spec.ts` tests pass; new assertions verify: (a) the content rubric text is present in `SYSTEM_PREAMBLE`, (b) the per-task checkpointing instruction (`research_findings`, `steps_completed`) no longer references `agent` scope and is relocated to `conversation` scope, (c) the developer template's checkpointing bullets (site #4) reference `conversation` scope not `agent` scope, (d) the specimen example is present in `SYSTEM_PREAMBLE`.
 
 ## Acceptance Criteria
 
@@ -119,10 +130,16 @@ The QRM8 roadmap defers "background summarization, agent-scope bootstrap injecti
 - [ ] Agent scope rejects (or safely handles) a call with no resolvable role, with a clear message mirroring the conversation-scope guard.
 - [ ] `docs/context-store.md` and `docs/context-management.md` describe agent scope as role-partitioned and durable.
 - [ ] `npm run build && npm run lint && npm run test` pass; new tests cover cross-invocation, same-role persistence and cross-role isolation.
-- [ ] `SYSTEM_PREAMBLE` in `role-prompt-templates.ts` no longer instructs agents to use `agent` scope for per-task progress/research checkpoints; the conflict between the Progress Checkpointing and Agent Memory sections is resolved (either merged into one section with a two-bucket convention, or checkpointing relocated to conversation scope).
+- [ ] **(8a)** `role-prompt-templates.ts:73` — SYSTEM_PREAMBLE Shared Context agent-scope bullet describes durable role memory (not per-task checkpointing).
+- [ ] **(8b)** `role-prompt-templates.ts:113-118` — SYSTEM_PREAMBLE Progress Checkpointing section relocated to **conversation** scope; "On retry" bullet qualified with "within the same invocation chain (same correlationId)".
+- [ ] **(8c)** `role-prompt-templates.ts:120-122` — SYSTEM_PREAMBLE Agent Memory section expanded with content rubric, specimen example, and new addressing semantics note.
+- [ ] **(8d)** `role-prompt-templates.ts:349-351` — Developer template Context Management bullets reference **conversation** scope for per-task checkpointing (not agent scope).
+- [ ] **(8e)** `role-prompt-templates.ts:220-223` — Moderator template Failure Recovery no longer references agent-scope `get-all` by correlationId for task-checkpoint recovery.
+- [ ] **(8f)** `docker/moderator/CLAUDE.md:187-190` — Moderator persona Failure Recovery updated in sync with site 8e.
 - [ ] The revised preamble includes a content rubric for `agent:<role>` writes — what counts as durable role knowledge vs. what does not, with at least one positive example (a recurring gotcha or stable preference) and one negative example (ticket-specific file lists, commit SHAs).
+- [ ] At least one ~150-token specimen example of a well-sized durable-role-memory write is embedded verbatim in the revised preamble's rubric as a positive shape demonstration.
 - [ ] The revised preamble notes the new addressing semantics (`agent:<role>:<key>` — durable across invocations of the same role) so agents understand the channel actually persists.
-- [ ] Existing `role-prompt-templates.spec.ts` tests pass; new assertions cover: (a) the content rubric text is present in `SYSTEM_PREAMBLE`, (b) the per-task checkpointing instruction (`research_findings`, `steps_completed`) is absent from the `agent` scope guidance or relocated to `conversation` scope.
+- [ ] Existing `role-prompt-templates.spec.ts` tests pass; new assertions cover: (a) the content rubric text is present in `SYSTEM_PREAMBLE`, (b) the per-task checkpointing instruction (`research_findings`, `steps_completed`) is absent from `agent` scope guidance and relocated to `conversation` scope, (c) the developer template checkpointing bullets reference `conversation` scope, (d) the specimen example is present in `SYSTEM_PREAMBLE`.
 
 ## Dependencies and References
 
@@ -132,6 +149,10 @@ The QRM8 roadmap defers "background summarization, agent-scope bootstrap injecti
 - **Sibling QRM9 Context Store fixes:** #55 (bootstrap `getAll` recency ordering) and #56 (bootstrap budget sizing) — same area, same wave; this completes the trio of audit-surfaced store defects. The ≤400-token rubric in item 6 references #56's evidence (three oversized project-notes never bootstrapped).
 - **Unblocks (deferred to QRM9):** agent-scope bootstrap injection (`tickets/8-workspace-isolation.md`, Context Store quality-upgrades row) — only meaningful once agent scope is role-addressable *and* contains useful content.
 - **Parent epic:** #49 (QRM9 Roadmap — Stabilization).
+
+## Scope Note — `docker/moderator/CLAUDE.md`
+
+`docker/moderator/CLAUDE.md` is the moderator's in-container persona file — not a runtime preamble compiled by `role-prompt-templates.ts`, but a separate file mounted into the moderator container. It contains a Failure Recovery section (site #6 in item 6's table) that is a verbatim duplicate of the moderator role template's Failure Recovery (site #5). Both are in scope for this ticket and must stay in sync.
 
 ## Out of Scope
 
