@@ -65,6 +65,7 @@ Vendored from the QRM8 context-usage research. Host log paths (`logs/…`) are r
 | [#56](https://github.com/ia64mail/quorum/issues/56) | Bootstrap context — token budget excludes project-notes records (depends on #55) · PR #58 | Done |
 | [#59](https://github.com/ia64mail/quorum/issues/59) | Context Store — agent scope provides no cross-invocation role persistence; role-key the partition · PR #60 | Spec |
 | [#61](https://github.com/ia64mail/quorum/issues/61) | Context search — `context_query` skip-and-stop budget empties result set when the top-ranked record exceeds the budget; add return-at-least-one floor · PR #62 | Spec |
+| [#63](https://github.com/ia64mail/quorum/issues/63) | Conversation-scope addressing — moderator-bound correlationId reuse across collaborating agents · PR (pending) | Spec |
 
 ### Residual hygiene (unrelated to context)
 
@@ -75,7 +76,7 @@ Vendored from the QRM8 context-usage research. Host log paths (`logs/…`) are r
 
 ## Deferred
 
-- **Conversation-scope addressing redesign** — managing `correlationId` so a ticket's collaborating agents share one conversation partition (moderator-driven, analogous to session resume), naturally populating it as the ticket progresses so each subsequent agent has predecessor context to read. To be specced after a dedicated design decision (see design conclusion #3 above).
+- **Conversation-scope addressing redesign** — managing `correlationId` so a ticket's collaborating agents share one conversation partition (moderator-driven, analogous to session resume), naturally populating it as the ticket progresses so each subsequent agent has predecessor context to read. **Picked up as [#63](https://github.com/ia64mail/quorum/issues/63)** after the #61 / #59 verification sessions provided the empirical case (shared vs rotated correlationId → handoff vs no handoff).
 - **Agent-scope quality upgrades** — bootstrap injection of agent scope, background summarization, decay/TTL. All depend on #59 (role-keyed partition) landing first.
 
 ## References
