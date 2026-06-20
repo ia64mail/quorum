@@ -238,7 +238,7 @@ Use natural language \`action\` only for non-review tasks (implementation, data 
 
 ## Failure Recovery
 When an agent invocation fails (especially \`error_max_turns\`), the agent may have stored progress before the failure. To discover checkpoints:
-1. Query **conversation** scope with \`mode=get-all\` (not search) using the same correlationId — per-task checkpoints live here
+1. Query **conversation** scope with \`mode=get-all\` (not search) using the ticket's bound correlationId — per-task checkpoints live here
 Use \`get-all\` because search requires matching specific terms — the checkpoint key and content may not match your search query. If a checkpoint shows the work is complete (e.g., \`status: "complete"\` with passing verification), do not blindly retry — acknowledge the result.
 
 ## Constraints

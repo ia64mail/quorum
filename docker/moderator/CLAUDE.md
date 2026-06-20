@@ -20,7 +20,7 @@ All agents are Claude Code instances with real tool capabilities. They operate o
 ### Communication Model
 Agents communicate through MCP tools on the MCP server:
 - **invoke_agent** — Request an agent to perform a task. `wait: true` (default) for synchronous results; `wait: false` for background work.
-- **context_store** / **context_query** / **context_summarize** — Shared knowledge store with three scopes: **project** (durable, session-wide), **conversation** (tied to the current turn's correlation ID), **agent** (private working memory).
+- **context_store** / **context_query** / **context_summarize** — Shared knowledge store with three scopes: **project** (durable, session-wide), **conversation** (tied to the current work unit's correlation ID), **agent** (private working memory).
 - Invocation calls can chain (A invokes B, who invokes C) with a depth limit to prevent unbounded chains.
 
 ## Startup
@@ -31,11 +31,25 @@ Call this **once per session**, not every turn.
 
 ## Turn Lifecycle (CRITICAL)
 
-**You MUST call `new_conversation` at the start of each user turn before making any other tool call.** This mints a fresh correlation ID for the turn, ensuring all agent invocations and context operations within the turn share the same scope. It also clears cached agent sessions so invocations start fresh for a new topic.
+At each turn start, decide: new work unit, or continuing a bound ticket?
 
-If you forget, the server auto-generates a random correlation ID per tool call — but this fragments the conversation scope, making cross-call context queries fail.
+**New work unit** (first time touching a ticket, ad-hoc question, exploration):
+Call `new_conversation`. Record the returned correlationId as that ticket's
+binding for the session.
 
-On the very first turn, call `register_agent` first, then `new_conversation`.
+**Continuing a bound ticket:**
+Do NOT call `new_conversation`. Pass the ticket's bound correlationId explicitly
+via `invoke_agent(correlationId=<id>)`.
+
+Always run `git fetch origin && git pull --ff-only` at turn start regardless.
+
+The binding map lives in your chat history — lost on session restart, reverting
+to today's mint-per-turn behavior (graceful degradation).
+
+If you forget the binding or lose it, the system degrades to today's per-turn
+behavior — fragmented but functional.
+
+Do not dispatch concurrent same-role agents on a single ticket. Code collisions from concurrent writes to the same codebase files are the primary risk — correlationId sharing compounds it by adding conversation-scope key collisions (e.g., two developers both writing "research_findings" to the same partition, last-write-wins). Sequential dispatch eliminates both risks and costs nothing in practice — the second dispatch benefits from the first's conversation-scope checkpoints.
 
 ## Clarification Flow
 
@@ -112,7 +126,7 @@ Short-role targets (productowner at 2 min) and all agent-to-agent calls return t
 
 ### Sizing implementation dispatches
 
-When dispatching `developer` for implementation, split into separate invocations whenever the ticket has > 3 logical units, > ~10 acceptance criteria, or expects > 4 commits. Pass `sessionId: ""` on each split invocation (or split across user turns, where `new_conversation` produces the same effect) — this discharges the cumulative-transcript cost that builds up across turns. Resumed sessions preserve the prior transcript on every turn's input, so resume does NOT save cost — only fresh sessions do. Brief each fresh invocation with the SHA / file path of the prior unit's commit so the developer can pick up the thread.
+When dispatching `developer` for implementation, split into separate invocations whenever the ticket has > 3 logical units, > ~10 acceptance criteria, or expects > 4 commits. Pass `sessionId: ""` on each split invocation to discharge cumulative-transcript cost. Resumed sessions preserve the prior transcript on every turn's input, so resume does NOT save cost — only fresh sessions do. Brief each fresh invocation with the SHA / file path of the prior unit's commit so the developer can pick up the thread.
 
 ### Gating `/simplify`
 
@@ -134,7 +148,7 @@ Every ticket follows a **two-phase user-review process**. Never skip the pauses 
 
 The moderator operates on its own git clone at `/mnt/quorum/workspace` (backed by the `moderator-workspace` named volume). Changes from agents arrive via `git fetch`/`git pull` — they are NOT automatically visible. Always pull at the start of each turn.
 
-After calling `new_conversation`, run `git fetch origin && git pull --ff-only` before reading any workspace files — agent commits since your last turn may not be in your local clone. The `new_conversation` response includes a `reminder` field reinforcing this.
+At the start of each turn, run `git fetch origin && git pull --ff-only` before reading any workspace files — agent commits since your last turn may not be in your local clone. The `new_conversation` response includes a `reminder` field reinforcing this.
 
 ## Context Management
 
@@ -185,7 +199,7 @@ Skip the table only when the turn made zero agent invocations. Render it for sin
 ## Failure Recovery
 
 When an agent invocation fails (especially `error_max_turns`), the agent may have stored progress before the failure. To discover checkpoints:
-1. Query **conversation** scope with `mode=get-all` (not search) using the same correlationId — per-task checkpoints live here
+1. Query **conversation** scope with `mode=get-all` (not search) using the ticket's bound correlationId — per-task checkpoints live here
 Use `get-all` because search requires matching specific terms — the checkpoint key and content may not match your search query. If a checkpoint shows the work is complete (e.g., `status: "complete"` with passing verification), do not blindly retry — acknowledge the result.
 
 ## Self-Diagnostic via Agent Logs
@@ -230,7 +244,7 @@ Agent sessions are tracked server-side. When you invoke the same agent role mult
 - You need an independent perspective (e.g., asking the team lead for an unbiased code review)
 - The prior session's framing would actively mislead the agent (e.g., prior bootstrap context referenced a different feature area)
 
-The `new_conversation` tool at the start of each turn already clears session caches, so invocations in a new turn start fresh automatically.
+Session caches persist across `new_conversation` boundaries. Pass `sessionId: ""` when you want a completely fresh agent session.
 
 ## Tool Restrictions
 
