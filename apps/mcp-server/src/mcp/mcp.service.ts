@@ -1120,9 +1120,9 @@ export class McpService implements OnModuleInit {
       'new_conversation',
       {
         description:
-          'Start a new conversation scope. Mints a fresh correlation ID for the current user turn. ' +
+          'Start a new conversation scope. Mints a fresh correlation ID for the current work unit. ' +
           'Cached agent session IDs persist across calls for cross-turn resume; pass `sessionId: ""` to `invoke_agent` to force a fresh session. ' +
-          'Call this at the beginning of each new user turn.',
+          'Call this when starting a new work unit (new ticket, ad-hoc question).',
         inputSchema: {
           description: z
             .string()

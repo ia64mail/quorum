@@ -374,6 +374,18 @@ describe('getRolePromptTemplate', () => {
         expect(failureSection).toContain('per-task checkpoints live here');
       });
     });
+
+    describe('failure recovery documentation (#63)', () => {
+      it('should reference conversation scope and get-all in the Failure Recovery section', () => {
+        const template = getRolePromptTemplate(AgentRole.moderator);
+        const failureSection = template.slice(
+          template.indexOf('## Failure Recovery'),
+          template.indexOf('## Constraints'),
+        );
+        expect(failureSection).toContain('conversation');
+        expect(failureSection).toContain('get-all');
+      });
+    });
   });
 
   describe('generic fallback', () => {
