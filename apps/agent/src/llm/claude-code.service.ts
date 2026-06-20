@@ -22,6 +22,23 @@ const CLAUDE_BINARY_PATH = `/app/node_modules/@anthropic-ai/claude-agent-sdk-lin
  * Everything NOT on this list is excluded — this is the primary defense
  * against leaking secrets (GH_TOKEN, ANTHROPIC_API_KEY from env, etc.)
  * into the model-visible subprocess environment.
+ *
+ * DELIBERATE OMISSIONS (QRM8 D5 secret-isolation boundary, #65):
+ *   - `GH_TOKEN`         — the GitHub PAT held by the handler process for
+ *                          push authentication. Forwarding it would let
+ *                          the model read its own token, print it, write
+ *                          it to a file, or be prompt-injected into doing
+ *                          so via code under review.
+ *   - `GIT_CONFIG_GLOBAL` — points at the gh credential-helper config
+ *                          written by docker/agent/entrypoint.sh; same
+ *                          token-exposure concern as above.
+ *
+ * The intended consequence is that the agent CAN commit (it has git
+ * identity above) but CANNOT push (no credential path). Push reliability
+ * is the handler's responsibility — see InvocationHandler.commitAndPush,
+ * which pushes anything ahead of origin regardless of whether the
+ * commit was framework-made or agent-made (#65 keystone). Do NOT add
+ * either secret to this list to "fix" the push gap.
  */
 const SDK_ENV_ALLOWLIST: readonly string[] = [
   // System essentials
@@ -38,7 +55,7 @@ const SDK_ENV_ALLOWLIST: readonly string[] = [
   'NODE_ENV',
   'TMPDIR',
   'TZ',
-  // Git identity
+  // Git identity (NOT credentials — see comment above)
   'GIT_AUTHOR_NAME',
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
