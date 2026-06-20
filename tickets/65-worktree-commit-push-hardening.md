@@ -101,15 +101,15 @@ Do **not** add `GH_TOKEN` or `GIT_CONFIG_GLOBAL` to `SDK_ENV_ALLOWLIST`. Add a r
 
 ## Acceptance Criteria
 
-- [ ] `commitAndPush` pushes commits that are ahead of `origin/<branch>` even when the working tree is clean (an agent-made commit reaches origin).
-- [ ] Framework-made commits (agent leaves the tree dirty + provides `commitMessage`) still commit and push exactly as today.
-- [ ] When there is genuinely nothing to push (no dirty tree, not ahead of origin), the handler is a clean no-op and logs it.
-- [ ] Worktree setup starts the working branch at `origin/<branch>`; a pre-seeded divergent local ref is reconciled to origin and not inherited by the SDK run.
-- [ ] A non-fast-forward push triggers one `pull --rebase` + retry; on unresolved conflict the invocation returns a structured error to the broker (no silent local orphan).
-- [ ] The deny-guard blocks `cd <wt> && git commit …`, `git -C <wt> commit …`, and env-prefixed `git commit …`, while still allowing read-only git (e.g. `git log --grep=commit`).
-- [ ] `SDK_ENV_ALLOWLIST` still excludes `GH_TOKEN` and `GIT_CONFIG_GLOBAL`; a test asserts their absence from the SDK subprocess env.
-- [ ] Unit tests cover: agent-committed-clean-tree → pushed; divergent local ref → reset on entry; non-ff → rebase-retry then fail-loud; the new deny-guard bypass forms.
-- [ ] `npm run build`, `npm run lint`, `npm run test` all green; new tests added on top of the existing baseline.
+- [x] `commitAndPush` pushes commits that are ahead of `origin/<branch>` even when the working tree is clean (an agent-made commit reaches origin).
+- [x] Framework-made commits (agent leaves the tree dirty + provides `commitMessage`) still commit and push exactly as today.
+- [x] When there is genuinely nothing to push (no dirty tree, not ahead of origin), the handler is a clean no-op and logs it.
+- [x] Worktree setup starts the working branch at `origin/<branch>`; a pre-seeded divergent local ref is reconciled to origin and not inherited by the SDK run.
+- [x] A non-fast-forward push triggers one `pull --rebase` + retry; on unresolved conflict the invocation returns a structured error to the broker (no silent local orphan).
+- [x] The deny-guard blocks `cd <wt> && git commit …`, `git -C <wt> commit …`, and env-prefixed `git commit …`, while still allowing read-only git (e.g. `git log --grep=commit`).
+- [x] `SDK_ENV_ALLOWLIST` still excludes `GH_TOKEN` and `GIT_CONFIG_GLOBAL`; a test asserts their absence from the SDK subprocess env.
+- [x] Unit tests cover: agent-committed-clean-tree → pushed; divergent local ref → reset on entry; non-ff → rebase-retry then fail-loud; the new deny-guard bypass forms.
+- [x] `npm run build`, `npm run lint`, `npm run test` all green; new tests added on top of the existing baseline.
 
 ## Dependencies and References
 
@@ -124,3 +124,32 @@ Do **not** add `GH_TOKEN` or `GIT_CONFIG_GLOBAL` to `SDK_ENV_ALLOWLIST`. Add a r
 - The `SDK_ENV_ALLOWLIST` secret boundary stays as-is (agent remains a non-pusher); this ticket explicitly does not loosen it.
 - *Why* the moderator double-dispatches the same unit of work to two agents (the #63 developer+teamlead overlap) is a separate orchestration concern; this ticket only makes the resulting concurrent-branch push fail loudly instead of silently.
 - The broker/agent timeout divergence (#59 §1, item 1 — routing `/code-review` through the #47 always-pending path) is complementary and tracked under #47's lineage, not here.
+
+## Implementation Notes
+
+**Status:** Complete
+
+**Files modified (8):**
+- `apps/agent/src/connection/invocation-handler.service.ts` — Keystone (`commitAndPush`): rewritten to commit dirty changes (existing) then push anything ahead of `origin/<branch>` via a new `countAhead` helper (`git rev-list --count origin/<branch>..HEAD`). Clean tree + not-ahead is a logged no-op (`No changes to push after invocation`); success log now reports `ahead=N`. Push extracted into `pushWithRebaseRetry` (one `git pull --rebase` + retry; structured `push rejected: ...` error preserving the initial failure if rebase or retry fails). `runInvocation` now resets the new worktree to `origin/<branch>` between worktree-add and the node_modules symlink; reset failure cleans up the worktree and returns a structured error. Inline comment marks the reset-before-SDK / push-after-SDK ordering as load-bearing.
+- `apps/agent/src/connection/invocation-handler.service.spec.ts` — Existing push-asserting tests now mock `execFileAsync` to return `'1\n'` for the `rev-list` call so the push branch is taken (4 tests). No-changes-path log assertion updated from "No changes to commit after invocation" to "No changes to push after invocation". Push-rejected test reframed around the full rebase-fails path. New `#65 worktree commit/push hardening` describe block: 7 tests covering agent-committed-clean-tree → pushed; `git reset --hard` invoked; reset-before-SDK ordering; reset-failure cleanup; non-ff recover via rebase+retry; non-ff fail-loud on retry-still-fails.
+- `apps/agent/src/config/tool-guard-hook.ts` — `normaliseBashCommand` removed; replaced with `splitShellSegments` (split on `&&|||;|\||&`), `extractSegmentHead` (strip env-assignments, `sudo`, leading `cd <path>`; normalise `git -C <path> <verb>` → `git <verb>`), and `matchesDeniedVerb` (word-boundary aware: alphanumeric-trailing verbs require space continuation; punctuation-trailing verbs like `'rm -rf /'` and `'git checkout -b'` accept any continuation, preserving legacy semantics).
+- `apps/agent/src/config/tool-guard-hook.spec.ts` — New `#65 token-aware deny-guard` describe block: 18 tests covering `cd &&`, `git -C`, env-prefix bypasses; `;`, `|`, `&` shell separators; `sudo`+`cd` compounds; read-only allowance for `git log --grep=commit`, `git -C <wt> status`, `pwd && ls && git status`, bare `cd <path>`; word-boundary correctness (`git branches` not blocked by `git branch`).
+- `apps/agent/src/llm/claude-code.service.ts` — `SDK_ENV_ALLOWLIST` unchanged. Added a 14-line block comment documenting the QRM8 D5 secret-isolation boundary: `GH_TOKEN` and `GIT_CONFIG_GLOBAL` are deliberately omitted so the agent can commit (has git identity) but cannot push (no credential helper), and push reliability is the handler's job — future maintainers must NOT add either to the allowlist. Inline annotation on the git-identity entries: "NOT credentials — see comment above".
+- `apps/agent/src/llm/claude-code.service.spec.ts` — New regression test asserts BOTH `GH_TOKEN` and `GIT_CONFIG_GLOBAL` are absent from the SDK subprocess env after seeding both as `process.env` values.
+- `tickets/65-worktree-commit-push-hardening.md` — Flipped AC checkboxes, added this section.
+
+**Verification:** `npm run build`, `npm run lint`, `npm run test` all green. 906/906 tests across 48 suites (baseline 881 → +25 new tests across the three affected spec files).
+
+**Deviations:** None. All five changes from the Implementation Details section landed as specified.
+
+**Key implementation choices worth remembering:**
+
+1. *Verb-matching word-boundary rule.* The new deny-guard matcher is hybrid: alphanumeric-trailing verbs (e.g. `git push`, `git branch`) require a space continuation, so `git branches` does not match `git branch`; punctuation-trailing verbs (e.g. `rm -rf /`, `git checkout -b`) accept any continuation, preserving the developer profile's legacy semantic where `'rm -rf /'` was used as a path-prefix indicator. This was the load-bearing nuance that almost caused a regression for the developer role's `'rm -rf /'` entry.
+
+2. *Shell-split is deliberately naive.* `splitShellSegments` does not parse subshells, heredocs, or quoting. A quoted `&&` inside a commit-message argument would split the segment, but each sub-segment is then matched against denied verbs — the worst case is over-denying a contrived commit-message string that the agent is not supposed to author anyway. Documented inline so future contributors don't try to "improve" it into a full shell parser.
+
+3. *Reset/push ordering is load-bearing.* Reset is start-of-invocation, push is end-of-invocation. They compose across invocations to close the orphan loop from both ends (no unpushed commit survives between invocations) — but they MUST NOT be reordered within one invocation; resetting after the SDK runs would discard the agent's output before it can be pushed. Inline comment in `runInvocation` documents this.
+
+4. *Rebase-retry preserves the initial error.* The structured error wraps `(initial=<first push error>)` so the broker sees both the original non-ff and the recovery failure cause (rebase conflict vs second-push reject). Avoids the "lost root cause" trap.
+
+5. *Secret-boundary comment is the maintainability story.* Without the 14-line comment on `SDK_ENV_ALLOWLIST`, a future maintainer investigating "why can't the agent push?" would naturally try to fix it by allowlisting `GH_TOKEN` — re-introducing the very leak this ticket hardens against. The comment explicitly redirects them to `commitAndPush` as the intended fix surface.
