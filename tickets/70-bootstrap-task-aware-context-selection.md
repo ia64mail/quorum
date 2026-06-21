@@ -1,0 +1,103 @@
+# #70: Bootstrap context — task-aware project-scope selection via moderator-authored search query
+
+## Summary
+
+Make bootstrap project-scope selection **task-relevant** instead of merely recency-ordered: thread a short, moderator-authored `searchQuery` through `invoke_agent` into the broker, and have `BootstrapContextService` rank project records by hybrid BM25 + k-NN relevance to that query (reusing the existing `ContextStore.search`) rather than dumping the newest records. Recency selection remains the fallback. This realizes epic [#49](49-stabilization/49-stabilization.md) design-conclusion **#4** ("Bootstrap is recency-driven but not task-aware … moot once bootstrap selection is reworked per this conclusion").
+
+## Problem Statement
+
+After #55 (recency ordering) and #56 (budget sizing, `5000` / `0.8`), bootstrap reliably injects the **newest** project records — but newest is not the same as **relevant**. The most recent live audit (the [#65 context audit](../logs/sessions/2026-06-20-qrm9-65-context-audit.md)) shows the defect concretely:
+
+- The B1 bootstrap into the developer delivered `63-project-notes`, `63-design-notes`, a billing doc, and a `qrm6-rerun-elicit-A` crumb — **none of them `#65`-relevant**. The developer ignored the block and read the ticket + code directly. The audit's verdict: *"Honest recency, not task-relevance."*
+- The accreting append-only log (330+ project records, no compaction) means recency increasingly surfaces *whatever was written last*, regardless of the task at hand. As the index grows, a recency-ordered project block is progressively less likely to carry the records relevant to the current ticket.
+
+The retrieval machinery to fix this already exists and **already works** — the QRM8 audit found project *search* returned relevant, well-ranked hits 9/9 — but bootstrap doesn't use it; it calls `getAll` + a recency bin-pack. The gap is not search quality; it is that the **push channel has no notion of what the invocation is about**.
+
+**Risk of not doing it:** bootstrap's project budget (4000 tok since #56) is spent on recency noise. The synthesis records #56 enlarged the budget to admit (`*-project-notes` / `*-design-notes`) ride in only when they happen to be newest — exactly the cross-ticket reuse the budget bump was meant to enable is left to chance.
+
+## Design Context
+
+The decisive design question is "what query does a *push* channel search with?" Bootstrap runs server-side in the broker, before the agent starts — there is no agent query. The answer: the moderator, an LLM, already authors a natural-language description of every task in `invoke_agent.action`. We make it author a **dedicated, retrieval-shaped one-sentence query** as a sibling field.
+
+**Why a moderator-authored field, not server-side distillation of `action`:**
+
+- **Empirical:** a sample of the last 28 `invoke_agent` actions (extracted from moderator `ToolCall` logs across the last ~5 sessions; 134 found total) shows ~22 already lead with both the **ticket id** and the **feature concept** — e.g. *"Implement ticket #61 … search-budget top-hit floor fix"*, *"#59 … agent-scope role-keyed partition"*. The signal the search needs is present; the LLM is well-placed to emit a clean version of it.
+- **The `/code-review` conflict rules out "first sentence of action".** ~25% of invocations must lead with a literal slash command (`/code-review …`) so the agent's CC CLI dispatches the skill (see [moderator persona — Skill Dispatch](../docker/moderator/CLAUDE.md)). That first token cannot simultaneously be a clean concept query. A separate field keeps `action` free-form (commands, multi-step instructions, hashes) and the query clean.
+- **Vector quality belongs to the LLM, the MCP stays trivial.** Embedding a long, multi-topic `action` dilutes the single pooled vector (`mxbai-embed-large`, one 1024-d vector, k-NN leg weighted 70%) and risks silent 512-token truncation; the query prefix is literally *"Represent this sentence for searching relevant passages: "* (`embedding.service.ts:8`) — built for a sentence. A short LLM-authored query sidesteps both. The server side becomes `query = request.searchQuery ?? null` — deterministic and unambiguous.
+
+**Why this is the right fix vs. re-tuning the ratio:** lowering `BOOTSTRAP_PROJECT_RATIO` (the obvious knob) shrinks the very project budget #56 enlarged so synthesis notes fit — re-creating #56's problem. Relevance ranking attacks the actual defect (recency ≠ relevance) without sacrificing synthesis-record reuse. The ratio stays a secondary lever.
+
+## Implementation Details
+
+### 1. `searchQuery` — a caller-set, broker-consumed field
+
+Add an optional `searchQuery` to the `invoke_agent` tool schema (`apps/mcp-server/src/mcp/mcp.service.ts:297`, alongside `action`) and to `InvokeRequest` (`libs/common/src/messaging/invoke.types.ts:89`). Semantics:
+
+- **Set by the moderator**, consumed by the broker at bootstrap-assembly time, and **never forwarded to the target agent**. It is the inverse of `bootstrapContext` (`invoke.types.ts:98` — broker-set, agent-read); `searchQuery` is caller-set, broker-read.
+- Wire it into the `InvokeRequest` built at `mcp.service.ts:379`.
+
+Suggested description (drives both retrieval legs without leaking mechanism):
+
+    searchQuery: z.string().optional().describe(
+      'One-sentence description of this task’s domain concept, used to retrieve ' +
+      'the most relevant prior decisions into the target’s starting context. ' +
+      'Include exact identifiers (ticket #, feature/file name) and a plain-language ' +
+      'concept description; omit slash commands, commit hashes, and branch names.')
+
+**Schema-drift guard (known bug class).** The agent `/invoke` Zod schema has twice silently dropped fields added to `InvokeRequest` (`sessionId`, `bootstrapContext` — see the recurring InvokeRequest schema-drift class, [QRM6-BUG-014](QRM6-BUG-014-invoke-request-schema-strips-bootstrap-context.md)). `searchQuery` is broker-consumed and must *not* reach the agent, so it sidesteps the agent-side schema entirely — but add a test asserting the broker reads it and that it is absent from the delivered agent payload, so the omission is intentional and pinned.
+
+### 2. `assemble(correlationId, query?)` — relevance for project, recency for conversation
+
+In `BootstrapContextService.assemble` (`apps/mcp-server/src/messaging/bootstrap-context.service.ts:20`):
+
+- **Project scope (Step 3/5):** when `query` is present, replace `getAll(project)` + recency `applyBudget` with `contextStore.search(ContextScope.project, query, projectBudget)` (the existing method, `opensearch-store.ts:202`) — it is already scope-filtered and token-budgeted, returns relevance-ranked items, and (since #61) returns at least the top hit even when it exceeds the budget. Map the returned `ContextItem[]` into the `selected` record shape and sum `tokensUsed` for the reclaim step.
+- **Conversation scope (Step 7):** unchanged — it is `correlationId`-partitioned, so every record is already on-task; keep `getAll` + recency. Ranking buys nothing.
+- **Budget reclaim (Step 6):** unchanged — unused project budget still flows to conversation.
+
+### 3. Pass the query from the broker
+
+At the assembly call site (`message-broker.service.ts:112`), pass `request.searchQuery` into `assemble(correlationId, request.searchQuery)`.
+
+### 4. Fallback — never worse than today
+
+Recency `getAll` selection is retained and used whenever any of these hold, so the change is strictly additive:
+
+- `searchQuery` is absent (older moderators, non-relevant tasks);
+- the store backend is `InMemoryStore` (its `search` is substring-only, not ranked);
+- `search` throws or returns empty (embedding service down is already handled inside `search` via BM25-only, `opensearch-store.ts:257`; a true empty result falls back to recency).
+
+Assembly is already non-fatal (`message-broker.service.ts:113-118`); the fallback extends that posture.
+
+### 5. Moderator persona instruction
+
+In [docker/moderator/CLAUDE.md](../docker/moderator/CLAUDE.md) (near **Context Management** / **Skill Dispatch**), instruct the moderator to pass `searchQuery` on every `invoke_agent`. Teach the **contract and purpose**, not BM25/k-NN internals:
+
+- one sentence, ~10–25 words;
+- include exact identifiers (ticket #, feature/file) **and** a plain-language concept description;
+- omit slash commands, commit hashes, branch names, and process boilerplate;
+- it feeds keyword + semantic retrieval that seeds the next agent's starting context.
+
+Call out the `/code-review` case explicitly: `action` keeps the literal `/code-review …`; `searchQuery` carries the clean concept (e.g. `"ticket #65 worktree commit/push hardening — agent commits orphan in shared clone"`).
+
+### 6. Docs
+
+Update [docs/context-management.md](../docs/context-management.md) "Bootstrap Context Injection" to describe task-aware project selection and the `searchQuery` input; add the #70 row to the epic [Tasks table](49-stabilization/49-stabilization.md) and note design-conclusion #4 is now addressed.
+
+## Acceptance Criteria
+
+- [ ] `invoke_agent` accepts an optional `searchQuery`; `InvokeRequest` carries it.
+- [ ] `searchQuery` is consumed by the broker at assembly and is **absent** from the delivered agent payload (asserted by test).
+- [ ] When `searchQuery` is present and the backend is OpenSearch, project-scope bootstrap is selected via `ContextStore.search` (relevance-ranked) within the project budget; conversation scope remains recency `getAll`.
+- [ ] When `searchQuery` is absent, the store is InMemory, or `search` errors/returns empty, project selection falls back to the current recency behavior (no regression).
+- [ ] Project→conversation budget reclaim still works with the search path.
+- [ ] Moderator persona instructs authoring `searchQuery` (contract + purpose + `/code-review` carve-out), without retrieval internals.
+- [ ] `docs/context-management.md` and the epic Tasks table updated.
+- [ ] `npm run build` / `npm run lint` / `npm run test` green; new tests cover the search path, the recency fallback, and the payload-omission guard.
+
+## Dependencies and References
+
+- **Builds on:** #55 (recency ordering), #56 (budget `5000`/`0.8`) — both Done. Inherits #61's "return-at-least-the-top-hit" floor on the `search` path.
+- **Realizes:** epic [#49](49-stabilization/49-stabilization.md) design-conclusion #4; supersedes the #55 recency-stopgap caveat noted there for project bootstrap.
+- **Guards against:** the InvokeRequest schema-drift class (QRM6-BUG-014) — `searchQuery` is broker-only by design.
+- **Touchpoints:** `apps/mcp-server/src/mcp/mcp.service.ts` (tool schema + request build), `libs/common/src/messaging/invoke.types.ts` (InvokeRequest), `apps/mcp-server/src/messaging/message-broker.service.ts` (assemble call), `apps/mcp-server/src/messaging/bootstrap-context.service.ts` (selection), `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts` (`search`, reused), `apps/mcp-server/src/embedding/embedding.service.ts` (query prefix / model constraints), `docker/moderator/CLAUDE.md`, `docs/context-management.md`.
+- **Evidence:** [#65 context audit](../logs/sessions/2026-06-20-qrm9-65-context-audit.md) (B1 recency-vs-relevance); 28-action `searchQuery`-feasibility sample (this session).
