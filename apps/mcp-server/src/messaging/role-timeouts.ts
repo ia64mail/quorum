@@ -6,7 +6,7 @@ export const ROLE_TIMEOUTS: Partial<Record<AgentRole, number>> = {
   // Architect: research/design tasks observed 5–12 min (2026-04-25 SDK
   // investigation); bumped to 15 min to absorb the long tail. See QRM6-BUG-010.
   [AgentRole.architect]: 15 * 60_000, // 15 min — design review / research
-  [AgentRole.teamlead]: 10 * 60_000, // 10 min — ticket creation
+  [AgentRole.teamlead]: 15 * 60_000, // 15 min — /code-review pipeline
   [AgentRole.developer]: 30 * 60_000, // 30 min — implementation
   [AgentRole.qa]: 15 * 60_000, // 15 min — test execution
   [AgentRole.productowner]: 2 * 60_000, // 2 min — clarification
