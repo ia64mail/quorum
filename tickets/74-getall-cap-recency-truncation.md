@@ -78,3 +78,19 @@ In all cases: cover both backends (parity is part of the #55 contract), add regr
 - Relevance-ranked bootstrap selection — [#70](70-bootstrap-task-aware-context-selection.md).
 - Store compaction / data hygiene for the append-only project scope (reduces exposure but does not fix the seam).
 - Pagination (`search_after` / PIT) for partitions legitimately larger than 10,000 — a valid deeper fix, but not required to restore recency correctness at the current design point.
+
+## Resolution *(added at closure)*
+
+**Status:** Closed without implementation — superseded by [#70](70-bootstrap-task-aware-context-selection.md)
+
+**Date:** 2026-07-06
+
+Reviewed against the existing chain (#55 → #56 → #70) before dispatching any fix work:
+
+- **#70 dissolves the primary defect at its consumption site.** The bootstrap project-scope path — the one place where the cap × sort truncation has production consequences — stops flowing through `getAll` + recency bin-pack entirely: selection moves to `ContextStore.search()` (relevance-ranked, scope-filtered, token-budgeted), which never requests a 10,000-doc window. Fixing the `getAll` window ordering first would be immediately mooted work; the correct sequencing is to land #70 and let the recency path become the fallback it is specified to be.
+- **What #70 does *not* cover (carried forward, not lost):**
+  1. **The recency fallback path keeps the seam.** When `searchQuery` is absent or `search()` degrades, #70 falls back to `getAll` + recency — at >10,000 docs per partition that fallback still delivers the archive, not the news. Acceptable exposure: the fallback is the exception path, conversation partitions are `correlationId`-bounded (small), and the cap-window hardening (desc-fetch + internal reverse, warn-at-cap, named constant shared with `getStats`) remains available in this ticket's Implementation Details if the fallback is ever promoted back to a primary path.
+  2. **The `InMemoryStore` upsert-ordering defect is untouched by #70** and needs no scale to trigger. It is a real contract violation on the dev/test backend (one upsert of an existing key breaks `createdAt`-ascending iteration). If it starts biting (flaky recency-dependent tests, misleading local-dev bootstraps), it warrants its own small standalone fix — sort-on-read in `InMemoryStore.getAll()` — referencing this ticket as the spec.
+- **Why the ticket merges anyway:** the library is an implementation timeline, and this seam spent four development cycles (QRM1-002 → QRM4-002 → QRM5-005 → #55) plus twelve experiment runs un-owned. This record is the owner: the next investigation that lands on `sort: 'asc'` next to `size: 10000` — or on a `Map`-order assumption — should find the interaction, the trap, and the validated fix shapes in one keyword search, whatever has happened to #70 by then.
+
+Acceptance criteria left unchecked deliberately — they describe the fix this ticket specifies, which was discharged to #70's approach rather than implemented here.
