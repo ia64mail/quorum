@@ -105,27 +105,35 @@ The brief you write is the frame every downstream agent inherits — a mis-frame
 - **productowner**: Requirements clarification and business context
 - Invoke agents directly — avoid intermediaries when the target is clear
 
-## Skill Dispatch — REQUIRED for Reviews
+## Skill Dispatch — Reviews Are Tiered
 
 Agents have built-in skills activated by setting the `action` field to a slash command. When `action` starts with `/`, the agent dispatches the skill directly — deterministic, no wasted turns, and dramatically better output.
 
-**ALWAYS set `action` to `/code-review` when dispatching a code review.** Do NOT send a free-form review prompt — the `/code-review` skill runs a structured multi-agent review pipeline (parallel CLAUDE.md compliance auditors, bug detector, git-blame history analyzer, confidence scoring). A natural language prompt like "Please review..." produces a shallow manual review instead.
+**Pick the cheapest review tier the change justifies; escalate when in doubt** (tier definitions are canonical in quorum.md → Review Protocol → Review Tiers):
+
+| Tier | `action` | When | Cost |
+|------|----------|------|------|
+| 1 — Lightweight | Natural-language review ask (no slash) | Small, mechanical, or low-risk changes with high prior confidence; follow-up re-reviews of feedback fixes | Quick and cheap |
+| 2 — Standard | `/review\n\n<focus areas>` | **The default for most reviews** — normal feature and fix PRs | Moderate — one structured review pass |
+| 3 — Deep | `/code-review\n\n<focus areas>` | Low confidence in the change, questionable or hard-to-assess implementations, highly sensitive surfaces (permission guards, broker safeguards, git/commit handling, auth) | Long and expensive — multi-agent pipeline (parallel CLAUDE.md compliance auditors, bug detector, git-blame history analyzer, confidence scoring); the reason the teamlead timeout is 15 min |
+
+Tier selection is part of authoring the brief. Escalate (1 → 2 → 3) rather than repeat a tier when a review leaves open questions, its findings are disputed, or the diff turns out riskier than briefed. Whatever the tier, the reviewer's reporting duty is identical — the full review report lands on the PR per quorum.md's Review Protocol; tier 1 changes the machinery, not the depth bar.
 
 | Intent | Target | action |
 |--------|--------|--------|
-| Architectural review | architect | `/code-review\n\n<focus areas>` |
-| Integration / code review | teamlead | `/code-review\n\n<focus areas>` |
+| Architectural review | architect | Tiered review `action` (table above) |
+| Integration / code review | teamlead | Tiered review `action` (table above) |
 | Self-review before PR | developer | `/simplify` |
 | Implementation task | developer | Natural language (no slash) |
 
 **Format:** Start with the slash command, then add a blank line followed by context that steers the review's priorities:
 ```
-/code-review
+/review
 
 QRM5-003, 2 commits (abc1234..def5678). Focus on error handling in HttpAgentConnection and test coverage for the new dispatcher.
 ```
 
-Use natural language `action` only for non-review tasks (implementation, data retrieval, task decomposition).
+Use natural language `action` for non-review tasks (implementation, data retrieval, task decomposition) and for tier-1 lightweight review asks.
 
 Steering context narrows focus, but it must never fence the review in: every review brief should ask for at least one out-of-charter pass (e.g. "which ticket owns the interaction this change touches?"). A charter that only verifies a do-not-touch list confirms the fence instead of finding the defect.
 

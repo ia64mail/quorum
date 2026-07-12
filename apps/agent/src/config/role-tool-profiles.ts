@@ -78,7 +78,7 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
       'npm publish',
     ],
     allowedWritePaths: ['docs/', 'tickets/'],
-    allowedSkills: ['code-review', 'simplify'],
+    allowedSkills: ['code-review', 'review', 'simplify'],
     plugins: [CODE_REVIEW_PLUGIN],
   },
 
@@ -92,7 +92,7 @@ export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
       'rm -rf /',
       'npm publish',
     ],
-    allowedSkills: ['code-review', 'simplify'],
+    allowedSkills: ['code-review', 'review', 'simplify'],
     plugins: [CODE_REVIEW_PLUGIN],
   },
 

@@ -224,6 +224,16 @@ No labels needed — the sub-issue graph and milestone carry the signal.
 
 This protocol defines how implementation work is reviewed against ticket requirements. It is the Team Lead's primary reference during code review (see [Team Lead → Code review](#team-lead)).
 
+### Review Tiers
+
+The dispatcher (normally the moderator) picks one of three review tiers when authoring the brief. The tier sets the machinery, not the discipline — the Review Workflow below and the Reporting rules apply at every tier:
+
+1. **Lightweight** — a natural-language review ask, no skill. For small, mechanical, or low-risk changes with high prior confidence, and follow-up re-reviews of feedback fixes. Quick and cheap; produces no raw skill output (single-comment reporting).
+2. **Standard (`/review`)** — **the default for most reviews.** One structured review pass over the PR. Moderate cost.
+3. **Deep (`/code-review`)** — for low-confidence, questionable, or hard-to-assess changes, and highly sensitive surfaces (permission guards, broker safeguards, git/commit handling, auth). A long, expensive multi-agent pipeline with confidence scoring.
+
+Escalate a tier (1 → 2 → 3) rather than repeat one when a review leaves open questions or its findings are disputed.
+
 ### Review Workflow
 
 1. **Eligibility check** — Confirm the ticket is ready for review:
@@ -291,17 +301,17 @@ This protocol defines how implementation work is reviewed against ticket require
 
 ### Reporting (PR workflow)
 
-When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github-workflow)), the Team Lead **must** publish the verdict as a PR comment. This applies to **every** PR-based review — `/code-review` skill dispatches, lightweight reviews, and follow-up re-reviews alike. A review is not concluded until its outcome is visible on the PR. The exact format depends on whether a `/code-review` run produced raw output:
+When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github-workflow)), the Team Lead **must** publish the verdict as a PR comment. This applies to **every** PR-based review at **every** tier — skill dispatches (`/review`, `/code-review`), lightweight reviews, and follow-up re-reviews alike. A review is not concluded until its outcome is visible on the PR. The exact format depends on whether a review-skill run produced raw output:
 
-**With `/code-review` skill output** — report as **two separate PR comments**, in order:
+**With review-skill output** (`/review` or `/code-review`) — report as **two separate PR comments**, in order:
 
-1. **Raw skill output** — post the verbatim output of the `/code-review` skill as the first PR comment, unmodified. No paraphrasing, no editorial cuts. This gives the user direct visibility into what the structured review pipeline produced before any agent judgment is applied.
+1. **Raw skill output** — post the verbatim output of the review skill as the first PR comment, unmodified. No paraphrasing, no editorial cuts. This gives the user direct visibility into what the structured review pipeline produced before any agent judgment is applied.
 
 2. **Verdict comment — the full review report** — post a second comment containing the complete review report, not a bare verdict: an overview of what the change does, the acceptance-criteria audit with evidence (`file:line`), the outcome of the convention/integration/out-of-charter passes, findings triage, and the Accept/Decline verdict (per the format in step 5 above). **Depth bar:** the comment must show *what was verified and how* — a comment that is only a verdict line (or only "no issues found") is not a concluded review. The report **must reference the prior raw comment rather than restate its findings**: if you agree with the skill, say so and proceed; if you disagree with specific findings or downgrade their confidence, name which ones and why. Do not duplicate the raw output.
 
-The split exists so the user can audit *what the skill said* vs *what the Team Lead decided* independently. Both comments are required when the review used `/code-review`.
+The split exists so the user can audit *what the skill said* vs *what the Team Lead decided* independently. Both comments are required when the review used a review skill.
 
-**Without `/code-review` skill output** (lightweight review, follow-up re-review, or any review where no raw skill output exists) — post a single PR comment containing the full review report to the same depth bar as above. No raw-output comment is needed because none exists; the report comment alone satisfies the rule.
+**Without review-skill output** (lightweight tier-1 review, follow-up re-review, or any review where no raw skill output exists) — post a single PR comment containing the full review report to the same depth bar as above. No raw-output comment is needed because none exists; the report comment alone satisfies the rule.
 
 ---
 
@@ -359,7 +369,7 @@ You are the **coordination and decomposition specialist** responsible for transl
 
 2. **Implementation guidance** — Your tickets are the developer's primary input. Implementation details should be specific enough that the developer knows *what* to build, *where* to put it, and *how* it integrates with existing code. Reference specific files, modules, and patterns from the current codebase.
 
-3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria. When reviewing PR-based work, also follow [Reporting (PR workflow)](#reporting-pr-workflow): every PR-based review concludes with the full review report posted on the PR — two comments (raw `/code-review` output + full review report) when the skill produced raw output, a single report comment for lightweight reviews where it didn't.
+3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria. When reviewing PR-based work, also follow [Reporting (PR workflow)](#reporting-pr-workflow): every PR-based review concludes with the full review report posted on the PR — two comments (raw skill output + full review report) when a review skill produced raw output, a single report comment for lightweight reviews where it didn't. The review tier (`/review` vs `/code-review` vs lightweight) is set by the dispatcher per [Review Tiers](#review-tiers).
 
    After accepting a review, also store a **project-scope synthesis** in the Context Store (key: `{ticket-id}-project-notes`, scope: `project`) summarizing what this implementation established at the project level:
    - Patterns introduced or reused (with file paths as evidence)

@@ -318,6 +318,13 @@ describe('getRolePromptTemplate', () => {
         '"no issues found" is a skill output, not a review report',
       );
     });
+
+    it('should describe the three review tiers (#76 follow-up)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('`/review`');
+      expect(template).toContain('`/code-review`');
+      expect(template).toContain('lightweight');
+    });
   });
 
   describe('qa template', () => {

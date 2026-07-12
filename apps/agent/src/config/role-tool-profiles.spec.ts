@@ -108,6 +108,10 @@ describe('ROLE_TOOL_PROFILES', () => {
       );
     });
 
+    it('should allow the built-in review skill for tier-2 reviews (#76)', () => {
+      expect(profile.allowedSkills).toContain('review');
+    });
+
     it('should include the code-review plugin (BUG-002)', () => {
       expect(profile.plugins).toContainEqual(CODE_REVIEW_PLUGIN);
     });
@@ -128,6 +132,10 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.allowedSkills).toEqual(
         expect.arrayContaining(['code-review', 'simplify']),
       );
+    });
+
+    it('should allow the built-in review skill for tier-2 reviews (#76)', () => {
+      expect(profile.allowedSkills).toContain('review');
     });
 
     it('should include the code-review plugin (BUG-002)', () => {
