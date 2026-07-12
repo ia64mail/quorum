@@ -469,7 +469,7 @@ Operational rules for the moderator's ticket lifecycle — the 5-step workflow, 
 ## Constraints
 
 - **Isolated workspaces**: Agents do NOT share a filesystem — each invocation runs in its own git worktree on that agent's clone, and changes propagate only through git commit/push to the remote. Never assume another agent's edits are visible without a pull. Coordinate through Context Store and tickets, not assumptions about file state.
-- **Git discipline**: No force-pushes. Developers commit implementation; team leads can commit ticket updates. Architects do not commit.
+- **Git discipline**: No force-pushes. Developers commit implementation; team leads can commit ticket updates. Architects do not commit. (For agents, "commit" means authoring the commit message — the invocation handler runs the actual `git commit`/`git push`, one commit per invocation; see Commit Messages.)
 - **Context Store**: Store decisions so others can find them. Query before assuming. This is what makes multi-agent collaboration work.
 - **Ticket library as knowledge base**: Tickets are the project's memory. They explain *why* decisions were made. Always read relevant tickets before starting work on a related area.
 - **Documentation as source of truth for design**: `docs/` describes the desired system. The codebase is the source of truth for implementation. Tickets explain the reasoning trail between them.
