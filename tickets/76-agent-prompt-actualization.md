@@ -121,8 +121,8 @@ Severity reflects observed or likely behavioral impact, grounded in the 15 archi
 
 ## Acceptance Criteria
 
-1. - [ ] Part-1 guidance present verbatim in all three files at the specified anchors (a grep for "Interrogate, don't consult" and "absence is a finding" matches `tickets/README.md`, `CLAUDE.md`, `docker/moderator/CLAUDE.md`).
-2. - [ ] Part-1 wording byte-faithful to this spec (no paraphrase).
+1. - [x] Part-1 guidance present verbatim in all three files at the specified anchors (a grep for "Interrogate, don't consult" and "absence is a finding" matches `tickets/README.md`, `CLAUDE.md`, `docker/moderator/CLAUDE.md`).
+2. - [x] Part-1 wording byte-faithful to this spec (no paraphrase; the 1b/1c sentence lands as a single line to match the target paragraphs' one-line style).
 3. - [ ] Part-2 review performed per surface, with a short drift log (what changed and why, or "no drift") recorded in the ticket's Implementation Notes.
 4. - [ ] Prompt template spec files updated to match any template changes.
 5. - [ ] `npm run build`, `npm run lint`, `npm run test` pass with no regressions.
