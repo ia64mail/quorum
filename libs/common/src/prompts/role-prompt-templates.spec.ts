@@ -32,6 +32,7 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('wait: true');
       expect(SYSTEM_PREAMBLE).toContain('wait: false');
       expect(SYSTEM_PREAMBLE).toContain('depth limit');
+      expect(SYSTEM_PREAMBLE).toContain('wait_invocation');
     });
 
     it('should describe the pull-based context model', () => {
