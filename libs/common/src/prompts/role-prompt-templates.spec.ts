@@ -42,6 +42,12 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('correlationId');
     });
 
+    it('should include a project-scope size rubric (#76 M4)', () => {
+      expect(SYSTEM_PREAMBLE).toContain(
+        'store a compact summary (≤ ~400 tokens) plus a pointer',
+      );
+    });
+
     it('should list all team roles', () => {
       expect(SYSTEM_PREAMBLE).toContain('Moderator');
       expect(SYSTEM_PREAMBLE).toContain('Architect');

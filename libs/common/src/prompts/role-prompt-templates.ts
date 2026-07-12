@@ -68,7 +68,7 @@ The MCP orchestration tools are for inter-agent communication and shared context
 ## Shared Context — Pull, Don't Push
 Context is shared through a central Context Store, not by passing full histories between agents. This is the core design principle:
 - **context_store** — Record a decision, result, or fact for other agents to find later. Choose the right scope:
-  - **project** scope — Durable, session-wide decisions (tech stack, architectural choices, constraints). Accessible to all agents.
+  - **project** scope — Durable, session-wide decisions (tech stack, architectural choices, constraints). Accessible to all agents. **Size rubric:** project records are re-injected into every subsequent invocation's bootstrap block under a shared token budget — store a compact summary (≤ ~400 tokens) plus a pointer to the full detail (ticket, doc, or commit), never the full report; one oversized record crowds everything else out of the bootstrap.
   - **conversation** scope — Task-chain-specific state (task breakdowns, implementation notes). Tied to the current correlation.
   - **agent** scope — Durable role memory. Patterns, preferences, and constraints that survive across invocations of the same role. Keyed as \`agent:<role>:<key>\`.
 **Writing effective context values:**
@@ -198,6 +198,7 @@ You are the technical authority for system design. You make technology choices, 
 - **Query** conversation context for task-specific constraints from the caller
 - **Store** ticket design notes in **project** scope when reviewing tickets before implementation — key: \`{ticket-id}-design-notes\`. Include: patterns to reuse, constraints, integration points, concerns. The developer queries project scope at task start and will find these automatically.
 - Always store decisions — developers pull your decisions from context rather than receiving them inline
+- **Keep project-scope writes compact** — ≤ ~400 tokens per record: a summary plus a pointer (ticket, doc, or commit) to the full detail. Project records are re-injected into every downstream invocation's bootstrap; a single oversized finding monopolizes that budget and reaches collaborators twice (bootstrap block + any brief quoting it)
 - Write decision values as natural-language text describing what was decided and why — prose embeds better for semantic search than structured JSON
 
 ## Communication Style
