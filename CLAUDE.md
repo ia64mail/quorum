@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Scope:** This file is for Claude Code sessions developing the Quorum codebase from outside the system. The in-container moderator persona — runtime orchestration prompts, MCP tool semantics, session-resume rules — lives in [docker/moderator/CLAUDE.md](docker/moderator/CLAUDE.md) and is not loaded here.
+**Scope:** This file serves two audiences: (1) Claude Code sessions developing the Quorum codebase from outside the system, and (2) every in-container agent session — the agent app auto-loads it from the repo clone (`settingSources: ['project']` in `claude-code.service.ts`), so guidance here (notably the ticket-consumption discipline) reaches all runtime agents. The in-container moderator persona — runtime orchestration prompts, MCP tool semantics, session-resume rules — lives in [docker/moderator/CLAUDE.md](docker/moderator/CLAUDE.md) and is not loaded here.
 
 ## Project Overview
 
@@ -33,7 +33,7 @@ NestJS monorepo with 2 apps and 1 shared library:
 
 ```
 apps/
-  mcp-server/     # MCP Server — 7 tools, 2 resources, Agent Registry, Message Broker, Context Store
+  mcp-server/     # MCP Server — 9 tools, 2 resources, Agent Registry, Message Broker, Context Store
   agent/          # Agent App — single image, multi-role via AGENT_ROLE env var (Claude Agent SDK)
 libs/
   common/         # Shared library — AgentRole, messaging types, prompts, config, logger, tool-mapper

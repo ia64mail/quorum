@@ -300,7 +300,7 @@ NestJS monorepo with 2 apps and 1 shared library:
 
 ```
 apps/
-  mcp-server/     # MCP Server — 7 tools, 2 resources, Agent Registry, Message Broker, Context Store
+  mcp-server/     # MCP Server — 9 tools, 2 resources, Agent Registry, Message Broker, Context Store
   agent/          # Agent App — single image, multi-role via AGENT_ROLE env var (Claude Agent SDK)
 libs/
   common/         # Shared library — AgentRole, messaging types, prompts, config, logger, tool-mapper
@@ -327,6 +327,7 @@ A ticket is the truth about a *change* at its authoring moment, not a live descr
 |----------|---------|
 | [docs/system-design.md](docs/system-design.md) | Overall architecture, containers, deployment |
 | [docs/agent-messaging.md](docs/agent-messaging.md) | Bidirectional MCP concepts, communication patterns |
+| [docs/mcp-connectivity.md](docs/mcp-connectivity.md) | MCP session lifecycle for agents (HTTP) and moderator (elicitation) — establish, maintain, recycle, register, reap |
 | [docs/message-broker.md](docs/message-broker.md) | Message Broker implementation details, safeguards |
 | [docs/context-management.md](docs/context-management.md) | Context sharing concepts, MCP resources/tools API |
 | [docs/context-store.md](docs/context-store.md) | Context Store implementation, InMemoryStore, file persistence |
