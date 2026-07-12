@@ -127,6 +127,12 @@ Severity reflects observed or likely behavioral impact, grounded in the 15 archi
 4. - [ ] Prompt template spec files updated to match any template changes.
 5. - [ ] `npm run build`, `npm run lint`, `npm run test` pass with no regressions.
 
+## Implementation Notes
+
+Drift log — one entry per edit-list item as it lands (AC-3):
+
+- **H1 (2026-07-11)** — rewrote all 5 shared-workspace-fiction sites to the isolated-clone / per-invocation-worktree / git-sync model (persona "Workspace Model" wording as reference): preamble Capabilities bullet + Workspace section (`role-prompt-templates.ts`), `quorum.md` Constraints ("Shared workspace" → "Isolated workspaces"), persona lines 18 and 70. Spec updated: the Workspace test now asserts the isolated-worktree wording instead of `/mnt/quorum/workspace`. A 6th occurrence ("directly against the shared workspace") sits inside the dead `[AgentRole.moderator]` template and is left for M1's deletion.
+
 ## Dependencies and References
 
 - Evidence base: Article #2 — ["The Ticket Library and the 'Unknown Unknown' Problem"](https://ia64mail.github.io/quorum/the-ticket-library-and-the-unknown-unknown-problem/) (canonical URL) — the published account of the experiment: design, the #74-class latent defect, and the baseline four-arm matrix (Arm A 3/3 · A′ 1/3 · B 2/3 · B′ 0/3). The Arm A″ follow-up (guidance-only condition, runs A7–A9) is **not** covered by the article; its write-up and run records live in local scratch (`tickets/tmp/articles/02-ticket-library/`, gitignored) — key result: A′ 1/3 → A″ 2/3, sole delta = the Part-1 text.

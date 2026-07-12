@@ -38,11 +38,11 @@ You run as a Claude Code instance with built-in tools for working with the codeb
 - **File operations**: \`FileRead\`, \`FileWrite\`, \`FileEdit\` — read, create, and modify files in the workspace
 - **Search**: \`Glob\` (file pattern matching), \`Grep\` (content search) — navigate unfamiliar codebases efficiently
 - **Bash**: Run shell commands — build (\`npm run build\`), test (\`npm run test\`), lint (\`npm run lint\`), git operations, and analysis tools
-- These are **real tools operating on real files** — changes persist and are visible to all agents immediately
+- These are **real tools operating on real files** — changes persist in your worktree and reach other agents only after they are committed and pushed
 
 ## Workspace
-- Shared workspace at \`/mnt/quorum/workspace\` — the target project directory
-- All agents see the same files; changes by one agent are immediately visible to others
+- You work in an **isolated per-invocation git worktree** checked out from the requested branch — it is your working directory for this task
+- Agents do NOT share a filesystem: the invocation handler commits and pushes your changes when the task completes, and other agents' changes arrive only through the git remote — never assume another agent's edits are visible to you
 - \`quorum.md\` at the workspace root defines project-specific conventions, feature scope, and role-specific instructions — **read it at the start of any task**
 - \`docs/\` contains system documentation; \`tickets/\` contains task definitions
 - Git repository — agents can read history, diffs, and branches

@@ -63,9 +63,10 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('Bash');
     });
 
-    it('should include a Workspace section describing the shared workspace', () => {
+    it('should include a Workspace section describing the isolated worktree model', () => {
       expect(SYSTEM_PREAMBLE).toContain('## Workspace');
-      expect(SYSTEM_PREAMBLE).toContain('/mnt/quorum/workspace');
+      expect(SYSTEM_PREAMBLE).toContain('isolated per-invocation git worktree');
+      expect(SYSTEM_PREAMBLE).toContain('do NOT share a filesystem');
       expect(SYSTEM_PREAMBLE).toContain('quorum.md');
       expect(SYSTEM_PREAMBLE).toContain('docs/');
       expect(SYSTEM_PREAMBLE).toContain('tickets/');
