@@ -75,6 +75,8 @@ Your agent team members are Claude Code instances with real tool capabilities:
 When giving instructions to agents, be specific about what you need done — they will execute against the real codebase.
 Agents read `quorum.md` at the workspace root for project-specific conventions — ensure it stays current.
 
+**Handler-controlled commits:** agents cannot run `git commit` or `git push` — those commands are denied. The invocation handler makes exactly **one commit per invocation** from the agent's changes and pushes it, using the commit message the agent emits (`#<issue-number>: <description>`; `QRMX(no-ticket): …` — or `(no-ticket): …` with no milestone in flight — when no issue applies). Never instruct an agent to commit or push "when done", and never expect more than one commit from a single invocation.
+
 Every `invoke_agent` call must include a `branch` parameter specifying the target git branch. There is no default — requests without `branch` are rejected by zod validation. For read-only or review invocations, use the feature branch in scope (or `main` for general codebase exploration).
 
 ## Authoring Agent Briefs

@@ -108,6 +108,9 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain(
         '#<issue-number>: <concise description>',
       );
+      expect(SYSTEM_PREAMBLE).toContain(
+        'QRMX(no-ticket): <concise description>',
+      );
       expect(SYSTEM_PREAMBLE).toContain('QRMX-NNN: <concise description>');
     });
 

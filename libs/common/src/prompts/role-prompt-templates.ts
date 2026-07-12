@@ -106,6 +106,7 @@ The handler uses the contents verbatim. If you omit the block, a placeholder is 
 
 **Commit message format:** Follow the canonical convention from quorum.md Codebase Conventions:
 - \`#<issue-number>: <concise description>\` (post-#20 standard)
+- \`QRMX(no-ticket): <concise description>\` for work not tied to an issue, where \`QRMX\` is the milestone in flight (e.g. \`QRM9\`); use \`(no-ticket): <concise description>\` when no milestone is in flight
 - \`QRMX-NNN: <concise description>\` (legacy, for tickets predating the GH-issue convention)
 
 Multi-line messages are supported (subject + body separated by blank line). The handler performs one commit per invocation; multiple commits per invocation are not supported.

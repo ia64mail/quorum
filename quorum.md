@@ -208,10 +208,10 @@ No labels needed — the sub-issue graph and milestone carry the signal.
 
 ### Commit Messages
 - **Canonical format (post-#20):** `#<issue-number>: <concise description>` — use the GitHub issue number as the prefix. This format was established by ticket #20 (PR-based workflow bootstrap) and applies to all subsequent work.
-- **Bug/no-ticket:** `QRMX(no-ticket): <description>` for ad-hoc fixes not tied to an issue. Prefer filing an issue first so commits are traceable.
+- **Bug/no-ticket:** `QRMX(no-ticket): <description>` for ad-hoc fixes not tied to an issue, where `QRMX` is the milestone currently in flight (e.g. `QRM9`). When no milestone is in flight, use `(no-ticket): <description>`. Prefer filing an issue first so commits are traceable.
 - **Legacy format:** `QRMX-NNN: <concise description>` is retained for historical commits and remains acceptable on tickets that predate the GH-issue-numbered convention.
 - Keep the description concise — what changed and why, not how
-- Multiple logical units → separate commits, each with the same issue-number prefix
+- Multiple logical units → separate commits, each with the same issue-number prefix. **Agent caveat:** the invocation handler makes exactly **one commit per invocation** — an agent cannot split its work into multiple commits; write one commit message covering the whole change, and reserve multi-commit splits for work spread across separate invocations
 - Examples:
   - `#20: add PR-based workflow bootstrap spec`
   - `#42: implement multi-agent conversation routing`
