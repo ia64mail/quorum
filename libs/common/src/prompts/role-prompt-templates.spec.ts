@@ -309,6 +309,15 @@ describe('getRolePromptTemplate', () => {
       expect(template).toContain('tickets/');
       expect(template).toContain('ticket files');
     });
+
+    it('should define code-review execution and PR reporting discipline (#76 follow-up)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('## Code Review');
+      expect(template).toContain('gh pr comment');
+      expect(template).toContain(
+        '"no issues found" is a skill output, not a review report',
+      );
+    });
   });
 
   describe('qa template', () => {
