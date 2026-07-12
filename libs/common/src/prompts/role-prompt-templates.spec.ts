@@ -1,13 +1,11 @@
 import { AgentRole } from '../messaging/agent-role.enum';
 import {
   getRolePromptTemplate,
-  GENERIC_PROMPT_TEMPLATE,
   SYSTEM_PREAMBLE,
 } from './role-prompt-templates';
 
 describe('getRolePromptTemplate', () => {
   const rolesWithTemplates: AgentRole[] = [
-    AgentRole.moderator,
     AgentRole.architect,
     AgentRole.teamlead,
     AgentRole.developer,
@@ -16,7 +14,7 @@ describe('getRolePromptTemplate', () => {
   ];
 
   describe('system preamble', () => {
-    it.each(Object.values(AgentRole))(
+    it.each(rolesWithTemplates)(
       'should include the system preamble for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
@@ -209,10 +207,9 @@ describe('getRolePromptTemplate', () => {
 
   describe('specific templates', () => {
     it.each(rolesWithTemplates)(
-      'should return a role-specific template for %s (not generic fallback)',
+      'should return a role-specific template for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
-        expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
         expect(template.length).toBeGreaterThan(SYSTEM_PREAMBLE.length);
       },
     );
@@ -308,9 +305,8 @@ describe('getRolePromptTemplate', () => {
   });
 
   describe('qa template', () => {
-    it('should have a dedicated template (not generic fallback)', () => {
+    it('should have a dedicated template', () => {
       const template = getRolePromptTemplate(AgentRole.qa);
-      expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
       expect(template).toContain('QA Agent');
     });
 
@@ -332,9 +328,8 @@ describe('getRolePromptTemplate', () => {
   });
 
   describe('productowner template', () => {
-    it('should have a dedicated template (not generic fallback)', () => {
+    it('should have a dedicated template', () => {
       const template = getRolePromptTemplate(AgentRole.productowner);
-      expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
       expect(template).toContain('Product Owner');
     });
 
@@ -351,68 +346,8 @@ describe('getRolePromptTemplate', () => {
     });
   });
 
-  describe('moderator template', () => {
-    it('should mention agent code-capability awareness', () => {
-      const template = getRolePromptTemplate(AgentRole.moderator);
-      expect(template).toContain('Claude Code instances');
-      expect(template).toContain('read, write, and test code');
-    });
-
-    it('should describe the clarification flow', () => {
-      const template = getRolePromptTemplate(AgentRole.moderator);
-      expect(template).toContain('clarification');
-      expect(template).toContain("do not answer on the user's behalf");
-    });
-
-    describe('failure recovery scope (#59)', () => {
-      it('should not reference agent-scope get-all by correlationId for task-checkpoint recovery', () => {
-        const template = getRolePromptTemplate(AgentRole.moderator);
-        const failureSection = template.slice(
-          template.indexOf('## Failure Recovery'),
-          template.indexOf('## Constraints'),
-        );
-        // Step 2 (agent scope query by correlationId) should be removed
-        expect(failureSection).not.toContain('Query **agent** scope with');
-        // Step 1 (conversation scope) should remain
-        expect(failureSection).toContain('Query **conversation** scope with');
-        expect(failureSection).toContain('per-task checkpoints live here');
-      });
-    });
-
-    describe('failure recovery documentation (#63)', () => {
-      it('should reference conversation scope and get-all in the Failure Recovery section', () => {
-        const template = getRolePromptTemplate(AgentRole.moderator);
-        const failureSection = template.slice(
-          template.indexOf('## Failure Recovery'),
-          template.indexOf('## Constraints'),
-        );
-        expect(failureSection).toContain('conversation');
-        expect(failureSection).toContain('get-all');
-      });
-    });
-  });
-
-  describe('generic fallback', () => {
-    it('should contain {{caller}} placeholder', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('{{caller}}');
-    });
-
-    it('should mention Claude Code built-in tools and permission restrictions', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('Claude Code built-in tools');
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('permission restrictions');
-    });
-
-    it('should reference quorum.md', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('quorum.md');
-    });
-
-    it('should be a non-empty string', () => {
-      expect(GENERIC_PROMPT_TEMPLATE.length).toBeGreaterThan(0);
-    });
-  });
-
   describe('all templates', () => {
-    it.each(Object.values(AgentRole))(
+    it.each(rolesWithTemplates)(
       'should return a non-empty string for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
@@ -420,5 +355,13 @@ describe('getRolePromptTemplate', () => {
         expect(template.length).toBeGreaterThan(0);
       },
     );
+  });
+
+  describe('non-deployable roles (#76 M1)', () => {
+    it('should throw for moderator — no template exists and none should render', () => {
+      expect(() => getRolePromptTemplate(AgentRole.moderator)).toThrow(
+        'No role prompt template for role "moderator"',
+      );
+    });
   });
 });

@@ -143,16 +143,6 @@ Claude Code memory (\`~/.claude/\`) is ephemeral on agent containers — files a
 *Value:* "When extending \`InvokeRequest\` or \`InvokeResponse\`, the contract is replicated at three sites that must change together: the Zod schema in \`libs/common/src/messaging/invoke.types.ts\`, the MCP tool inputSchema in \`apps/mcp-server/src/mcp/mcp.service.ts\` (the \`registerInvokeAgentTool\` block), and the broker forwarding logic in \`apps/mcp-server/src/messaging/message-broker.service.ts\`. Adding a field to one without the other two leads to silent schema-validation failures only visible on the agent side. Verified on #11 (branch field) and #44 (depth field)."`;
 
 /**
- * Generic fallback template for agent roles without a specific prompt template.
- * Minimal identity — the preamble provides the system understanding.
- *
- * Used via `getRolePromptTemplate()` for any agent role that does not have a
- * dedicated entry in `ROLE_PROMPT_TEMPLATES`.
- */
-export const GENERIC_PROMPT_TEMPLATE = `You received a request from the {{caller}} agent.
-You have access to Claude Code built-in tools for working with the codebase (file operations, search, bash) and MCP tools for inter-agent communication. Check your role's permission restrictions — some tools may be unavailable. Read quorum.md and query context before starting work.`;
-
-/**
  * ═══════════════════════════════════════════════════════════════════════════
  * ROLE_PROMPT_TEMPLATES — role prompts for all agent invocations.
  * ═══════════════════════════════════════════════════════════════════════════
@@ -161,12 +151,11 @@ You have access to Claude Code built-in tools for working with the codebase (fil
  * through the MCP server via `invoke_agent`. Each agent runs as a Claude
  * Agent SDK subprocess and receives its role's template as the system prompt.
  *
- * The `[AgentRole.moderator]` entry is the moderator's agent-facing role
- * definition — the full prompt for any agent-to-moderator invocation
- * (clarification, escalation, or delegation). The user-facing moderator
- * prompt lives in `CLAUDE.md` at the workspace root, loaded by CC CLI in
- * the moderator container. These are independent prompts optimized for
- * their respective contexts; no sync obligation exists between them.
+ * The moderator deliberately has NO entry (#76 M1): it is not in
+ * `DEPLOYABLE_AGENT_ROLES`, so no agent app ever renders a moderator
+ * template — agent-to-moderator calls route via elicitation to the CC CLI
+ * persona in `docker/moderator/CLAUDE.md`. An entry here would never render
+ * and would only mislead maintainers into keeping it in sync.
  *
  * Structure: each template follows Identity, Capabilities, Responsibilities,
  * Collaboration, Context Management, Communication Style, Constraints. The
@@ -177,76 +166,6 @@ You have access to Claude Code built-in tools for working with the codebase (fil
  * invocation time with the requesting agent's role.
  */
 const ROLE_PROMPT_TEMPLATES: Partial<Record<AgentRole, string>> = {
-  // Moderator agent-facing role prompt — the full prompt for any agent-to-moderator
-  // invocation (clarification, escalation, delegation). The user-facing moderator
-  // prompt lives in CLAUDE.md (loaded by CC CLI in the moderator container).
-  [AgentRole.moderator]: `You are the **Moderator**. You received a request from the {{caller}} agent.
-
-## Identity
-You are the orchestration hub — the only agent that interfaces directly with the user. All other agents work through you or through each other, but you are the starting point and the final checkpoint for every task.
-
-## Capabilities
-- You have access to MCP orchestration tools (\`invoke_agent\`, \`context_store\`, \`context_query\`, \`context_summarize\`, \`context_stats\`)
-- Agents are now Claude Code instances — they can read, write, and test code directly against the shared workspace
-- Your role is orchestration, not implementation relay — agents handle their own code work
-
-## Responsibilities
-- Decide which agent(s) to invoke for a given task
-- Manage the overall workflow: design → decomposition → implementation → review
-- Translate user intent into actionable requests for specialized agents
-- Synthesize agent responses into clear, user-facing summaries
-- You do NOT design systems (architect), decompose tasks (team lead), or implement code (developer)
-
-## Collaboration
-- **architect**: System design, technology choices, architectural review
-- **teamlead**: Task decomposition, ticket creation, integration monitoring
-- **developer**: Implementation of specific tasks
-- **qa**: Test execution and quality verification
-- **productowner**: Requirements clarification and business context
-- Invoke agents directly — avoid intermediaries when the target is clear
-- When an agent invokes you for clarification, surface the question to the user — do not answer on the user's behalf unless you are confident from prior context
-
-## Skill Dispatch — REQUIRED for Reviews
-Agents have built-in skills activated by setting the \`action\` field to a slash command. When \`action\` starts with \`/\`, the agent dispatches the skill directly — deterministic, no wasted turns, and dramatically better output.
-
-**ALWAYS set \`action\` to \`/code-review\` when dispatching a code review.** Do NOT send a free-form review prompt — the \`/code-review\` skill runs a structured multi-agent review pipeline (parallel CLAUDE.md compliance auditors, bug detector, git-blame history analyzer, confidence scoring). A natural language prompt like "Please review..." produces a shallow manual review instead.
-
-| Intent | Target | action |
-|--------|--------|--------|
-| Architectural review | architect | \`/code-review\\n\\n<focus areas>\` |
-| Integration / code review | teamlead | \`/code-review\\n\\n<focus areas>\` |
-| Self-review before PR | developer | \`/simplify\` |
-| Implementation task | developer | Natural language (no slash) |
-
-**Format:** Start with the slash command, then add a blank line followed by context that steers the review's priorities:
-\`\`\`
-/code-review
-
-QRM5-003, 2 commits (abc1234..def5678). Focus on error handling in HttpAgentConnection and test coverage for the new dispatcher.
-\`\`\`
-
-Use natural language \`action\` only for non-review tasks (implementation, data retrieval, task decomposition).
-
-## Context Management
-- **Store** session-level decisions in **project** scope (what the user requested, which approach was approved)
-- **Query** project context to check what has been decided before starting new orchestration
-- Use **conversation** scope for task-chain-specific tracking in multi-step workflows
-
-## Communication Style
-- Respond in clear, user-friendly language — you are the user-facing agent
-- Summarize what was done, what was decided, and what comes next
-- Distill other agents' responses into key points rather than forwarding raw output
-
-## Failure Recovery
-When an agent invocation fails (especially \`error_max_turns\`), the agent may have stored progress before the failure. To discover checkpoints:
-1. Query **conversation** scope with \`mode=get-all\` (not search) using the ticket's bound correlationId — per-task checkpoints live here
-Use \`get-all\` because search requires matching specific terms — the checkpoint key and content may not match your search query. If a checkpoint shows the work is complete (e.g., \`status: "complete"\` with passing verification), do not blindly retry — acknowledge the result.
-
-## Constraints
-- Do not bypass the collaboration model by doing specialized work yourself
-- Do not make architectural or implementation decisions — delegate to the appropriate agent
-- Keep context payloads small when invoking agents; let them query for details`,
-
   [AgentRole.architect]: `You are the **Architect**. You received a request from the {{caller}} agent.
 
 ## Identity
@@ -468,13 +387,20 @@ You are the business context and requirements specialist. You provide acceptance
 };
 
 /**
- * Returns the prompt template for the given role. If no specific template
- * exists, returns the generic fallback.
+ * Returns the prompt template for the given role. Every deployable agent
+ * role has a dedicated entry; requesting a role without one (moderator —
+ * see the ROLE_PROMPT_TEMPLATES note) is a deployment misconfiguration and
+ * throws.
  *
  * The SYSTEM_PREAMBLE is always prepended so every agent understands the
  * Quorum system, communication model, and shared context model.
  */
 export function getRolePromptTemplate(role: AgentRole): string {
-  const roleTemplate = ROLE_PROMPT_TEMPLATES[role] ?? GENERIC_PROMPT_TEMPLATE;
+  const roleTemplate = ROLE_PROMPT_TEMPLATES[role];
+  if (roleTemplate === undefined) {
+    throw new Error(
+      `No role prompt template for role "${role}" — only deployable agent roles have templates`,
+    );
+  }
   return `${SYSTEM_PREAMBLE}\n\n---\n\n${roleTemplate}`;
 }
