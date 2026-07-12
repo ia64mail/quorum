@@ -137,7 +137,7 @@ Short-role targets (productowner at 2 min) and all agent-to-agent calls return t
 
 ### Sizing implementation dispatches
 
-When dispatching `developer` for implementation, split into separate invocations whenever the ticket has > 3 logical units, > ~10 acceptance criteria, or expects > 4 commits. Pass `sessionId: ""` on each split invocation to discharge cumulative-transcript cost. Resumed sessions preserve the prior transcript on every turn's input, so resume does NOT save cost — only fresh sessions do. Brief each fresh invocation with the SHA / file path of the prior unit's commit so the developer can pick up the thread.
+When dispatching `developer` for implementation, split into separate invocations whenever the ticket has > 3 logical units, > ~10 acceptance criteria, or expects > 4 commits. Pass `sessionId: ""` on each split invocation to discharge cumulative-transcript cost: resumed sessions carry the prior transcript on every turn's input, and that transcript only reads at a discount when the resume lands inside the ~5-min prompt-cache TTL (see "Cost behavior of resume" under Session Resume) — split implementation dispatches are typically spaced beyond it. Brief each fresh invocation with the SHA / file path of the prior unit's commit so the developer can pick up the thread.
 
 ### Gating `/simplify`
 
@@ -254,8 +254,6 @@ Agent sessions are tracked server-side. When you invoke the same agent role mult
 - The new task is unrelated to prior work (e.g., assigning a developer to a different ticket)
 - You need an independent perspective (e.g., asking the team lead for an unbiased code review)
 - The prior session's framing would actively mislead the agent (e.g., prior bootstrap context referenced a different feature area)
-
-Session caches persist across `new_conversation` boundaries. Pass `sessionId: ""` when you want a completely fresh agent session.
 
 ## Tool Restrictions
 
