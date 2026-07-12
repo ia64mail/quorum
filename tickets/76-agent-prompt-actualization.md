@@ -8,7 +8,7 @@ A housekeeping pass over the standing text that frames every agent invocation �
 
 The prompt surfaces accreted across nine milestones while the runtime around them kept moving — bootstrap context assembly (#55/#56/#70), session resume semantics, per-invocation worktrees (#11/#65), long-poll continuation (#47), skill dispatch, timeout changes (#72). Nothing systematically re-reads these files against present behavior, so they drift the same way any documentation does — except these files are *load-bearing*: they are injected into every agent's context and measurably steer investigation behavior.
 
-The evidence that this text has measurable effect (and measurable limits) comes from the Article #2 follow-up experiment (Arm A″, three controlled runs against the #74 latent defect on a scrubbed replica, 2026-07-07):
+The evidence that this text has measurable effect (and measurable limits) comes from the follow-up experiment to Article #2, ["The Ticket Library and the 'Unknown Unknown' Problem"](https://ia64mail.github.io/quorum/the-ticket-library-and-the-unknown-unknown-problem/) (Arm A″: three controlled runs against the #74 latent defect on a scrubbed replica, 2026-07-07). The article is the canonical published reference for the experiment — its design, the defect under test, and the baseline four-arm matrix (A 3/3 · A′ 1/3 · B 2/3 · B′ 0/3); the A″ arm extends that matrix with the guidance-only condition and is documented in local scratch only (see [Dependencies and References](#dependencies-and-references)):
 
 - Adding ~20 lines of **generic** consumption-discipline guidance to `tickets/README.md` + both `CLAUDE.md` files — the only delta vs the A′ condition — moved recovery of an un-ticketed latent defect from 1/3 to 2/3.
 - The recovery mechanism was visible in the traces: one run's moderator read the new README section during its first investigation window and then briefed its architect with *"verify each yourself against current code — do not trust me"*; another run's architect entered the ticket library by topic search before reading any source file.
@@ -71,11 +71,11 @@ Review each surface against current runtime behavior; actualize or delete what h
 | Root `CLAUDE.md` | Project structure/doc table accuracy; build commands; anything describing removed or changed behavior |
 | `apps/agent/src/config/role-tool-profiles.ts` (+spec) | Tool profiles vs what roles actually need today (read-only check — changes only if trivially stale) |
 
-Constraints for the implementation pass: prompt-only changes (no runtime code); each edit traceable to a named drift or a named experiment finding; `npm run build`/`lint`/`test` green (template specs will need updating alongside template text).
+Constraints for the implementation pass: prompt-only changes (no runtime code, with one exception: the L3 bootstrap-header string in `bootstrap-context.service.ts`); each edit traceable to a named drift or a named experiment finding; `npm run build`/`lint`/`test` green (template specs will need updating alongside template text).
 
-### Part-2 findings — composite-prompt review (2026-07-07) — PENDING USER REVIEW
+### Part-2 findings — composite-prompt review (2026-07-07)
 
-The Part-2 analysis pass is done; the findings below await user approval before any edit lands. **Method:** instead of reviewing surface files one-by-one, the review reconstructed the **composite prompt each role actually receives at invocation start** — verbatim rendered prompts extracted from the A7–A9 experiment run logs (`=== Initial prompt` entries per role), confirmed byte-identical to the templates on this branch, then cross-checked against current runtime code. A role's composite is: (1) `SYSTEM_PREAMBLE` + role template (system prompt, rendered by `RolePromptService`); (2) broker-injected bootstrap block (`## Prior Decisions …`) + the moderator-authored action (user prompt); (3) ambient — the repo root `CLAUDE.md` auto-loaded into every agent session (`claude-code.service.ts:159` sets `settingSources: ['project']`) plus `quorum.md` read on instruction; (4) for the moderator, `docker/moderator/CLAUDE.md` with `@quorum.md` imported.
+**Method:** instead of reviewing surface files one-by-one, the review reconstructed the **composite prompt each role actually receives at invocation start** — verbatim rendered prompts extracted from the A7–A9 experiment run logs (`=== Initial prompt` entries per role), confirmed byte-identical to the templates on this branch, then cross-checked against current runtime code. A role's composite is: (1) `SYSTEM_PREAMBLE` + role template (system prompt, rendered by `RolePromptService`); (2) broker-injected bootstrap block (`## Prior Decisions …`) + the moderator-authored action (user prompt); (3) ambient — the repo root `CLAUDE.md` auto-loaded into every agent session (`claude-code.service.ts:159` sets `settingSources: ['project']`) plus `quorum.md` read on instruction; (4) for the moderator, `docker/moderator/CLAUDE.md` with `@quorum.md` imported.
 
 Severity reflects observed or likely behavioral impact, grounded in the 15 archived experiment runs.
 
@@ -84,9 +84,9 @@ Severity reflects observed or likely behavioral impact, grounded in the 15 archi
 - **H1 — Shared-workspace fiction in 5 places.** The pre-#65 model ("all agents see the same files; changes by one agent are immediately visible") is still asserted in: `SYSTEM_PREAMBLE` Workspace section *and* its Capabilities bullet (`role-prompt-templates.ts:41,44-45`), `quorum.md` Constraints ("Shared workspace: … immediately visible to everyone"), and the moderator persona lines 18 and 70 — where it directly contradicts the persona's own correct "Workspace Model" section (changes arrive only via `git fetch`/`git pull`). Every agent is handed a false synchronization model in the highest-authority layer.
   *Suggested change:* rewrite all five sites to the isolated-clone / per-invocation-worktree / git-sync model; the persona's "Workspace Model" section wording is the reference.
 - **H2 — No brief-authoring guidance for the moderator (experiment seed: A8 vs A9).** The persona covers *when* to dispatch and *which* skill, but nothing about *how to frame* an investigation brief. A8's brief ("verify each yourself — do not trust me", falsifiable hypotheses) recovered the defect cheaply; A9's brief pre-framed the diagnosis and sank the run. The moderator's W0 framing is the single highest-leverage prompt surface the experiment demonstrated.
-  *Suggested change:* add a short "Authoring agent briefs" section to the persona: state hypotheses, not conclusions; instruct the agent to verify claims itself against current code; point into the ticket library; never pre-exonerate code. (Goes slightly beyond drift-fixing — new guidance, evidence-backed by A7–A9 traces; explicit sign-off requested.)
+  *Suggested change:* add a short "Authoring agent briefs" section to the persona: state hypotheses, not conclusions; instruct the agent to verify claims itself against current code; point into the ticket library; never pre-exonerate code. (Goes slightly beyond drift-fixing — new guidance, evidence-backed by A7–A9 traces)
 - **H3 — Commit-discipline contradiction across three layers.** `SYSTEM_PREAMBLE` Git Discipline: handler makes **one commit per invocation**, `git commit`/`git push` denied, no-ticket prefix form absent. `quorum.md` Commit Messages: "multiple logical units → separate commits" (impossible under the handler) and `QRMX(no-ticket):` (assumes a milestone digit). Moderator persona: silent on handler-controlled commits entirely. Observed consequence (A7): the moderator briefed the developer to "push to origin when done" (impossible) and invented the prefix `QRM(no-ticket):`; other runs produced `#55-followup:` and bare-slug prefixes.
-  *Suggested change:* (a) preamble gains the no-ticket prefix form incl. a defined fallback when no milestone is in flight; (b) quorum.md's multi-commit line gets the one-commit-per-invocation caveat; (c) persona gains a short "handler-controlled commits" note so briefs stop instructing agents to push. (Item (c) is new guidance — sign-off requested.)
+  *Suggested change:* (a) preamble gains the no-ticket prefix form incl. a defined fallback when no milestone is in flight; (b) quorum.md's multi-commit line gets the one-commit-per-invocation caveat; (c) persona gains a short "handler-controlled commits" note so briefs stop instructing agents to push. (Item (c) is new guidance)
 
 #### Medium
 
@@ -99,7 +99,7 @@ Severity reflects observed or likely behavioral impact, grounded in the 15 archi
 - **M4 — No size rubric for project-scope context writes.** Agent scope has the ≤400-token rubric; project scope has none. Observed consequence (A7): the architect stored a ~2.5k-token finding which the bootstrap then re-injected verbatim into every downstream invocation — the teamlead received it twice (bootstrap block + the moderator's brief quoting it). With `BOOTSTRAP_MAX_TOKENS=5000`, one oversized record monopolizes the budget.
   *Suggested change:* add a project-scope write rubric to the preamble's Shared Context section and the architect template — store a compact summary + pointer (ticket/doc/commit), not the full report.
 - **M5 — Review-charter breadth unguided (experiment seed: A9 vs A7).** Nothing in the persona's skill-dispatch section or quorum.md's Review Protocol requires looking beyond the brief's charter; A9's "verify none of the do-NOT-touch list was modified" charter made the review verify the fence instead of the defect, while A7's review spontaneously asked "which ticket owns this interaction?" and won.
-  *Suggested change:* one line in the persona's review-dispatch guidance + quorum.md Review Protocol: every review includes at least one out-of-charter pass (e.g. "which ticket owns the interaction this change touches?"). (New guidance — sign-off requested.)
+  *Suggested change:* one line in the persona's review-dispatch guidance + quorum.md Review Protocol: every review includes at least one out-of-charter pass (e.g. "which ticket owns the interaction this change touches?"). (New guidance)
 - **M6 — Stale counts, tables, and audience notes.** "7 tools, 2 resources" in root `CLAUDE.md` and the persona — actually 9 tools (+`wait_invocation`, `new_conversation`) and 2 resources. The persona's Documentation table lacks `docs/mcp-connectivity.md`. Root `CLAUDE.md`'s scope note claims the file is "for Claude Code sessions developing the Quorum codebase from outside the system," yet `settingSources: ['project']` injects it into every in-container agent session — that channel is exactly why Part-1b reaches agents; the scope note should own that audience.
   *Suggested change:* fix counts, add the missing doc-table row, amend the scope note to name both audiences.
 
@@ -107,16 +107,16 @@ Severity reflects observed or likely behavioral impact, grounded in the 15 archi
 
 - **L1 — Pending envelopes unknown to agents.** Only the moderator persona documents `wait_invocation`/pending handling. Fine today (agent-to-agent calls return inline) but one preamble sentence would remove a dead end if that changes.
 - **L2 — `rm -rf` denial text mismatch.** Architect/QA templates promise `rm -rf /` denial while their profiles deny the broader `rm -rf`; developer/teamlead profiles deny only `rm -rf /`. Align template text with profiles (and note the profile inconsistency for a possible follow-up — profiles are read-only in this ticket's scope).
-- **L3 — Bootstrap block lacks framing text.** The injected block opens with raw records under `## Prior Decisions` with no instruction on how to treat them (hypotheses to re-verify, possibly stale — the exact A″ lesson). The header string lives in `bootstrap-context.service.ts`, so fixing it crosses this ticket's "prompt-only, no runtime code" constraint. **Decision requested:** fold in as a one-string exception, or split to a follow-up ticket.
+- **L3 — Bootstrap block lacks framing text.** The injected block opens with raw records under `## Prior Decisions` with no instruction on how to treat them (hypotheses to re-verify, possibly stale — the exact A″ lesson). The header string lives in `bootstrap-context.service.ts`, so fixing it crosses this ticket's "prompt-only, no runtime code" constraint. Should fold in as a one-string exception.
 
-#### Proposed edit list (maps findings → edits; nothing applied yet)
+#### Edit list (maps findings → edits; confirmed, not yet applied)
 
 1. H1 rewrite (5 sites) — pure drift fix.
-2. H2 "Authoring agent briefs" persona section — new guidance, sign-off requested.
+2. H2 "Authoring agent briefs" persona section — new guidance.
 3. H3 commit-discipline reconciliation (preamble + quorum.md + persona) — mixed drift fix / new guidance.
 4. M1 deletions, M2 tool-name fixes, M3 resume-cost reconciliation + dedupe, M6 counts/table/scope-note — pure drift fixes.
-5. M4 project-scope write rubric + M5 out-of-charter review line — new guidance, sign-off requested.
-6. L1/L2 one-liners — pure drift fixes. L3 — pending scope decision.
+5. M4 project-scope write rubric + M5 out-of-charter review line — new guidance.
+6. L1/L2 one-liners — pure drift fixes. L3 — one-string exception in `bootstrap-context.service.ts`.
 7. Part 1 lands verbatim as frozen, independent of all of the above.
 
 ## Acceptance Criteria
@@ -129,7 +129,7 @@ Severity reflects observed or likely behavioral impact, grounded in the 15 archi
 
 ## Dependencies and References
 
-- Evidence base: Article #2 ("The Ticket Library and the 'Unknown Unknown' Problem") + its A″ follow-up write-up; experiment record in local scratch (`tickets/tmp/articles/02-ticket-library/`, gitignored) — key result: A′ 1/3 → A″ 2/3, sole delta = the Part-1 text.
+- Evidence base: Article #2 — ["The Ticket Library and the 'Unknown Unknown' Problem"](https://ia64mail.github.io/quorum/the-ticket-library-and-the-unknown-unknown-problem/) (canonical URL) — the published account of the experiment: design, the #74-class latent defect, and the baseline four-arm matrix (Arm A 3/3 · A′ 1/3 · B 2/3 · B′ 0/3). The Arm A″ follow-up (guidance-only condition, runs A7–A9) is **not** covered by the article; its write-up and run records live in local scratch (`tickets/tmp/articles/02-ticket-library/`, gitignored) — key result: A′ 1/3 → A″ 2/3, sole delta = the Part-1 text.
 - [#74](74-getall-cap-recency-truncation.md) — the latent defect the experiment ran against (closed, superseded by #70); its Resolution amendment carries the seam this guidance exists to catch.
 - [#51](51-ticket-library-verification-discipline.md) — the original "truth about a change" consumption discipline this extends.
 - Epic: [#49 QRM9 Stabilization](49-stabilization/49-stabilization.md).
