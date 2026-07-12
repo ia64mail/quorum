@@ -2,7 +2,7 @@
 
 ## Summary
 
-A housekeeping pass over the standing text that frames every agent invocation — built-in role prompts, `quorum.md`, the moderator persona, root `CLAUDE.md`, and `tickets/README.md` — with two distinct parts. **Part 1 (precise, evidence-backed, specified verbatim below):** land the ticket-consumption discipline guidance exactly as validated by the Arm A″ controlled experiment runs, where this text — and nothing else — lifted latent-defect recovery in the library-present condition from **1/3 (Arm A′) to 2/3 (Arm A″)**. **Part 2 (broad, analysis deferred):** review the remaining prompt surfaces against current runtime behavior and actualize what has drifted; this ticket fixes the scope and the acceptance bar, not the findings.
+A housekeeping pass over the standing text that frames every agent invocation — built-in role prompts, `quorum.md`, the moderator persona, root `CLAUDE.md`, and `tickets/README.md` — with three distinct parts. **Part 1 (precise, evidence-backed, specified verbatim below):** land the ticket-consumption discipline guidance exactly as validated by the Arm A″ controlled experiment runs, where this text — and nothing else — lifted latent-defect recovery in the library-present condition from **1/3 (Arm A′) to 2/3 (Arm A″)**. **Part 2 (broad, analysis deferred):** review the remaining prompt surfaces against current runtime behavior and actualize what has drifted; this ticket fixes the scope and the acceptance bar, not the findings. **Part 3 (added during the PR #77 review pass, 2026-07-12):** review execution and reporting discipline — every review concludes with a full review report published verbatim on the PR, and reviews are dispatched at one of three cost tiers (lightweight / `/review` / `/code-review`) so review depth scales with change risk.
 
 ## Problem Statement
 
@@ -119,13 +119,32 @@ Severity reflects observed or likely behavioral impact, grounded in the 15 archi
 6. L1/L2 one-liners — pure drift fixes. L3 — one-string exception in `bootstrap-context.service.ts`.
 7. Part 1 lands verbatim as frozen, independent of all of the above.
 
+### Part 3 — review execution and reporting discipline (added during PR #77 review, 2026-07-12)
+
+Added after Parts 1–2 landed, from two user requests during the PR review pass. Evidence: the QRM9 closed-PR record (#60/#62/#64) shows the published review artifact was often near-empty — the raw `/code-review` comment reads "No issues found. Checked for bugs and CLAUDE.md compliance." (~200 chars) — because (a) the Review Protocol's Accept path prescribed no report structure, (b) the teamlead template had no code-review section at all, and (c) every review paid for the deep multi-agent pipeline regardless of change risk, encouraging exactly this thin output.
+
+**3a — Full-report reporting discipline.** The review deliverable is a full review report published **verbatim** on the PR: overview of what the change does, per-criterion verification with evidence (`file:line`), the reviewer's own findings with severity, and an explicit Accept/Decline verdict. Depth bar: the comment must show *what was verified and how* — a bare verdict or "no issues found" is a skill output, not a review report; a review is not concluded until the full report is visible on the PR. Landed in: new teamlead-template "Code Review" section; `quorum.md` Reporting item 2 upgraded from "verdict summary" to "full review report" (mirrored in the no-skill-output paragraph and the Team Lead role-config pointer).
+
+**3b — Three-tier review model.** The dispatcher picks the cheapest tier the change justifies; the tier sets the machinery, not the discipline (3a applies at every tier):
+
+| Tier | `action` | When | Cost |
+|------|----------|------|------|
+| 1 — Lightweight | Natural-language ask (no skill) | Small, mechanical, or low-risk changes with high prior confidence; follow-up re-reviews | Quick and cheap |
+| 2 — Standard | `/review` | **Default for most reviews** | Moderate — one structured pass |
+| 3 — Deep | `/code-review` | Low-confidence, questionable, or highly sensitive changes (permission guards, broker safeguards, git/commit handling, auth) | Long and expensive — the multi-agent plugin pipeline behind the #72 timeout bump |
+
+Escalate (1 → 2 → 3) rather than repeat a tier when a review leaves open questions or its findings are disputed. Canonical tier definitions: `quorum.md` → Review Protocol → "Review Tiers"; dispatch-side selection table in the persona's Skill Dispatch section (retitled "Reviews Are Tiered", replacing the "ALWAYS `/code-review`" rule); the teamlead template names the tiers.
+
+**Runtime-code exception (second, alongside L3):** `role-tool-profiles.ts` adds `'review'` to architect + teamlead `allowedSkills`. Required because the built-in review skill ships in the agent CLI binary (`claude-agent-sdk-linux-x64/claude`) but the tool-guard hook gates `Skill` calls by bare-name allowlist — without the entry, a `/review` dispatch would be denied. Static verification only (binary string probe); the first post-rebuild tier-2 dispatch is the live validation.
+
 ## Acceptance Criteria
 
 1. - [x] Part-1 guidance present verbatim in all three files at the specified anchors (a grep for "Interrogate, don't consult" and "absence is a finding" matches `tickets/README.md`, `CLAUDE.md`, `docker/moderator/CLAUDE.md`).
 2. - [x] Part-1 wording byte-faithful to this spec (no paraphrase; the 1b/1c sentence lands as a single line to match the target paragraphs' one-line style).
 3. - [x] Part-2 review performed per surface, with a short drift log (what changed and why, or "no drift") recorded in the ticket's Implementation Notes.
 4. - [x] Prompt template spec files updated to match any template changes.
-5. - [x] `npm run build`, `npm run lint`, `npm run test` pass with no regressions (48 suites, 896 tests after M1's dead-template test removals and the new assertions).
+5. - [x] `npm run build`, `npm run lint`, `npm run test` pass with no regressions (48 suites, 896 tests after M1's dead-template test removals and the new assertions; 900 after Part 3's additions).
+6. - [x] Part-3 discipline present at every surface: teamlead template "Code Review" section (full report, published verbatim via `gh pr comment`, tier names), `quorum.md` "Review Tiers" + full-review-report depth bar in Reporting, persona tier-selection table replacing the "ALWAYS `/code-review`" rule, `'review'` in architect + teamlead `allowedSkills` with spec assertions.
 
 ## Implementation Notes
 
@@ -144,7 +163,7 @@ Drift log — one entry per edit-list item as it lands (AC-3):
 - **L2 (2026-07-11)** — aligned template denial text with profiles: architect + QA templates now say `rm -rf` (their profiles deny the broad form); developer + teamlead template text already matched their profiles (`rm -rf /`). Noted for follow-up (profiles are read-only here): developer/teamlead profiles deny only the literal `rm -rf /`, which does not cover `rm -rf <path>` — profile-level inconsistency across roles stands.
 - **L3 (2026-07-11)** — bootstrap block framing text landed as the approved one-string exception. **Correction to this ticket's earlier claim:** the rendered `## Prior Decisions` header does NOT live in `bootstrap-context.service.ts` (that mcp-server service assembles the records); the string is rendered agent-side in `invocation-handler.service.ts` (`renderBootstrapContext`). The framing line ("snapshots… treat each as a hypothesis to re-verify against the present code, not as settled fact") was added there; handler spec asserts it.
 
-Post-review addenda (PR #77 review, 2026-07-12):
+Post-review addenda (PR #77 review, 2026-07-12) — the three-tier and reporting-depth entries below are Part 3's drift log (see [Part 3](#part-3--review-execution-and-reporting-discipline-added-during-pr-77-review-2026-07-12)):
 
 - **Correction to AC-1's grep formula.** AC-1 claims a grep for "Interrogate, don't consult" *and* "absence is a finding" matches all three files — but the frozen 1b/1c sentence never contained the phrase "Interrogate, don't consult" (it says "interrogate any ticket you do consult"), so that phrase matches only `tickets/README.md`. The implementation is byte-faithful to the frozen spec text (mechanically diffed); the AC's self-check sentence was imprecise at spec time. Working greps: "Interrogate, don't consult" → `tickets/README.md`; "absence is a finding" → all three files.
 - **quorum.md Git-discipline qualifier (H3 family).** The Constraints bullet "Developers commit implementation; team leads can commit ticket updates" read as agents running `git commit`, contradicting the handler-controlled-commit model H3 documented. Added a qualifier: for agents, "commit" means authoring the commit message — the handler runs the actual `git commit`/`git push`.
