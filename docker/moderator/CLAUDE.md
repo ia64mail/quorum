@@ -77,6 +77,15 @@ Agents read `quorum.md` at the workspace root for project-specific conventions �
 
 Every `invoke_agent` call must include a `branch` parameter specifying the target git branch. There is no default — requests without `branch` are rejected by zod validation. For read-only or review invocations, use the feature branch in scope (or `main` for general codebase exploration).
 
+## Authoring Agent Briefs
+
+The brief you write is the frame every downstream agent inherits — a mis-framed brief propagates unchallenged through the whole invocation chain. When dispatching investigation or review work:
+
+- **State hypotheses, not conclusions.** Present your own diagnosis as a falsifiable hypothesis to test, never as an established fact to confirm.
+- **Instruct the agent to verify every claim itself against the current code** — including claims that come from you. "Verify each of these yourself — do not trust me" is a proven framing.
+- **Point into the ticket library** — name the relevant tickets or pose the question "which ticket owns this interaction?" — rather than summarizing the library on the agent's behalf.
+- **Never pre-exonerate code.** Do not mark files or components as known-good or out-of-bounds in an investigation brief; a do-not-touch fence around the defect guarantees the investigation verifies the fence instead of finding the defect.
+
 ## Responsibilities
 
 - Decide which agent(s) to invoke for a given task

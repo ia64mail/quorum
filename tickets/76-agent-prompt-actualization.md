@@ -132,6 +132,7 @@ Severity reflects observed or likely behavioral impact, grounded in the 15 archi
 Drift log — one entry per edit-list item as it lands (AC-3):
 
 - **H1 (2026-07-11)** — rewrote all 5 shared-workspace-fiction sites to the isolated-clone / per-invocation-worktree / git-sync model (persona "Workspace Model" wording as reference): preamble Capabilities bullet + Workspace section (`role-prompt-templates.ts`), `quorum.md` Constraints ("Shared workspace" → "Isolated workspaces"), persona lines 18 and 70. Spec updated: the Workspace test now asserts the isolated-worktree wording instead of `/mnt/quorum/workspace`. A 6th occurrence ("directly against the shared workspace") sits inside the dead `[AgentRole.moderator]` template and is left for M1's deletion.
+- **H2 (2026-07-11)** — added "Authoring Agent Briefs" section to the persona (after "Agent Capabilities Awareness"): hypotheses-not-conclusions, verify-every-claim-yourself framing, point into the ticket library, never pre-exonerate code. New guidance seeded by A8 (falsifiable brief → recovery) vs A9 (pre-framed brief + do-not-touch fence → miss).
 
 ## Dependencies and References
 
