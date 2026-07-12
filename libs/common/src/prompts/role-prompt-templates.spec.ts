@@ -53,9 +53,9 @@ describe('getRolePromptTemplate', () => {
 
     it('should include a Capabilities section describing Claude Code tools', () => {
       expect(SYSTEM_PREAMBLE).toContain('## Capabilities');
-      expect(SYSTEM_PREAMBLE).toContain('FileRead');
-      expect(SYSTEM_PREAMBLE).toContain('FileWrite');
-      expect(SYSTEM_PREAMBLE).toContain('FileEdit');
+      expect(SYSTEM_PREAMBLE).toContain('`Read`');
+      expect(SYSTEM_PREAMBLE).toContain('`Write`');
+      expect(SYSTEM_PREAMBLE).toContain('`Edit`');
       expect(SYSTEM_PREAMBLE).toContain('Glob');
       expect(SYSTEM_PREAMBLE).toContain('Grep');
       expect(SYSTEM_PREAMBLE).toContain('Bash');
@@ -228,9 +228,9 @@ describe('getRolePromptTemplate', () => {
       const template = getRolePromptTemplate(AgentRole.developer);
       expect(template).toContain('Full filesystem access');
       expect(template).toContain('Full bash access');
-      expect(template).toContain('FileRead');
-      expect(template).toContain('FileWrite');
-      expect(template).toContain('FileEdit');
+      expect(template).toContain('`Read`');
+      expect(template).toContain('`Write`');
+      expect(template).toContain('`Edit`');
     });
 
     it('should describe git restrictions', () => {

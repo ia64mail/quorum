@@ -93,9 +93,9 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.disallowedTools).toContain('NotebookEdit');
     });
 
-    it('should NOT deny FileWrite or FileEdit (path-guarded instead)', () => {
-      expect(profile.disallowedTools).not.toContain('FileWrite');
-      expect(profile.disallowedTools).not.toContain('FileEdit');
+    it('should NOT deny Write or Edit (path-guarded instead)', () => {
+      expect(profile.disallowedTools).not.toContain('Write');
+      expect(profile.disallowedTools).not.toContain('Edit');
     });
 
     it('should set allowedWritePaths to docs/ and tickets/', () => {
@@ -174,9 +174,9 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.disallowedTools).toContain('Agent');
     });
 
-    it('should NOT deny FileWrite or FileEdit (path-guarded instead)', () => {
-      expect(profile.disallowedTools).not.toContain('FileWrite');
-      expect(profile.disallowedTools).not.toContain('FileEdit');
+    it('should NOT deny Write or Edit (path-guarded instead)', () => {
+      expect(profile.disallowedTools).not.toContain('Write');
+      expect(profile.disallowedTools).not.toContain('Edit');
     });
 
     it('should set allowedWritePaths to tickets/', () => {
