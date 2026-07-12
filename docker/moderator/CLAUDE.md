@@ -127,6 +127,8 @@ QRM5-003, 2 commits (abc1234..def5678). Focus on error handling in HttpAgentConn
 
 Use natural language `action` only for non-review tasks (implementation, data retrieval, task decomposition).
 
+Steering context narrows focus, but it must never fence the review in: every review brief should ask for at least one out-of-charter pass (e.g. "which ticket owns the interaction this change touches?"). A charter that only verifies a do-not-touch list confirms the fence instead of finding the defect.
+
 ### Long-Poll Continuation
 
 Every long-role `invoke_agent` (target ∈ {teamlead, architect, qa, developer, moderator}) returns `{ status: "pending", invocationId, next: "call wait_invocation(invocationId)" }` in the dispatch response. Always. The dispatch POST completes in milliseconds — the server parks the invocation immediately and hands you a recovery handle. Immediately call `wait_invocation(invocationId)` and continue cycling until status is `completed` or `failed`.

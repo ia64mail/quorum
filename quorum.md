@@ -246,6 +246,8 @@ This protocol defines how implementation work is reviewed against ticket require
 
    d. **Integration check** — Verify the changes integrate correctly with the rest of the system: module wiring, barrel exports, dependency injection, cross-module contracts. Run `npm run build` and `npm run test` to confirm nothing is broken.
 
+   e. **Out-of-charter pass** — At least one pass must look beyond what the review brief asked for. Ask: **which ticket owns the interaction this change touches?** If none does, examine that seam directly. A review charter can accidentally fence out the defect — verifying only what the brief lists confirms the fence, not the change.
+
 4. **Score and filter** — For each finding, assess confidence (is this a real issue or a false positive?):
    - **High confidence**: The issue is verified against code, will affect functionality or maintainability, and the evidence is clear. Include in review.
    - **Low confidence**: Might be a false positive, is a pre-existing issue, or is a stylistic preference not backed by project conventions. Exclude from review.
