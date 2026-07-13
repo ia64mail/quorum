@@ -1,6 +1,6 @@
 # #68: Bump Claude Agent SDK + Claude Code CLI to latest; make Opus 4.8 the default model
 
-> **Status: SPEC — code-reconciled, pre-implementation (ready to implement).** All concrete `file:line` and behavioral claims below were verified against the codebase on 2026-06-20 (session store, in-process bridge registration, role tool profiles, env allowlist, moderator cwd). Issue `#68` (sub-issue of epic #49, milestone "QRM9 — Stabilization"). Acceptance criteria are unchecked by design; the verification runbook is the post-bump validation to be driven by a human operator through the moderator container. **Actualized 2026-07-13:** target versions raised to `2.1.207` / `0.3.207` (24 patches newer than the original 2.1.183 / 0.3.183); landscape delta and moderator `permissionMode` addition documented below; `claude-code#69753` closed and removed from watchlist.
+> **Status: IMPLEMENTED, code-review Accepted (2026-07-13, PR #69).** Code-layer ACs 1–7 satisfied; AC-8 (Verification Runbook 0–13) deferred to post-rebuild operator run in the moderator container. All concrete `file:line` and behavioral claims below were verified against the codebase on 2026-06-20 (session store, in-process bridge registration, role tool profiles, env allowlist, moderator cwd). Issue `#68` (sub-issue of epic #49, milestone "QRM9 — Stabilization"). **Actualized 2026-07-13:** target versions raised to `2.1.207` / `0.3.207` (24 patches newer than the original 2.1.183 / 0.3.183); landscape delta and moderator `permissionMode` addition documented below; `claude-code#69753` closed and removed from watchlist.
 
 ## Summary
 
@@ -125,14 +125,45 @@ Opus 4.8 request-surface reminder (from the bundled `claude-api` reference): ada
 A finding in any check is a gate on merge. Checks 1, 2, 5, 6, 7, 12 are the high-signal ones.
 
 ## Acceptance Criteria
-- [ ] `package.json` pins `@anthropic-ai/claude-agent-sdk` at `^0.3.207`; `package-lock.json` regenerated; `Dockerfile:128` installs `claude-code@2.1.207`.
-- [ ] Committed default model is `claude-opus-4-8` across `anthropic.config.ts`, its spec, `docker-compose.yml`, `.env.example`; `.env.example` documents Opus 4.8.
-- [ ] `docker/moderator/settings.json` has explicit `"permissionMode": "default"` set (guards against CC CLI 2.1.200's top-level default rename to "Manual").
-- [ ] `npm run build`, `npm run lint`, `npm run test` all green on the bumped SDK; no `unstable_v2_*` usage remains.
-- [ ] Breaking changes #2–#4 addressed: bridge turn-1 availability confirmed via Check 2 (no edit expected — in-process `type:'sdk'`; `alwaysLoad` only on an observed race), `TodoWrite`→Task-tool deny reconciled in `role-tool-profiles.ts:58`, `SDK_ENV_ALLOWLIST` env-replace verified (Check 10).
-- [ ] `Dockerfile:81` musl deletion retained and confirmed still required.
-- [ ] `FileSessionStore` (QRM8 D3) still compiles against the 0.3.207 `SessionStore` interface; stale `InMemorySessionStore` comment at `claude-code.service.ts:165` corrected.
-- [ ] Verification runbook Checks 0–13 executed through the moderator; results (pass/finding) recorded in Implementation Notes. Checks 1, 2, 5, 6, 7, 12 pass.
+- [x] `package.json` pins `@anthropic-ai/claude-agent-sdk` at `^0.3.207`; `package-lock.json` regenerated; `Dockerfile:128` installs `claude-code@2.1.207`.
+- [x] Committed default model is `claude-opus-4-8` across `anthropic.config.ts`, its spec, `docker-compose.yml`, `.env.example`; `.env.example` documents Opus 4.8.
+- [x] `docker/moderator/settings.json` has explicit `"permissionMode": "default"` set (guards against CC CLI 2.1.200's top-level default rename to "Manual").
+- [x] `npm run build`, `npm run lint`, `npm run test` all green on the bumped SDK; no `unstable_v2_*` usage remains.
+- [x] Breaking changes #2–#4 addressed at the code layer: `role-tool-profiles.ts:58` now denies `TodoWrite + TaskCreate + TaskUpdate + TaskGet + TaskList + TaskStop + TaskOutput` for developer (breaking change #3); in-process `type:'sdk'` bridge remains at `mcp-tool-bridge.service.ts:58` with no `alwaysLoad` edit (breaking change #2 — Check 2 verifies at runtime); `SDK_ENV_ALLOWLIST` still applied via `buildSdkEnv` at `claude-code.service.ts:162` with the `ANTHROPIC_API_KEY` injection right after (breaking change #4 — Check 10 verifies at runtime).
+- [x] `Dockerfile:81` musl deletion retained and confirmed still required (0.3.207 lockfile entries still carry `libc: ["musl"]` fields for the `-musl` optional deps).
+- [x] `FileSessionStore` (QRM8 D3) still compiles against the 0.3.207 `SessionStore` interface (`npm run build` green); stale `InMemorySessionStore` comment tidied at `claude-code.service.ts:179–180`.
+- [ ] Verification runbook Checks 0–13 executed through the moderator; results (pass/finding) recorded in Implementation Notes. Checks 1, 2, 5, 6, 7, 12 pass. **(Deferred to post-rebuild operator run — out of scope for the code-review of PR #69.)**
+
+## Implementation Notes (2026-07-13, PR #69 review — Accepted)
+
+**Landed in commit `3c26b8c`** (`#68: bump claude-agent-sdk to 0.3.207, claude-code CLI to 2.1.207, default model to Opus 4.8`) on branch `68-bump-agent-sdk-cc-cli-opus-4-8`, targeting `49-stabilization`. One implementation commit; the two prior commits on the PR (`f657938` spec create, `f6b70ef` actualize) were ticket-only. Reviewer follow-up commit for `docs/claude-code-sdk.md` docs-drift patch landed under the same ticket.
+
+**Files modified (11 total, +119 / −109):**
+- `package.json` (line 28) — `@anthropic-ai/claude-agent-sdk ^0.2.123 → ^0.3.207`.
+- `package.json` (line 29) — **forced peer-dep discharge** `@anthropic-ai/sdk ^0.89.0 → ^0.111.0` (not in original change-set; required by `claude-agent-sdk@0.3.207`'s new `peerDependencies: { "@anthropic-ai/sdk": ">=0.93.0" }`). Only source-level consumer is `apps/agent/src/llm/anthropic.service.ts`, which calls `client.messages.create({ model, max_tokens, system, messages, tools? })` — an API surface that is stable across the 0.x SDK line. TypeScript compilation clean under the new typedefs (`MessageParam`, `Tool`, `Message` from `@anthropic-ai/sdk/resources` remain compatible). Note that `anthropic.service.spec.ts` mocks the entire `@anthropic-ai/sdk` module (lines 11–16), so a hypothetical runtime API break would NOT surface via tests — the safety here is via type-check + surface stability, not test coverage. This is acceptable because `AnthropicService` currently has **zero runtime consumers** in the codebase (exported from `LlmModule` but not injected anywhere outside its own spec).
+- `package-lock.json` (174 lines) — clean regeneration: 8 version bumps for `@anthropic-ai/claude-agent-sdk` and its per-arch optional deps, `@anthropic-ai/sdk` 0.89 → 0.111, plus new transitives declared by `sdk@0.111` (`json-schema-to-ts`, `standardwebhooks`). Also re-syncs the top-level `license` field from `UNLICENSED` to `PolyForm-Noncommercial-1.0.0` (already set in `package.json` at commit `71e4e8b`). No unrelated pins moved. 32 pre-existing vulnerabilities (1 critical, 16 high) reported by `npm audit` — pre-existing, not this ticket's scope.
+- `Dockerfile` (line 128) — `claude-code@2.1.126 → claude-code@2.1.207`. `Dockerfile:81` musl deletion (`rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl`) unchanged; still needed (0.3.207 still ships the musl optionalDependencies, verified in lockfile `libc: ["musl"]` entries).
+- `libs/common/src/config/anthropic.config.ts` (line 13) — default model `'claude-sonnet-4-5-20250929' → 'claude-opus-4-8'`.
+- `libs/common/src/config/anthropic.config.spec.ts` (line 28) — assertion flipped to `'claude-opus-4-8'`.
+- `docker-compose.yml` (line 12) — `ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929 → :-claude-opus-4-8`.
+- `.env.example` (line 17) — `ANTHROPIC_MODEL=claude-opus-4-8`.
+- `docker/moderator/settings.json` (line 3) — new top-level `"permissionMode": "default"` guarding against CC CLI 2.1.200's rename of the default to "Manual". Standard JSON (no comments) — rationale lives here in the ticket.
+- `apps/agent/src/config/role-tool-profiles.ts` (lines 58–72) — developer `disallowedTools` extended: `TodoWrite` retained + `TaskCreate/TaskUpdate/TaskGet/TaskList/TaskStop/TaskOutput` added (6-item Task family, one more than the 4 the ticket originally cited — `TaskStop`/`TaskOutput` also belong to the family and the developer's additive coverage is intent-consistent). Rationale comment inline. Only the `developer` role denies these — matches the pre-existing pattern where only developer denied `TodoWrite`.
+- `apps/agent/src/config/role-tool-profiles.spec.ts` (lines 68–86) — assertion updated: length 4 → 10, positive `expect.arrayContaining` on the six Task tool names.
+- `apps/agent/src/llm/claude-code.service.ts` (lines 179–180) — stale `QRM6-BUG-005 / InMemorySessionStore` comment corrected to describe `FileSessionStore` (QRM8 D3) persisting JSONL on `/var/agent-sessions/`.
+
+**Reviewer follow-up (same PR):**
+- `docs/claude-code-sdk.md` (line 239) — config table `ANTHROPIC_MODEL` default flipped `claude-sonnet-4-5-20250929 → claude-opus-4-8`. This was called out under "Docs to update on completion" below but missed by the developer commit; reviewer landed it as the code-review follow-up to close the drift within the same PR rather than round-tripping.
+
+**Verification results (code-side, 2026-07-13):**
+- `npm run build` — clean (exit 0).
+- `npm run lint` — clean (exit 0).
+- `npm run test` — 48 suites, 900 tests all pass.
+- `grep -r "unstable_v2" apps/agent` — no hits in source (only ticket references).
+- Cross-ticket integration audit: `.env.example` `CLAUDE_CODE_OAUTH_TOKEN=` (QRM7-013) unchanged; `SDK_ENV_ALLOWLIST` does not include `ANTHROPIC_MODEL` (agent reads it via `AgentConfigService` at process startup and passes to `options.model` at `claude-code.service.ts:149` — env-var → config → query flow intact); the `Agent` tool (sub-agent dispatch used by `Explore` / `general-purpose`) is NOT in developer's deny list, so the Task-family deny does not block sub-agent flows.
+
+**Deferred (operator-driven, post-rebuild in the moderator container):**
+Verification Runbook Checks 0–13 remain to be executed. Coherence check against the code as landed: all 14 checks remain coherent with the diff — no check's premise contradicted by the landed change. Check 3 will observe `claude-opus-4-8` in developer logs. Check 5 verifies `wait_invocation` long-poll under CC CLI 2.1.200's now-honored per-server `request_timeout_ms`. Check 10 verifies `SDK_ENV_ALLOWLIST` replace-semantics. Check 12 verifies `FileSessionStore` resume across restart. Findings from the runbook are the remaining AC-8 gate.
 
 ## Dependencies and References
 - **Builds on:** QRM6-BUG-012 (musl deletion), QRM7-013 (OAuth token), QRM7-012/014 (SSE keepalive), QRM7-017 (long-poll), QRM8 D2 (handler commits), QRM8 D3 (`FileSessionStore` on `/var/agent-sessions/`), QRM8 D5 (env allowlist).
