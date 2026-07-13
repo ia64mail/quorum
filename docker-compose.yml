@@ -119,7 +119,7 @@ services:
       CONTEXT_STORE_BACKEND: opensearch
       # OpenSearch (QRM5)
       OPENSEARCH_NODE: http://opensearch:9200
-      OPENSEARCH_INDEX: quorum-context
+      OPENSEARCH_INDEX: ${OPENSEARCH_INDEX:-quorum-context}
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: admin
       # Ollama embedding (QRM5)
