@@ -176,11 +176,8 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           ? { disallowedTools: params.disallowedTools }
           : {}),
         ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
-        // QRM6-BUG-005: sessionStore enables the SDK's store-based resume path.
-        // Without it, `resume` only passes --resume to the CLI which silently
-        // starts fresh when the session file is missing (e.g. ephemeral containers).
-        // The InMemorySessionStore is auto-populated by TranscriptMirrorBatcher
-        // on first invocation and loaded back via store.load() on resume.
+        // FileSessionStore (QRM8 D3) persists transcripts as JSONL on the
+        // /var/agent-sessions/ named volume, enabling resume across restarts.
         sessionStore: this.sessionStore,
         ...(params.resume ? { resume: params.resume } : {}),
       },

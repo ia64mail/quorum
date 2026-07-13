@@ -67,9 +67,21 @@ describe('ROLE_TOOL_PROFILES', () => {
   describe('developer', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.developer];
 
-    it('should disallow common tools plus TodoWrite (BUG-010)', () => {
-      expect(profile.disallowedTools).toHaveLength(4); // AskUserQuestion, Config, ExitPlanMode, TodoWrite
+    it('should disallow common tools plus TodoWrite and the Task-tool family (BUG-010 / #68)', () => {
+      // AskUserQuestion, Config, ExitPlanMode, TodoWrite,
+      // TaskCreate, TaskUpdate, TaskGet, TaskList, TaskStop, TaskOutput
+      expect(profile.disallowedTools).toHaveLength(10);
       expect(profile.disallowedTools).toContain('TodoWrite');
+      expect(profile.disallowedTools).toEqual(
+        expect.arrayContaining([
+          'TaskCreate',
+          'TaskUpdate',
+          'TaskGet',
+          'TaskList',
+          'TaskStop',
+          'TaskOutput',
+        ]),
+      );
     });
 
     it('should not have allowedWritePaths', () => {

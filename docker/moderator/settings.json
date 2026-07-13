@@ -1,5 +1,6 @@
 {
   "forceLoginMethod": "claudeai",
+  "permissionMode": "default",
   "permissions": {
     "deny": [
       "Write",

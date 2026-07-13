@@ -55,7 +55,21 @@ type DeployableRole = (typeof DEPLOYABLE_AGENT_ROLES)[number];
  */
 export const ROLE_TOOL_PROFILES: Record<DeployableRole, RoleToolProfile> = {
   developer: {
-    disallowedTools: [...COMMON_DISALLOWED_TOOLS, 'TodoWrite'],
+    // SDK 0.3.x replaced TodoWrite with a family of Task tools for
+    // headless/SDK sessions (#68 / agent-sdk 0.3 breaking change). Deny the
+    // Task tools to preserve the original QRM4-BUG-010 intent of keeping
+    // developers off self-todo tooling; TodoWrite stays in the list to cover
+    // any residual emissions on mixed engine versions.
+    disallowedTools: [
+      ...COMMON_DISALLOWED_TOOLS,
+      'TodoWrite',
+      'TaskCreate',
+      'TaskUpdate',
+      'TaskGet',
+      'TaskList',
+      'TaskStop',
+      'TaskOutput',
+    ],
     deniedBashCommands: [
       'git commit',
       'git push',
