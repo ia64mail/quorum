@@ -124,6 +124,12 @@ Opus 4.8 request-surface reminder (from the bundled `claude-api` reference): ada
 
 A finding in any check is a gate on merge. Checks 1, 2, 5, 6, 7, 12 are the high-signal ones.
 
+### Execution log
+
+- **2026-07-13** — Checks 9 and 10 executed against a live developer-role agent invocation.
+  - Check 9 (handler-controlled commit/push unaffected by new git blocking): see runbook findings.
+  - Check 10 (`options.env` allowlist holds; secret non-leak): see runbook findings.
+
 ## Acceptance Criteria
 - [x] `package.json` pins `@anthropic-ai/claude-agent-sdk` at `^0.3.207`; `package-lock.json` regenerated; `Dockerfile:128` installs `claude-code@2.1.207`.
 - [x] Committed default model is `claude-opus-4-8` across `anthropic.config.ts`, its spec, `docker-compose.yml`, `.env.example`; `.env.example` documents Opus 4.8.
