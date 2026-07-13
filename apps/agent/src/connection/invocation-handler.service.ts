@@ -333,7 +333,11 @@ export class InvocationHandler {
       return null;
     }
 
-    const lines: string[] = ['## Prior Decisions'];
+    const lines: string[] = [
+      '## Prior Decisions',
+      '',
+      "The records below are prior agents' stored context — snapshots from earlier invocations, possibly stale. Treat each as a hypothesis to re-verify against the present code, not as settled fact.",
+    ];
 
     if (projectEntries.length > 0) {
       lines.push('', '### Project Context');

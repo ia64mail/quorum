@@ -763,6 +763,10 @@ describe('InvocationHandler', () => {
       expect(call.prompt).toContain('## Prior Decisions');
       expect(call.prompt).toContain('### Project Context');
       expect(call.prompt).toContain('### Conversation Context');
+      // Framing line (#76 L3): records are hypotheses to re-verify, not settled fact
+      expect(call.prompt).toContain(
+        'a hypothesis to re-verify against the present code',
+      );
       // All key-value pairs must be rendered
       expect(call.prompt).toContain('- tech-stack: "NestJS with TypeScript"');
       expect(call.prompt).toContain(
