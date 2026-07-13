@@ -238,6 +238,159 @@ describe('createToolGuardHook', () => {
     });
   });
 
+  // ── #65 token-aware deny-guard (bypass forms blocked) ─────────────────
+
+  describe('#65 token-aware deny-guard', () => {
+    const hook = createToolGuardHook(
+      makeProfile({
+        deniedBashCommands: [
+          'git commit',
+          'git push',
+          'git checkout -b',
+          'git branch',
+        ],
+      }),
+      WORKSPACE,
+    );
+
+    // ── Bypass forms that the prefix-only matcher used to allow ──
+
+    it('should deny `cd <worktree> && git commit …`', () => {
+      const result = hook('Bash', {
+        command: 'cd /var/agent-worktrees/abc && git commit -m "msg"',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny `git -C <worktree> commit …`', () => {
+      const result = hook('Bash', {
+        command: 'git -C /var/agent-worktrees/abc commit -m "msg"',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny `GIT_AUTHOR_DATE=… git commit …` (env-prefix bypass)', () => {
+      const result = hook('Bash', {
+        command: "GIT_AUTHOR_DATE='2024-01-01T00:00:00Z' git commit -m 'msg'",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny multiple env-prefixes followed by git commit', () => {
+      const result = hook('Bash', {
+        command: 'FOO=1 BAR=2 git commit --amend --no-edit',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny `git -C <wt> push origin main`', () => {
+      const result = hook('Bash', {
+        command: 'git -C /var/agent-worktrees/abc push origin main',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git push');
+    });
+
+    it('should deny git commit when chained after a benign command with `;`', () => {
+      const result = hook('Bash', {
+        command: 'pwd ; git commit -m "msg"',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny git push when chained with `|` (pipe)', () => {
+      const result = hook('Bash', {
+        command: 'echo hello | git push origin main',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git push');
+    });
+
+    it('should deny git commit when backgrounded with `&`', () => {
+      const result = hook('Bash', {
+        command: 'git commit -m "msg" &',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny `cd <wt> && sudo git commit …` (cd + sudo + commit)', () => {
+      const result = hook('Bash', {
+        command: 'cd /var/agent-worktrees/abc && sudo git commit -m "msg"',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny `cd <wt> && git -C <wt> commit` (compound bypass)', () => {
+      const result = hook('Bash', {
+        command:
+          'cd /var/agent-worktrees/abc && git -C /var/agent-worktrees/abc commit -m "msg"',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    // ── Read-only git must still be allowed ──
+
+    it('should allow `git log --grep=commit` (read-only, contains denied verb as substring)', () => {
+      const result = hook('Bash', { command: 'git log --grep=commit' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow `git log --grep="push origin"` (read-only)', () => {
+      const result = hook('Bash', {
+        command: 'git log --grep="push origin"',
+      });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow `cd <wt> && git status` (cd-prefix on read-only)', () => {
+      const result = hook('Bash', {
+        command: 'cd /var/agent-worktrees/abc && git status',
+      });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow `git -C <wt> status` (git -C on read-only)', () => {
+      const result = hook('Bash', {
+        command: 'git -C /var/agent-worktrees/abc status',
+      });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow `git -C <wt> log --oneline` (git -C on read-only with flags)', () => {
+      const result = hook('Bash', {
+        command: 'git -C /var/agent-worktrees/abc log --oneline',
+      });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow `pwd && ls && git status` (compound read-only)', () => {
+      const result = hook('Bash', { command: 'pwd && ls && git status' });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should allow bare `cd <path>` (no verb after)', () => {
+      const result = hook('Bash', {
+        command: 'cd /var/agent-worktrees/abc',
+      });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('should not match `git branches` (word boundary respected)', () => {
+      // A hypothetical custom subcommand whose name extends `branch`.
+      // The previous prefix-only matcher would have wrongly denied this.
+      const result = hook('Bash', { command: 'git branches' });
+      expect(result.allowed).toBe(true);
+    });
+  });
+
   // ── Write path filtering ───────────────────────────────────────────
 
   describe('write path filtering', () => {

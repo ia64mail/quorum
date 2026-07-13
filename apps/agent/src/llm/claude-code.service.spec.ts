@@ -371,6 +371,44 @@ describe('ClaudeCodeService', () => {
     }
   });
 
+  // 5a-bis. SDK env allowlist — GH_TOKEN and GIT_CONFIG_GLOBAL must BOTH stay
+  // out of the subprocess env (#65 QRM8 D5 secret-isolation invariant).
+  // A maintainer "fixing" the agent's inability to push by allowlisting
+  // either of these would re-introduce the orphan-commit / token-leak bug
+  // this ticket hardens against. The inline comment on SDK_ENV_ALLOWLIST
+  // documents the rationale.
+  it('should exclude both GH_TOKEN and GIT_CONFIG_GLOBAL from the SDK env (#65 secret boundary)', async () => {
+    const original: Record<string, string | undefined> = {
+      GH_TOKEN: process.env.GH_TOKEN,
+      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+    };
+    process.env.GH_TOKEN = 'ghp_test_secret_token';
+    process.env.GIT_CONFIG_GLOBAL = '/tmp/test-gitconfig';
+
+    try {
+      mockQuery.mockReturnValue(
+        generateMessages([initMessage(), successResult()]),
+      );
+
+      await service.execute(baseParams);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: Record<string, string | undefined> };
+      };
+      expect(callArgs.options.env.GH_TOKEN).toBeUndefined();
+      expect(callArgs.options.env.GIT_CONFIG_GLOBAL).toBeUndefined();
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value !== undefined) {
+          process.env[key] = value;
+        } else {
+          delete process.env[key];
+        }
+      }
+    }
+  });
+
   // 5b. SDK env allowlist — NestJS-internal vars must NOT reach the subprocess (#15)
   it('should exclude NestJS-internal vars from the SDK subprocess env', async () => {
     const saved: Record<string, string | undefined> = {};

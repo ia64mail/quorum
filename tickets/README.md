@@ -31,6 +31,28 @@ A ticket *is* a source of truth — but for **how the system changed over time**
 
 This complements, rather than replaces, the post-implementation `Implementation Notes` / `Deviations from Ticket Spec` convention (see [Post-Implementation Update](#post-implementation-update)). That convention keeps an individual ticket honest about where the merged code intentionally diverged from its spec; the discipline here governs the *temporal* case — a ticket accurate for its own transaction, later superseded by subsequent ones.
 
+## When the Library Doesn't Answer — Interrogate, Don't Consult
+
+The discipline above governs how to read what a ticket says. An equally common failure is
+over-trusting what the library as a whole seems to settle. Two rules extend the snapshot
+discipline from single tickets to the library:
+
+- **Interrogate, don't consult.** A ticket tells you what was known when it was written — so
+  when you open one, ask what it does *not* cover and what has changed since. A ticket that
+  reads as a definitive answer about code you are about to change is a **hypothesis to
+  re-verify against the present code**, not a conclusion. Treating a true record as
+  reassurance is how correct tickets produce wrong changes: the record is accurate for its
+  own transaction and silent about everything nearby — including the thing you are about to
+  break.
+- **Ask which ticket owns the interaction.** This codebase was built ticket by ticket, so each
+  ticket owns one transition — but constraints and defects often live in the *seams between
+  tickets*, in interactions no single ticket owns. Before relying on the library's answer,
+  ask: **which ticket owns the interaction I am looking at?** If none does, that absence is a
+  finding, not an all-clear — an investigation belongs exactly there, and what it learns
+  belongs in a new ticket. Failing to find a definitive answer in the library never means the
+  question is settled; it means you are standing **between** tickets, and the present code is
+  your primary evidence.
+
 ## Naming Convention
 
 ### Ticket ID

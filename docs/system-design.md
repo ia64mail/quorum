@@ -347,7 +347,7 @@ quorum/
 │   │   │   ├── mcp-server.module.ts
 │   │   │   ├── config/          # Server, broker, context-store, opensearch, embedding config
 │   │   │   ├── health/          # GET /health endpoint (with dependency status)
-│   │   │   ├── mcp/             # MCP protocol (7 tools, 2 resources)
+│   │   │   ├── mcp/             # MCP protocol (9 tools, 2 resources)
 │   │   │   ├── registry/        # Agent registry, HttpAgentConnection
 │   │   │   ├── messaging/       # Message broker, role timeouts
 │   │   │   ├── context-store/   # ContextStoreModule (dynamic), InMemoryStore, opensearch/
