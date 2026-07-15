@@ -241,6 +241,8 @@ Verification Runbook Checks 0–13 remain to be executed. Coherence check agains
 - [x] `role-tool-profiles.spec.ts` updated (length + membership) and passes.
 - [ ] Runbook Check 2 re-run (single developer dispatch) shows **no** `Permission deny rule "Config" matches no known tool` line in the developer subprocess stderr in `logs/developer-*.jsonl`. `TodoWrite` retained as belt-and-braces per Round-1; a `matches no known tool` warning on it (if the engine no longer emits it) is acceptable and out of scope for this ticket.
 
+**Post-review correction (PR #69 teamlead review, 2026-07-15):** The refreshed block comment above `COMMON_DISALLOWED_TOOLS` in `role-tool-profiles.ts` initially labeled the warning under "#68 Round-2 Finding 5" — the warning is Finding 2, not Finding 5 (Finding 5 is the unrelated uid-guard). The comment label has been corrected to "Finding 2".
+
 ### Finding 5 — Bare `docker compose up --force-recreate <agent>` crashes on uid/gid tmpfs mismatch
 
 **Verified problem (against current code, 2026-07-15):**
@@ -280,6 +282,8 @@ Rationale for fail-loud over self-heal: the tmpfs is mounted before the entrypoi
 - [ ] `./scripts/start.sh` boots cleanly (regression check — the guard must be a no-op when uids agree).
 - [ ] Manual test: with `HOST_UID` and `HOST_GID` unset in the shell and the image built with a non-1000 uid, `docker compose up -d --force-recreate developer` produces the FATAL diagnostic in the container log and exits 78, rather than `mkdir: Permission denied`.
 - [x] `docs/system-design.md` updated with the correct single-service recreate incantation and a cross-reference to this ticket.
+
+**Post-review correction (PR #69 teamlead review, 2026-07-15):** The first Round-2 pass placed the uid-guard **after** the `GH_TOKEN` block in `docker/agent/entrypoint.sh` (~line 36 in the initial fix), so the earlier tmpfs writes (`gh auth login` at line 15, `mkdir -p /home/quorum/.config/git` at line 21) died under `set -euo pipefail` with the exact opaque `Permission denied` the guard was written to eliminate — the guard never fired on the real failure path. The guard has been moved to the TOP of the agent entrypoint (before line 9's `if [ -n "${GH_TOKEN:-}" ]` block) and now stats `/home/quorum/.config` — the first tmpfs path the agent entrypoint touches — instead of `/home/quorum/.claude`. This matches the ordering the moderator entrypoint already had. AC-1 above is unchanged in intent ("before the first tmpfs write"); the implementation now honors it.
 
 ### Finding 6 — Graceful resume-fallback is dead code on 0.3.207
 

@@ -44,7 +44,7 @@ export const CODE_REVIEW_PLUGIN = {
  *
  * Runtime config mutation is NOT gated here — CC CLI 2.1.207 has no SDK
  * tool named `Config` (the `/config` slash command is not an SDK tool and
- * cannot be listed in `disallowedTools`). See #68 Round-2 Finding 5 for
+ * cannot be listed in `disallowedTools`). See #68 Round-2 Finding 2 for
  * the "matches no known tool" warning that resulted from carrying the
  * stale rule. The actual guard chain against runtime config mutation is
  * defense-in-depth outside this list:
