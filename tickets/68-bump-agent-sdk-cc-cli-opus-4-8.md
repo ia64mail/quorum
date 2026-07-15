@@ -332,3 +332,38 @@ Rationale for fail-loud over self-heal: the tmpfs is mounted before the entrypoi
 4. **Class-of-bug precedent.** The two earlier drift instances (`sessionId` QRM5-001 → QRM6-BUG-012; `bootstrapContext` QRM6-BUG-014) were also point-fixed. A dedicated ticket for the class is the cleaner way to break the pattern and can incorporate lessons from all three drifts (including whether the bridge should surface any injected field at all in its LLM-visible schema).
 
 The follow-up ticket should specifically: (a) audit which `InvokeRequest` fields today are LLM-visible on the bridge tool vs. injected server-side vs. broker-only; (b) pick a source-of-truth schema (likely `invokeRequestSchema` in `libs/common/src/messaging/invoke.types.ts`, with `pick`/`omit` derivations for the two projections); (c) refactor the bridge tool and the server validator to derive from that single source; (d) prune redundant test scaffolding.
+
+## Round-2 Implementation Notes (2026-07-15, PR #69 re-review — Accepted)
+
+**Landed across two commits** on branch `68-bump-agent-sdk-cc-cli-opus-4-8`:
+
+- **`c010014`** — Round-2 follow-up fixes for Findings 1, 2, 5, 6 (+275 / −24 across 11 files).
+- **`dfc49c4`** — Round-2 blocker fix from the teamlead re-review: relocate the agent uid-guard above the tmpfs writes and correct a comment-label typo (+27 / −17 across 3 files).
+
+**Files touched (both commits combined):**
+- `apps/agent/src/connection/mcp-tool-bridge.service.ts` (Finding 1) — proxy call at lines 91-97 now injects `branch: request.branch` alongside the pre-existing `callerRole` / `correlationId` / `depth+1` plumbing; JSDoc at line 17 lists `branch` as an auto-injected field. Bridge-injected, invisible to the LLM by design (matches the sessionId/bootstrapContext precedent).
+- `apps/agent/src/connection/mcp-tool-bridge.service.spec.ts` — new regression test at lines 205-213 asserts the bridge forwards `branch` from the closed-over `InvokeRequest` even when the LLM omits it from `args` (mirror of the sessionId drift lesson from QRM6-BUG-012).
+- `apps/agent/src/config/role-tool-profiles.ts` (Finding 2) — `'Config'` removed from `COMMON_DISALLOWED_TOOLS`; block comment refresh at lines 42-57 documents the actual guard chain against runtime config mutation (rootfs read_only + tmpfs ephemerality; write-guard hook for roles that declare `allowedWritePaths`; moderator `permissionMode: 'default'` for user-triggered `/config` on the CLI). Blocker-fix commit `dfc49c4` corrected the cross-reference "#68 Round-2 Finding 5" → "#68 Round-2 Finding 2" on line 47.
+- `apps/agent/src/config/role-tool-profiles.spec.ts` — length assertions updated (developer 10→9, teamlead/qa 3→2); positive membership assertion on `'Config'` flipped to `not.toContain('Config')` with an inline explanation.
+- `apps/agent/src/llm/claude-code.service.ts` (Finding 6) — `execute()` at lines 92-128 now inspects the returned `ExecuteResult` and routes resume-failure envelopes (`!result.success && params.resume && !controller.signal.aborted && isResumeFailure(...)`) through the same retry-fresh path as thrown errors. New private static helper `isResumeFailure(error, terminalReason)` at lines 178-187 prefers the SDK's structured signal `terminal_reason === 'turn_setup_failed'` with a substring fallback on `No conversation found with session ID`. `processMessage`'s failure-envelope branch (lines 336-341) surfaces `terminal_reason` via conditional spread.
+- `apps/agent/src/llm/claude-code.types.ts` — `ExecuteResult` failure branch gains optional `terminalReason?: string`.
+- `apps/agent/src/llm/claude-code.service.spec.ts` — two new tests at lines 889-984: (a) bogus resume-id → retry-fresh (asserts `mockQuery` called twice, second call has no `resume` and has `systemPrompt` restored, `success: true`); (b) bogus resume-id under aborted controller → no retry (asserts `mockQuery` called once, original envelope failure propagates).
+- `docker/agent/entrypoint.sh` (Finding 5) — uid-mismatch guard at lines 4-24 (initial `c010014` placed it after the GH_TOKEN block; blocker-fix `dfc49c4` relocated to the top). Now stats `/home/quorum/.config` (the first tmpfs path touched by subsequent commands) instead of `/home/quorum/.claude`, exits 78 (EX_CONFIG) with a fix hint. Ordering matches the moderator entrypoint.
+- `docker/moderator/entrypoint.sh` — parallel uid-mismatch guard at lines 4-19 already correctly placed at the top; stats `/home/quorum/.config` (the moderator's `~/.claude` is a named volume, so the first tmpfs write is `.config`).
+- `docs/system-design.md` — new "Single-service recreate" note at lines 384-393 documents the correct `export HOST_UID=$(id -u) HOST_GID=$(id -g)` incantation for post-boot maintenance and cross-references this ticket for the failure mode.
+
+**Verification results (code-side, 2026-07-15):**
+- `npm run build` — clean (exit 0).
+- `npm run lint` — clean (exit 0).
+- `npm run test` — 48 suites, 903 tests all pass (was 900 pre-Round-2; +3 new — one for Finding 1 branch forwarding, two for Finding 6 envelope-path).
+
+**Re-review findings summary (PR #69):**
+- The first teamlead `/review` pass (raw output + full report on PR #69) accepted Findings 1, 2, 6 as clean and declined on one blocker in Finding 5: the agent-entrypoint uid-guard was placed after the GH_TOKEN block's tmpfs writes, so it was unreachable in the documented normal path (GH_TOKEN set). Two non-blocking observations were also recorded: `turn_setup_failed` being SDK-wide rather than resume-specific (bounded to one wasted API call per invocation), and the envelope-path retry-block duplicating the catch-path retry (cleanup only). One trivial comment-label typo (Finding 5 → Finding 2) was flagged for bundling with the blocker fix.
+- The blocker-fix commit `dfc49c4` addressed the guard relocation and the comment typo. The retry-block duplication was intentionally deferred (correctness-over-DRY on a review-verified control flow); the `turn_setup_failed` narrowness was deferred as future hardening. Both are recorded here as follow-on hygiene items with no ticket blocking.
+
+**Deferred (unchanged from Round-1):**
+- Verification Runbook Checks 0–13 re-execution by the operator through the moderator. The Round-2 per-finding ACs cite specific re-runs (Check 4 for Finding 1, Check 2 for Finding 2, partial Check 12 for Finding 6, and the manual mismatch scenario for Finding 5). AC-8 in the Round-1 Acceptance Criteria block remains the gate for full ticket closure.
+- Finding 3 (`FileSessionStore` bypassed on 0.3.207 — cross-recreate durability) tracked under issue #78, architect-scoped design work.
+- Finding 4 (commit-message extraction regex hitting prose mentions of the marker) tracked under issue #79.
+- Retry-block duplication in `claude-code.service.ts:111` vs `139-153` — cleanup only, defer to a future hygiene pass. Two extraction options recorded on PR #69 for whoever picks it up.
+- `turn_setup_failed` predicate width in `isResumeFailure` — recorded as a future hardening item; requiring both structured signal AND substring narrows the false-positive envelope but bounded impact today is one wasted API call and one misleading log line per invocation.
