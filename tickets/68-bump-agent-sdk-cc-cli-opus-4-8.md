@@ -219,9 +219,9 @@ Verification Runbook Checks 0–13 remain to be executed. Coherence check agains
 **Shared-schema question:** the runbook's proposal to derive the bridge tool schema and the server validator from one shared definition is legitimate but **deferred to a separate follow-up ticket** — rationale in the closing section of this Round-2 block.
 
 **Acceptance criteria:**
-- [ ] `mcp-tool-bridge.service.ts` injects `branch: request.branch` into the `invoke_agent` proxy call, mirroring the existing `callerRole` / `correlationId` / `depth` injection pattern.
-- [ ] JSDoc at the top of `McpToolBridgeService` names `branch` as one of the auto-injected plumbing fields alongside the other three.
-- [ ] Regression test asserts the bridged `invoke_agent` handler forwards `branch` from the closed-over `InvokeRequest` to the proxy even when the caller (LLM) does not supply it.
+- [x] `mcp-tool-bridge.service.ts` injects `branch: request.branch` into the `invoke_agent` proxy call, mirroring the existing `callerRole` / `correlationId` / `depth` injection pattern.
+- [x] JSDoc at the top of `McpToolBridgeService` names `branch` as one of the auto-injected plumbing fields alongside the other three.
+- [x] Regression test asserts the bridged `invoke_agent` handler forwards `branch` from the closed-over `InvokeRequest` to the proxy even when the caller (LLM) does not supply it.
 - [ ] Runbook Check 4 re-run through the moderator (developer→teamlead code-review chain) completes without `-32602 branch: expected string, received undefined`.
 
 ### Finding 2 — Stale `Config` deny rule warns on every agent spawn
@@ -237,8 +237,8 @@ Verification Runbook Checks 0–13 remain to be executed. Coherence check agains
 3. Update `apps/agent/src/config/role-tool-profiles.spec.ts`: adjust the `COMMON_DISALLOWED_TOOLS` length assertion (3 → 2) and remove any positive membership assertion on `'Config'`. Preserve `AskUserQuestion` / `ExitPlanMode` assertions.
 
 **Acceptance criteria:**
-- [ ] `role-tool-profiles.ts` no longer lists `'Config'` in `COMMON_DISALLOWED_TOOLS`; comment refresh documents the alternative guard chain.
-- [ ] `role-tool-profiles.spec.ts` updated (length + membership) and passes.
+- [x] `role-tool-profiles.ts` no longer lists `'Config'` in `COMMON_DISALLOWED_TOOLS`; comment refresh documents the alternative guard chain.
+- [x] `role-tool-profiles.spec.ts` updated (length + membership) and passes.
 - [ ] Runbook Check 2 re-run (single developer dispatch) shows **no** `Permission deny rule "Config" matches no known tool` line in the developer subprocess stderr in `logs/developer-*.jsonl`. `TodoWrite` retained as belt-and-braces per Round-1; a `matches no known tool` warning on it (if the engine no longer emits it) is acceptable and out of scope for this ticket.
 
 ### Finding 5 — Bare `docker compose up --force-recreate <agent>` crashes on uid/gid tmpfs mismatch
@@ -276,10 +276,10 @@ Rationale for fail-loud over self-heal: the tmpfs is mounted before the entrypoi
 4. Do **not** add `HOST_UID`/`HOST_GID` defaults to `.env.example` — that would encourage operators to hardcode `1000:1000` in `.env` and mask the mismatch behind stale values.
 
 **Acceptance criteria:**
-- [ ] `docker/agent/entrypoint.sh` (and `docker/moderator/entrypoint.sh` with the equivalent guard) emits a fail-loud diagnostic with the fix hint before the first tmpfs write, exiting non-zero on uid mismatch instead of dying on the opaque `mkdir … Permission denied`.
+- [x] `docker/agent/entrypoint.sh` (and `docker/moderator/entrypoint.sh` with the equivalent guard) emits a fail-loud diagnostic with the fix hint before the first tmpfs write, exiting non-zero on uid mismatch instead of dying on the opaque `mkdir … Permission denied`.
 - [ ] `./scripts/start.sh` boots cleanly (regression check — the guard must be a no-op when uids agree).
 - [ ] Manual test: with `HOST_UID` and `HOST_GID` unset in the shell and the image built with a non-1000 uid, `docker compose up -d --force-recreate developer` produces the FATAL diagnostic in the container log and exits 78, rather than `mkdir: Permission denied`.
-- [ ] `docs/system-design.md` updated with the correct single-service recreate incantation and a cross-reference to this ticket.
+- [x] `docs/system-design.md` updated with the correct single-service recreate incantation and a cross-reference to this ticket.
 
 ### Finding 6 — Graceful resume-fallback is dead code on 0.3.207
 
@@ -308,14 +308,14 @@ Rationale for fail-loud over self-heal: the tmpfs is mounted before the entrypoi
   - **(b) Resume-failure-under-abort.** Same first-call setup, but `controller.signal.aborted === true` at the point the retry decision is made. Assert: no second `query()` call; `execute()` returns the initial failure; no retry-fresh log line.
 
 **Acceptance criteria:**
-- [ ] `execute()` in `claude-code.service.ts` routes a resume-failure error-result through the same retry-fresh path as a resume-failure thrown-error.
-- [ ] Detection uses the SDK's structured signal (`terminal_reason` or equivalent) where available, falling back to the observed error-string match; the detection strategy is documented inline with a link to this ticket's Round-2 section.
-- [ ] Two new tests in `claude-code.service.spec.ts`: (a) bogus resume-id → invocation completes fresh with `success: true`; (b) bogus resume-id **and** shutdown-in-progress → no retry, abort-guard behavior preserved.
+- [x] `execute()` in `claude-code.service.ts` routes a resume-failure error-result through the same retry-fresh path as a resume-failure thrown-error.
+- [x] Detection uses the SDK's structured signal (`terminal_reason` or equivalent) where available, falling back to the observed error-string match; the detection strategy is documented inline with a link to this ticket's Round-2 section.
+- [x] Two new tests in `claude-code.service.spec.ts`: (a) bogus resume-id → invocation completes fresh with `success: true`; (b) bogus resume-id **and** shutdown-in-progress → no retry, abort-guard behavior preserved.
 - [ ] Partial Runbook Check 12 re-run: with a stale `sessionId` from a pre-recreate container, the fresh developer produces a `Session resume failed … — retrying fresh` log line and completes the invocation with `success: true`, `turns > 0`. (Full Check 12 durability recovery depends on Finding 3 landing under #78 — this AC covers the retry-fresh behavior only.)
 
 ### Round-2 aggregate acceptance
-- [ ] Findings 1, 2, 5, 6 all satisfy their per-finding AC blocks above.
-- [ ] `npm run build`, `npm run lint`, `npm run test` all green on the amended branch.
+- [x] Findings 1, 2, 5, 6 all satisfy their per-finding AC blocks above (code + tests + docs; operator-driven re-runs remain).
+- [x] `npm run build`, `npm run lint`, `npm run test` all green on the amended branch.
 - [ ] PR description on the next revision references PR #69's end-of-run summary and lists these four findings resolved (leaving Findings 3, 4 tagged as tracked under #78, #79).
 - [ ] Round-1 AC-8 re-executed by the operator; Findings 1, 2, 6 verified via the specific check re-runs called out per finding; Finding 5 verified via the manual mismatch scenario. AC-8 then flipped to `[x]` in the Round-1 Acceptance Criteria block.
 

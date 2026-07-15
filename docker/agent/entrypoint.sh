@@ -26,6 +26,22 @@ else
   echo "WARN: GH_TOKEN not set — git operations requiring auth will fail" >&2
 fi
 
+# Detect uid/gid mismatch between the baked user and the tmpfs mounts.
+# docker-compose.yml defaults tmpfs uid/gid to ${HOST_UID:-1000}; the image
+# bakes the quorum user from the build-time HOST_UID. A bare `docker compose
+# up --force-recreate` without HOST_UID/HOST_GID exported produces a mount
+# owned by uid 1000 while the user has a different uid → mkdir fails with
+# an opaque "Permission denied" (#68 Round-2 Finding 5). Fail loud with a
+# fix hint before the first write into the tmpfs.
+_home_owner_uid=$(stat -c '%u' /home/quorum/.claude)
+_me_uid=$(id -u)
+if [ "${_home_owner_uid}" != "${_me_uid}" ]; then
+  echo "FATAL: /home/quorum/.claude is owned by uid=${_home_owner_uid} but this entrypoint runs as uid=${_me_uid} (user $(id -un))." >&2
+  echo "This usually means \`docker compose up --force-recreate\` was run without HOST_UID/HOST_GID exported." >&2
+  echo "Fix: export HOST_UID=\$(id -u) HOST_GID=\$(id -g) before docker compose, or use ./scripts/start.sh." >&2
+  exit 78  # EX_CONFIG
+fi
+
 # Preserve the original CMD behavior (create debug dir on tmpfs)
 mkdir -p /home/quorum/.claude/debug
 

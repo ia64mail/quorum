@@ -35,8 +35,12 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.disallowedTools).toContain('AskUserQuestion');
     });
 
-    it('should include Config in disallowedTools', () => {
-      expect(profile.disallowedTools).toContain('Config');
+    // #68 Round-2 Finding 2: `Config` is not a tool on CC CLI 2.1.207.
+    // The stale rule triggered a "matches no known tool" warning on every
+    // agent spawn; the runtime-config-mutation guard is defense-in-depth
+    // via read_only rootfs, write-guard hook, and moderator permissionMode.
+    it('should not list Config in disallowedTools (not a CC CLI 2.1.207 tool)', () => {
+      expect(profile.disallowedTools).not.toContain('Config');
     });
 
     it('should include ExitPlanMode in disallowedTools', () => {
@@ -68,9 +72,9 @@ describe('ROLE_TOOL_PROFILES', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.developer];
 
     it('should disallow common tools plus TodoWrite and the Task-tool family (BUG-010 / #68)', () => {
-      // AskUserQuestion, Config, ExitPlanMode, TodoWrite,
+      // AskUserQuestion, ExitPlanMode, TodoWrite,
       // TaskCreate, TaskUpdate, TaskGet, TaskList, TaskStop, TaskOutput
-      expect(profile.disallowedTools).toHaveLength(10);
+      expect(profile.disallowedTools).toHaveLength(9);
       expect(profile.disallowedTools).toContain('TodoWrite');
       expect(profile.disallowedTools).toEqual(
         expect.arrayContaining([
@@ -133,7 +137,7 @@ describe('ROLE_TOOL_PROFILES', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.teamlead];
 
     it('should have no additional disallowed tools beyond common', () => {
-      expect(profile.disallowedTools).toHaveLength(3);
+      expect(profile.disallowedTools).toHaveLength(2);
     });
 
     it('should not have allowedWritePaths', () => {
@@ -159,7 +163,7 @@ describe('ROLE_TOOL_PROFILES', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.qa];
 
     it('should have no additional disallowed tools beyond common', () => {
-      expect(profile.disallowedTools).toHaveLength(3);
+      expect(profile.disallowedTools).toHaveLength(2);
     });
 
     it('should not have allowedWritePaths', () => {
