@@ -177,3 +177,154 @@ Verification Runbook Checks 0–13 remain to be executed. Coherence check agains
 - **Verified latest (npm registry, 2026-07-13):** `@anthropic-ai/claude-code@2.1.207`, `@anthropic-ai/claude-agent-sdk@0.3.207`.
 - **Model:** `claude-opus-4-8` — Opus 4.8 GA in CC CLI 2.1.154; thinking-block fix later in the 2.1.x line (original CHANGELOG line 419 reference — line numbers have shifted with subsequent releases). Claude Sonnet 5 GA'd in 2.1.197 with native 1M context, but Opus 4.8 remains the committed default per this ticket's long-horizon-agentic rationale (reaffirmed 2026-07-13).
 - **Docs to update on completion:** `docs/claude-code-sdk.md` (config table `ANTHROPIC_MODEL` default; SDK-workaround section if bridge/env behavior changes).
+
+## Round-2 Follow-up Fixes (Post-Runbook Verification)
+
+> **Status: SPEC (2026-07-15).** The operator-driven Verification Runbook (Checks 0–13) ran on 2026-07-13 and surfaced six findings, aggregated in the PR #69 [end-of-run summary](https://github.com/ia64mail/quorum/pull/69#issuecomment-4962071702). This section specifies the **four in-scope** fixes for the second implementation round on this ticket. Every claim below was re-verified against the current tree on branch `68-bump-agent-sdk-cc-cli-opus-4-8` on 2026-07-15.
+>
+> Two findings are tracked separately and are **out of scope**:
+> - **Finding 3** — `FileSessionStore` bypassed on 0.3.207; SDK writes transcripts to `~/.claude/projects/` (agent tmpfs) instead → cross-recreate resume durability broken. Tracked as issue **#78**, moving to an architect-led design ticket because the fix forks into two distinct paths (mount `~/.claude/projects` on a named volume vs. fix the `sessionStore` wiring so 0.3.207 actually writes `/var/agent-sessions/`).
+> - **Finding 4** — commit-message extraction regex trips on prose mentions of the `<commit-message>` marker before the real block, producing garbage commit subjects. Tracked as issue **#79**.
+>
+> Round-1 AC-8 (Runbook Checks 0–13) remains the gate that closes this ticket. Findings 1, 2, 5, 6 below are the residual code changes needed before AC-8 can be re-run and marked complete; the runbook itself is not being re-specified.
+
+### Finding 1 — `invoke_agent` bridge omits required `branch` field (agent→agent dispatch broken)
+
+**Verified problem (against current code, 2026-07-15):**
+- **Server validator** at `apps/mcp-server/src/mcp/mcp.service.ts:330–335` declares `branch: z.string().min(1)` as a **mandatory** input to the `invoke_agent` MCP tool.
+- **Agent-side bridge tool** at `apps/agent/src/connection/mcp-tool-bridge.service.ts:70–94` (private `invokeAgentTool(request: InvokeRequest)`) declares the LLM-visible schema as `{target, action, context, wait}` (lines 74–84) and injects `callerRole`, `correlationId`, `depth + 1` into the proxy call (lines 86–91) — but **not** `branch`.
+- The **current agent's `InvokeRequest`** (closed over by `invokeAgentTool`) does carry `branch`, confirmed by:
+  - `libs/common/src/messaging/invoke.types.ts:121–128` — `branch: z.string().min(1, …).describe('Target git branch for this invocation worktree')`;
+  - `apps/agent/src/connection/invocation-handler.service.ts:211` — `mcpServers: this.bridge.createBridge(request)` passes the full request into the bridge;
+  - `apps/mcp-server/src/messaging/message-broker.service.ts:85, 97, 170` — the broker's own branch-lock uses `request.branch` on the same object;
+  - test fixture `apps/agent/src/connection/mcp-tool-bridge.service.spec.ts:66–74` — `baseRequest: InvokeRequest = { …, branch: 'feature-branch' }`.
+- **No threading required.** The value is already in scope inside `invokeAgentTool(request)`; it just needs to be added to the proxy invocation alongside the other three plumbing fields.
+- **Not a #69 regression.** The `branch` requirement landed with #11 (worktree isolation, 2026-05-24). The bridge was last touched 2026-03-07. Check 4 is the first agent→agent dispatch exercised since #11 landed.
+
+**Implementation:**
+1. In `apps/agent/src/connection/mcp-tool-bridge.service.ts:85–92`, extend the proxy call to inject `branch: request.branch`:
+   ```ts
+   return this.proxy('invoke_agent', {
+     ...args,
+     callerRole: this.config.agent.role,
+     correlationId: request.correlationId,
+     depth: request.depth + 1,
+     branch: request.branch,
+   });
+   ```
+2. Do **not** add `branch` to the LLM-visible tool schema. Same pattern as `callerRole` / `correlationId` / `depth` today: bridge-injected, invisible to the model. Nested dispatch inheriting the caller's branch is the intended semantics (the broker's per-branch lock at `message-broker.service.ts:85–97` already assumes it), and matches how the moderator's initial dispatch supplies `branch`.
+3. Extend the JSDoc at `mcp-tool-bridge.service.ts:15–22` (`whose tool handlers capture the active InvokeRequest's plumbing parameters ('correlationId', 'callerRole', 'depth')`) to name `branch` in that list.
+4. Add a regression test in `mcp-tool-bridge.service.spec.ts` under the existing `invoke_agent` group: call the bridged handler with `{target, action, wait}` only, and assert `mockCallTool` was invoked with `branch: 'feature-branch'` (the fixture value). Complements the existing injection assertions for `callerRole` / `correlationId` / `depth`.
+
+**Shared-schema question:** the runbook's proposal to derive the bridge tool schema and the server validator from one shared definition is legitimate but **deferred to a separate follow-up ticket** — rationale in the closing section of this Round-2 block.
+
+**Acceptance criteria:**
+- [ ] `mcp-tool-bridge.service.ts` injects `branch: request.branch` into the `invoke_agent` proxy call, mirroring the existing `callerRole` / `correlationId` / `depth` injection pattern.
+- [ ] JSDoc at the top of `McpToolBridgeService` names `branch` as one of the auto-injected plumbing fields alongside the other three.
+- [ ] Regression test asserts the bridged `invoke_agent` handler forwards `branch` from the closed-over `InvokeRequest` to the proxy even when the caller (LLM) does not supply it.
+- [ ] Runbook Check 4 re-run through the moderator (developer→teamlead code-review chain) completes without `-32602 branch: expected string, received undefined`.
+
+### Finding 2 — Stale `Config` deny rule warns on every agent spawn
+
+**Verified problem (against current code, 2026-07-15):**
+- `apps/agent/src/config/role-tool-profiles.ts:45` in `COMMON_DISALLOWED_TOOLS` has `'Config'` with the comment `No runtime config changes inside containers`.
+- CC CLI 2.1.207 emits `Permission deny rule "Config" matches no known tool — check for typos.` on every agent subprocess spawn (observed in `logs/developer-*.jsonl` at 2026-07-13T16:09:15Z).
+- No tool named `Config` appears in the SDK 0.3.207 bundle's tool registry. The string `"Config"` in `node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs` is only an XDG-path segment (`data/config/cache/log`), not a tool name. No CC CLI 2.1.x tool succeeded `Config`; the original intent (guard runtime config mutation) maps to the `/config` **slash command**, which is not an SDK tool and is therefore not gated by `disallowedTools` at all.
+
+**Implementation:**
+1. Remove `'Config'` from `COMMON_DISALLOWED_TOOLS` in `apps/agent/src/config/role-tool-profiles.ts:43–47`. The remaining `AskUserQuestion` and `ExitPlanMode` entries stay.
+2. Update the inline comment on the removed line's context (or the block comment above `COMMON_DISALLOWED_TOOLS`) to note the actual guard chain for runtime config mutation: (a) `read_only: true` rootfs + tmpfs `~/.config`/`~/.claude` (see `docker-compose.yml` `x-base-security` / `x-agent-security`); (b) role write-guard hook restricting `Write`/`Edit`/`NotebookEdit` to `allowedWritePaths`; (c) moderator `permissionMode: 'default'` prompting the user before `/config` runs. No SDK-tool deny is needed.
+3. Update `apps/agent/src/config/role-tool-profiles.spec.ts`: adjust the `COMMON_DISALLOWED_TOOLS` length assertion (3 → 2) and remove any positive membership assertion on `'Config'`. Preserve `AskUserQuestion` / `ExitPlanMode` assertions.
+
+**Acceptance criteria:**
+- [ ] `role-tool-profiles.ts` no longer lists `'Config'` in `COMMON_DISALLOWED_TOOLS`; comment refresh documents the alternative guard chain.
+- [ ] `role-tool-profiles.spec.ts` updated (length + membership) and passes.
+- [ ] Runbook Check 2 re-run (single developer dispatch) shows **no** `Permission deny rule "Config" matches no known tool` line in the developer subprocess stderr in `logs/developer-*.jsonl`. `TodoWrite` retained as belt-and-braces per Round-1; a `matches no known tool` warning on it (if the engine no longer emits it) is acceptable and out of scope for this ticket.
+
+### Finding 5 — Bare `docker compose up --force-recreate <agent>` crashes on uid/gid tmpfs mismatch
+
+**Verified problem (against current code, 2026-07-15):**
+- `docker-compose.yml:27–40` (`x-base-security` and `x-agent-security` `tmpfs:` blocks) mounts every writable in-container directory with `uid=${HOST_UID:-1000},gid=${HOST_GID:-1000}` — falling back to `1000:1000` when the env vars are unset.
+- The image bakes the `quorum` user with the **build-time** `HOST_UID`/`HOST_GID` values (`Dockerfile:23–24` default target, `Dockerfile:66–67` agent target, `Dockerfile:124–125` moderator target — `groupmod -g ${HOST_GID}` + `usermod -u ${HOST_UID}`). On a developer host whose real uid ≠ 1000, the baked user's uid diverges from the tmpfs's default uid.
+- `docker/agent/entrypoint.sh:30` (`mkdir -p /home/quorum/.claude/debug`) is the first write into `/home/quorum/.claude`. With mismatched uids, the tmpfs is owned by uid 1000 and the `quorum` user (real host uid) cannot write to it → `mkdir: cannot create directory '/home/quorum/.claude/debug': Permission denied` → entrypoint exits 1 immediately.
+- `scripts/start.sh:4–5` avoids this by exporting `HOST_UID="$(id -u)"` and `HOST_GID="$(id -g)"` before `docker compose build && docker compose up`, so the image build and the compose tmpfs mount agree on the same uid/gid. A bare `docker compose up --force-recreate <agent>` bypasses `start.sh` and inherits the caller shell's env, which normally does not export those.
+- The moderator container is less exposed (its `~/.claude` is the `moderator-claude-data` named volume, not tmpfs, per `docker-compose.yml:178`) but the same environment gap could trip it via `x-base-security`'s `/tmp`/`~/.config`/`~/.local`/`~/.cache` tmpfs mounts.
+
+**Implementation direction — fail-loud in the entrypoint.**
+
+Rationale for fail-loud over self-heal: the tmpfs is mounted before the entrypoint runs and is owned by the mismatched uid. A non-root `quorum` user cannot `chown` it back — self-heal would require either (a) running the entrypoint as root and dropping privileges (contradicts the `USER quorum` line and the `no-new-privileges:true` posture), or (b) mounting the tmpfs with different options — which is defined at the compose layer, outside the entrypoint's reach. A clear, actionable diagnostic is the highest-leverage change.
+
+1. Insert an early sanity check in `docker/agent/entrypoint.sh` **before** the current `mkdir -p /home/quorum/.claude/debug` (currently line 30), e.g.:
+   ```bash
+   # Detect uid/gid mismatch between the baked user and the tmpfs mounts.
+   # docker-compose.yml defaults tmpfs uid/gid to ${HOST_UID:-1000}; the image
+   # bakes the quorum user from the build-time HOST_UID. A bare `docker compose
+   # up --force-recreate` without HOST_UID/HOST_GID exported produces a mount
+   # owned by uid 1000 while the user has a different uid → mkdir fails with
+   # an opaque "Permission denied" (#68 Round-2 Finding 5).
+   _home_owner_uid=$(stat -c '%u' /home/quorum/.claude)
+   _me_uid=$(id -u)
+   if [ "${_home_owner_uid}" != "${_me_uid}" ]; then
+     echo "FATAL: /home/quorum/.claude is owned by uid=${_home_owner_uid} but this entrypoint runs as uid=${_me_uid} (user $(id -un))." >&2
+     echo "This usually means \`docker compose up --force-recreate\` was run without HOST_UID/HOST_GID exported." >&2
+     echo "Fix: export HOST_UID=\$(id -u) HOST_GID=\$(id -g) before docker compose, or use ./scripts/start.sh." >&2
+     exit 78  # EX_CONFIG
+   fi
+   ```
+2. Mirror the same guard in `docker/moderator/entrypoint.sh` (against `/home/quorum/.config` or `/tmp`, whichever is the moderator entrypoint's first tmpfs write). The moderator's `~/.claude` is a named volume so is not the trip site, but its `x-base-security` tmpfs mounts share the same defaults and the check costs nothing.
+3. Update `docs/system-design.md` — line 341 already lists `scripts/start.sh` as the launch script and line 382 mentions the `HOST_UID`/`HOST_GID` build args. Add a short "Single-service recreate" note near line 382 documenting the correct incantation for post-boot maintenance: `export HOST_UID=$(id -u) HOST_GID=$(id -g); docker compose up -d --force-recreate <service>`. Cross-reference this ticket for the failure mode.
+4. Do **not** add `HOST_UID`/`HOST_GID` defaults to `.env.example` — that would encourage operators to hardcode `1000:1000` in `.env` and mask the mismatch behind stale values.
+
+**Acceptance criteria:**
+- [ ] `docker/agent/entrypoint.sh` (and `docker/moderator/entrypoint.sh` with the equivalent guard) emits a fail-loud diagnostic with the fix hint before the first tmpfs write, exiting non-zero on uid mismatch instead of dying on the opaque `mkdir … Permission denied`.
+- [ ] `./scripts/start.sh` boots cleanly (regression check — the guard must be a no-op when uids agree).
+- [ ] Manual test: with `HOST_UID` and `HOST_GID` unset in the shell and the image built with a non-1000 uid, `docker compose up -d --force-recreate developer` produces the FATAL diagnostic in the container log and exits 78, rather than `mkdir: Permission denied`.
+- [ ] `docs/system-design.md` updated with the correct single-service recreate incantation and a cross-reference to this ticket.
+
+### Finding 6 — Graceful resume-fallback is dead code on 0.3.207
+
+**Verified problem (against current code, 2026-07-15):**
+- `apps/agent/src/llm/claude-code.service.ts:86–129` has an outer `try { return await this.executeQuery(…) } catch (err) { … retry with resume: undefined … }` fallback (retry-fresh block at lines 99–119) that only fires on **thrown** errors from `executeQuery`.
+- On 0.3.207, a missing-resume-session arrives as an **error result envelope**, not a thrown error:
+  1. The SDK subprocess emits `No conversation found with session ID: <id>` to stderr, surfaced through the `stderr:` handler at line 169–171 as a `warn` log.
+  2. The generator delivers a `result` message whose subtype is not `'success'`. `processMessage` (case `'result'`, lines 258–278) converts this into `{ success: false, error, durationMs, totalCostUsd, numTurns }` and the `for await` loop at line 186–193 returns it from `executeQuery` **normally**.
+  3. The outer `try` at line 92–93 receives this failure result and returns it directly to `execute()`'s caller — the `catch` at line 94 never runs and the retry-fresh path at lines 99–119 is dead code.
+- Observed 2026-07-13T19:38:55–57Z after `docker compose up --force-recreate developer` and a follow-up dispatch that resumed a pre-recreate `sessionId`: hard failure with `turns=0 cost=$0.0000 duration=0ms` and no `Session resume failed (sessionId=…) — retrying fresh` log line (the log at line 101–103 never emitted).
+- **Attribution:** the retry-fresh path was written against 0.2.x semantics where the missing-session condition apparently threw. The 0.2 → 0.3 SDK change to deliver it as an error result envelope is not documented in the CHANGELOG but reproduces reliably. Treat as a #69-caused regression per the PR summary index.
+
+**Implementation:**
+1. Route resume-failure **result envelopes** through the same retry-fresh path as thrown errors. Two shapes considered; **shape (b) is recommended** for minimum blast radius:
+   - **(a)** Have `executeQuery` throw a typed `ResumeFailedError` when it encounters a resume-failure result envelope, so the existing `catch` at line 94 handles both cases uniformly. Pros: single exit path. Cons: converts a return path into a throw path.
+   - **(b) Recommended** — in `execute()`, after `return await this.executeQuery(...)`, inspect the returned `ExecuteResult`; if `params.resume` was set, `success === false`, `!controller.signal.aborted`, and the error signals a missing-session condition (detection rule below), route through the same retry-fresh sub-block (build `{ ...params, resume: undefined }`, call `executeQuery` again, on retry-throw fall through to the current final return). `executeQuery` stays untouched.
+2. **Detection rule.** Prefer the SDK's structured signal over string matching where available:
+   - Check whether the 0.3.207 result envelope carries a `terminal_reason` (added between 0.3.203 and 0.3.207 per the ticket's Landscape update — `api_error`, `turn_setup_failed`, etc.) that categorizes missing-session failures. Verify against `node_modules/@anthropic-ai/claude-agent-sdk/agentSdkTypes.d.ts` during implementation.
+   - `processMessage` at lines 258–278 currently discards everything except the joined `errors` string, `subtype`, and duration/cost/turns. Either (i) surface `terminal_reason` (and the raw error text if the SDK provides one) in `ExecuteResult` and match on it, or (ii) fall back to matching the current `error` field's substring `No conversation found with session ID`. Prefer (i); document the fallback as intentional if (ii) is used.
+3. Preserve log symmetry — keep the existing `Session resume failed (sessionId=…): <msg> — retrying fresh` log line at line 101–103's format so operators grep the same signal in both paths.
+4. Preserve the existing abort-guard (`!controller.signal.aborted`) so shutdown-in-progress does not trigger a spurious retry (already true in the current catch path at line 99).
+
+**Regression test (required):**
+- Add tests in `apps/agent/src/llm/claude-code.service.spec.ts` that mock the SDK `query()` generator:
+  - **(a) Resume-failure-then-fresh-success.** First call yields a `result` message with `subtype !== 'success'` and an error signal matching the detection rule (bogus resume-id path). Second call (retry) yields a normal success `result`. Assert: `execute()` returns `{ success: true, … }`; `query()` was called twice; the second call's `options.resume` was `undefined`; the retry-fresh log line was emitted.
+  - **(b) Resume-failure-under-abort.** Same first-call setup, but `controller.signal.aborted === true` at the point the retry decision is made. Assert: no second `query()` call; `execute()` returns the initial failure; no retry-fresh log line.
+
+**Acceptance criteria:**
+- [ ] `execute()` in `claude-code.service.ts` routes a resume-failure error-result through the same retry-fresh path as a resume-failure thrown-error.
+- [ ] Detection uses the SDK's structured signal (`terminal_reason` or equivalent) where available, falling back to the observed error-string match; the detection strategy is documented inline with a link to this ticket's Round-2 section.
+- [ ] Two new tests in `claude-code.service.spec.ts`: (a) bogus resume-id → invocation completes fresh with `success: true`; (b) bogus resume-id **and** shutdown-in-progress → no retry, abort-guard behavior preserved.
+- [ ] Partial Runbook Check 12 re-run: with a stale `sessionId` from a pre-recreate container, the fresh developer produces a `Session resume failed … — retrying fresh` log line and completes the invocation with `success: true`, `turns > 0`. (Full Check 12 durability recovery depends on Finding 3 landing under #78 — this AC covers the retry-fresh behavior only.)
+
+### Round-2 aggregate acceptance
+- [ ] Findings 1, 2, 5, 6 all satisfy their per-finding AC blocks above.
+- [ ] `npm run build`, `npm run lint`, `npm run test` all green on the amended branch.
+- [ ] PR description on the next revision references PR #69's end-of-run summary and lists these four findings resolved (leaving Findings 3, 4 tagged as tracked under #78, #79).
+- [ ] Round-1 AC-8 re-executed by the operator; Findings 1, 2, 6 verified via the specific check re-runs called out per finding; Finding 5 verified via the manual mismatch scenario. AC-8 then flipped to `[x]` in the Round-1 Acceptance Criteria block.
+
+### Recommendation on the shared-schema refactor (Finding 1 supplement)
+
+**Do NOT bundle the shared-schema refactor into this ticket.** File it as a separate follow-up ticket sized for architect design review. Reasons:
+1. **Point-fix urgency.** Finding 1 blocks the developer→teamlead code-review chain today. The one-line `branch: request.branch` injection unblocks it immediately; a schema refactor does not.
+2. **Bounded existing scope.** This ticket is an SDK/CLI bump. Round-1 already touched 11 files across dep pins, config, tests, and prompts. A cross-cutting schema consolidation across `mcp-tool-bridge.service.ts` + `mcp.service.ts` + `invoke.types.ts` (plus every test using either) grows blast radius and reviewer surface disproportionate to Round-2's remit.
+3. **Design work needed.** The three sites (bridge tool schema, server tool schema, broker `InvokeRequest`) legitimately differ — some fields are LLM-visible, others auto-injected server-side, still others broker-only. A proper consolidation must pick which fields belong on which projection, where the source-of-truth lives, and how future additions propagate. That is architect-scoped design work, not a hygiene fix.
+4. **Class-of-bug precedent.** The two earlier drift instances (`sessionId` QRM5-001 → QRM6-BUG-012; `bootstrapContext` QRM6-BUG-014) were also point-fixed. A dedicated ticket for the class is the cleaner way to break the pattern and can incorporate lessons from all three drifts (including whether the bridge should surface any injected field at all in its LLM-visible schema).
+
+The follow-up ticket should specifically: (a) audit which `InvokeRequest` fields today are LLM-visible on the bridge tool vs. injected server-side vs. broker-only; (b) pick a source-of-truth schema (likely `invokeRequestSchema` in `libs/common/src/messaging/invoke.types.ts`, with `pick`/`omit` derivations for the two projections); (c) refactor the bridge tool and the server validator to derive from that single source; (d) prune redundant test scaffolding.
