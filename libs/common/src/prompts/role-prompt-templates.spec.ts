@@ -325,6 +325,15 @@ describe('getRolePromptTemplate', () => {
       expect(template).toContain('`/code-review`');
       expect(template).toContain('lightweight');
     });
+
+    it('should bind review tiers to their skills (#81)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('The tier binds the skill');
+      expect(template).toContain('never substitute one for the other');
+      expect(template).toContain('never self-escalate');
+      expect(template).toContain('run the dispatched skill **first**');
+      expect(template).toContain('never retroactively');
+    });
   });
 
   describe('qa template', () => {
