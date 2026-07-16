@@ -305,7 +305,7 @@ Escalation (1 → 2 → 3) is the **dispatcher's** decision, made when authoring
 
 When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github-workflow)), the Team Lead **must** publish the verdict as a PR comment. This applies to **every** PR-based review at **every** tier — skill dispatches (`/review`, `/code-review`), lightweight reviews, and follow-up re-reviews alike. A review is not concluded until its outcome is visible on the PR. The exact format depends on whether a review-skill run produced raw output:
 
-**With review-skill output** (`/review` or `/code-review`) — report as **two separate PR comments**, in order:
+**With review-skill output** (`/review` or `/code-review` — the dispatched tier's skill actually ran as part of conducting the review) — report as **two separate PR comments**, in order:
 
 1. **Raw skill output** — post the verbatim output of the review skill as the first PR comment, unmodified. No paraphrasing, no editorial cuts. This gives the user direct visibility into what the structured review pipeline produced before any agent judgment is applied.
 
@@ -314,6 +314,8 @@ When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github
 The split exists so the user can audit *what the skill said* vs *what the Team Lead decided* independently. Both comments are required when the review used a review skill.
 
 **Without review-skill output** (lightweight tier-1 review, follow-up re-review, or any review where no raw skill output exists) — post a single PR comment containing the full review report to the same depth bar as above. No raw-output comment is needed because none exists; the report comment alone satisfies the rule.
+
+**Never run a review skill retroactively** — after the review is already done — solely to manufacture a raw-output comment. The two-comment format follows from how the review was conducted; it never dictates running extra machinery. If no skill ran, single-comment reporting applies.
 
 ---
 
