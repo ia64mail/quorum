@@ -1231,5 +1231,57 @@ describe('ClaudeCodeService', () => {
         expect(result.result).not.toContain('commit-message');
       }
     });
+
+    it('should extract the real block, not a prose mention of the marker that precedes it (#79)', async () => {
+      // Mirrors commit baec262: the agent references the literal marker in
+      // prose (as documented in the Git Discipline role-prompt section)
+      // before emitting the real block. The prose opening tag has no
+      // matching close, so it must not be paired into the extraction.
+      const resultText =
+        "I'll wire this up per the Git Discipline section, which documents " +
+        'the `<commit-message>` block for handler extraction.\n\n' +
+        'Implementation complete.\n\n' +
+        '<commit-message>\n#79: fix commit-message marker extraction\n</commit-message>';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe(
+          '#79: fix commit-message marker extraction',
+        );
+        // The prose sentence mentioning the marker is preserved verbatim —
+        // only the real, well-formed block is stripped.
+        expect(result.result).toContain(
+          "I'll wire this up per the Git Discipline section",
+        );
+        expect(result.result).toContain('Implementation complete.');
+        expect(result.result).not.toContain('#79: fix commit-message');
+      }
+    });
+
+    it('should return undefined for an empty <commit-message></commit-message> block', async () => {
+      const resultText = 'Done.\n\n<commit-message></commit-message>';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBeUndefined();
+        expect(result.result).toBe('Done.');
+      }
+    });
   });
 });

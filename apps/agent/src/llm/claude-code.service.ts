@@ -366,24 +366,55 @@ export class ClaudeCodeService implements OnApplicationShutdown {
    * Extract a `<commit-message>...</commit-message>` block from SDK result text.
    * If multiple blocks are present, the last one wins (agent may revise mid-stream).
    * The block is stripped from the returned text so consumers don't see metadata.
+   *
+   * Pairing is done by index rather than a single spanning regex: the last
+   * `</commit-message>` is paired with the last `<commit-message>` that
+   * precedes it. This selects the correct "real" block even when the agent
+   * mentions the literal marker in prose beforehand (the prose opening tag
+   * has no closing tag of its own, so it is never selected as part of a
+   * pair) — see #79. Stripping then removes every well-formed pair,
+   * scanning right-to-left, so multiple genuine blocks (e.g. a
+   * mid-conversation revision) are still fully removed, while a dangling,
+   * unmatched opening tag (the prose mention) is left in place untouched.
    */
   private static extractCommitMessage(text: string): {
     message?: string;
     stripped: string;
   } {
-    const matches = [
-      ...text.matchAll(/<commit-message>([\s\S]*?)<\/commit-message>/gi),
-    ];
+    const OPEN_TAG = '<commit-message>';
+    const CLOSE_TAG = '</commit-message>';
 
-    if (matches.length === 0) {
+    const findLastPair = (
+      haystack: string,
+    ): { openIndex: number; closeIndex: number } | null => {
+      const lower = haystack.toLowerCase();
+      const closeIndex = lower.lastIndexOf(CLOSE_TAG);
+      if (closeIndex === -1) return null;
+      const openIndex = lower.lastIndexOf(OPEN_TAG, closeIndex - 1);
+      if (openIndex === -1) return null;
+      return { openIndex, closeIndex };
+    };
+
+    const lastPair = findLastPair(text);
+    if (!lastPair) {
       return { stripped: text };
     }
 
-    const message = matches[matches.length - 1][1].trim();
-    const stripped = text
-      .replace(/<commit-message>[\s\S]*?<\/commit-message>/gi, '')
-      .replace(/\n{3,}/g, '\n\n')
+    const message = text
+      .slice(lastPair.openIndex + OPEN_TAG.length, lastPair.closeIndex)
       .trim();
+
+    let working = text;
+    for (
+      let pair = findLastPair(working);
+      pair !== null;
+      pair = findLastPair(working)
+    ) {
+      working =
+        working.slice(0, pair.openIndex) +
+        working.slice(pair.closeIndex + CLOSE_TAG.length);
+    }
+    const stripped = working.replace(/\n{3,}/g, '\n\n').trim();
 
     return { message: message || undefined, stripped };
   }
