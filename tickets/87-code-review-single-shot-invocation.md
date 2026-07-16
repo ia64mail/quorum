@@ -291,37 +291,41 @@ outcome.
 
 ## Acceptance Criteria
 
-- [ ] **AC-1 — Root cause documented in-code.** The PreToolUse rewrite and guard C each carry a
+- [x] **AC-1 — Root cause documented in-code.** The PreToolUse rewrite and guard C each carry a
       comment at the call site citing SDK 0.3.207 `Agent` background-by-default and the single-shot
       constraint (reference #87).
-- [ ] **AC-2 — Foreground-forcing lever applied (deterministic rewrite preferred; A optional).**
+- [x] **AC-2 — Foreground-forcing lever applied (deterministic rewrite preferred; A optional).**
       The **PreToolUse hook** in `sdk-hooks.factory.ts` rewrites `tool_name === 'Agent'` calls to
       `run_in_background: false` via `hookSpecificOutput.updatedInput`, scoped strictly to `Agent`
       (Bash untouched). A (`CLAUDE_CODE_DISABLE_AGENT_VIEW=1` in the SDK `env`) is **optional
-      belt-and-suspenders only**, not the primary lever.
-- [ ] **AC-3 — `ScheduleWakeup` denied.** `'ScheduleWakeup'` added to `COMMON_DISALLOWED_TOOLS`
+      belt-and-suspenders only**, not the primary lever. **A was NOT enabled** — see Implementation
+      Notes for rationale.
+- [x] **AC-3 — `ScheduleWakeup` denied.** `'ScheduleWakeup'` added to `COMMON_DISALLOWED_TOOLS`
       (`role-tool-profiles.ts:58`), alongside `AskUserQuestion` / `ExitPlanMode`, with a comment on
       the single-shot rationale.
-- [ ] **AC-C — Completion guard (corrected).** In `processMessage`'s success branch
+- [x] **AC-C — Completion guard (corrected).** In `processMessage`'s success branch
       (`claude-code.service.ts:332-345`), a result frame with `terminal_reason ===
       'background_requested'` returns a **non-success** envelope (with `terminalReason` set) and a
       WARN log, instead of a clean `success: true`. The guard keys off `terminal_reason` **only** —
       it does **not** reference `background_tasks` / `scheduled_tasks`, which are **not** on the
       result frame (`SDKResultSuccess`, `sdk.d.ts:4167-4194`; those fields are `StopHookInput`-only).
-- [ ] **AC-4 — Unit coverage.** New tests in `claude-code.service.spec.ts`: (a) a
+- [x] **AC-4 — Unit coverage.** New tests in `claude-code.service.spec.ts`: (a) a
       `terminal_reason === 'background_requested'` success-subtype frame maps to a **non-success**
       envelope carrying `terminalReason`; (b) an ordinary `success` frame with no `terminal_reason`
       (or `terminal_reason === 'completed'`) still maps to `success: true` (no regression); (c) the
-      guard's error string does **not** trip `isResumeFailure` (no spurious retry). Optionally, a
-      test asserting the PreToolUse hook returns `updatedInput` with `run_in_background: false` for an
-      `Agent` input and `PASS_THROUGH` for a `Bash` input.
-- [ ] **AC-5 — Baseline preserved.** `npm run build`, `npm run lint`, and `npm run test` all green;
-      test count ≥ 907 (current baseline: 48 suites / 907 tests) plus the new tests.
+      guard's error string does **not** trip `isResumeFailure` (no spurious retry). Plus the optional
+      PreToolUse-hook tests in `sdk-hooks.factory.spec.ts` (Agent rewritten, explicit
+      `run_in_background: false` left untouched, Bash untouched) and a `ScheduleWakeup`-denied test
+      per role in `role-tool-profiles.spec.ts`.
+- [x] **AC-5 — Baseline preserved.** `npm run build`, `npm run lint`, and `npm run test` all green;
+      test count 918 (baseline 907 + 11 new: 3 guard-C + 3 PreToolUse-hook + 5 per-role
+      `ScheduleWakeup`-denied, one per `DEPLOYABLE_AGENT_ROLES` entry).
 - [ ] **AC-6 — Verification Runbook documented and executed post-rebuild.** Because true end-to-end
       verification requires a container rebuild + live agent run (containers are **not** currently
       rebuilt), the ticket carries the runbook below, including the build-time re-confirmation of
       tool/param names and `updatedInput` honored-ness; the operator/moderator runs it after deploy
-      and records the outcome in the Implementation Notes.
+      and records the outcome in the Implementation Notes. **Build-time re-confirmation (names only)
+      is done — see Implementation Notes; the end-to-end steps remain deferred to post-rebuild.**
 
 ### Verification Runbook (post-rebuild — deferred, operator/moderator-driven)
 
@@ -357,6 +361,88 @@ outcome.
    (synchronous Deep-tier path), and note the runtime limitation in `docs/`.
 9. Record all of the above (commands, log excerpts, PR comment link) in this ticket's Implementation
    Notes and in a project-scope synthesis.
+
+## Implementation Notes (2nd commit — the fix)
+
+**Files modified:**
+- `apps/agent/src/llm/sdk-hooks.factory.ts` — extended the existing `PreToolUse` hook in
+  `createObservabilityHooks`: after the debug log, `tool_name === 'Agent'` calls with
+  `run_in_background !== false` get rewritten via `hookSpecificOutput.updatedInput = {...tool_input,
+  run_in_background: false}`; everything else (including `Bash`, which shares the param name) falls
+  through to `PASS_THROUGH` unchanged. No `permissionDecision` set — permission flow untouched.
+- `apps/agent/src/config/role-tool-profiles.ts` — added `'ScheduleWakeup'` to
+  `COMMON_DISALLOWED_TOOLS` with an inline comment; applies to all five roles automatically since
+  every profile spreads the common list.
+- `apps/agent/src/llm/claude-code.service.ts` — Guard C inserted at the top of the
+  `subtype === 'success'` branch in `processMessage`: `terminal_reason === 'background_requested'`
+  now returns `{ success: false, error, durationMs, totalCostUsd, numTurns, terminalReason }` and
+  logs a WARN, before falling through to the normal commit-message-extraction success path.
+- `apps/agent/src/llm/sdk-hooks.factory.spec.ts` — 3 new tests: Agent → `updatedInput` rewrite;
+  explicit `run_in_background: false` on `Agent` left untouched (no redundant rewrite); `Bash` with
+  `run_in_background: true` left untouched (scope guard).
+- `apps/agent/src/llm/claude-code.service.spec.ts` — 3 new tests: Guard C fires and returns
+  non-success + WARN; no regression for absent/`'completed'` `terminal_reason`; Guard C on a
+  *resumed* session does not spuriously retry-fresh (confirms `isResumeFailure` — which only matches
+  `'turn_setup_failed'` — is untouched).
+- `apps/agent/src/config/role-tool-profiles.spec.ts` — added a per-role `ScheduleWakeup`-denied
+  assertion inside the existing common-tools loop (covers all 5 deployable roles), and bumped the
+  two hardcoded `disallowedTools` length expectations (`developer`: 9→10, `teamlead`/`qa`: 2→3) that
+  the new common entry shifted.
+
+**Deviations from spec:** none. Implemented exactly the three-part stack (PreToolUse rewrite,
+`ScheduleWakeup` deny, Guard C) as adjudicated in `87-design-notes`; did not enable optional A
+(`CLAUDE_CODE_DISABLE_AGENT_VIEW`) or the `canUseTool` hedge — see rationale below. Did not add the
+optional `CronCreate`/`CronList`/`CronDelete` denies (ticket marks these non-blocking,
+implementer's-discretion; skipped to keep the change minimal and strictly scoped to AC-3).
+
+**Build-time verification performed (containers not rebuilt, so this is static + historical-log
+evidence, not a live post-fix run):**
+
+1. **Tool/param names — confirmed twice over, independently of the ticket's own claims.**
+   `node_modules/@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts` statically confirms `AgentInput`
+   (:444) with `run_in_background?: boolean` (:464), and separately `BashInput.run_in_background`
+   (:508) and `ScheduleWakeupInput` (:2553) exist in the `ToolInputSchemas` union. **Independently**,
+   grepping the shared `/app/logs/teamlead-20260716T160441.jsonl` (a real, pre-fix PR #86 review
+   session — session_id `b86451f3-...`, the exact trace the ticket's Problem Statement cites)
+   confirms the live trace: 4× `"SDK tool start: Agent {"description":"...","prompt":"..."` debug
+   lines at 17:19:41–17:19:58, followed at 17:20:03 by `"SDK reasoning: [calls ScheduleWakeup]"` and
+   `"SDK tool start: ScheduleWakeup {"delaySeconds":120,"reason":"Waiting on three parallel review
+   agents to finish corroboration",...}"`, then `"Invocation complete: ... turns=20
+   cost=$1.5135 duration=205417ms"` — this is a real, successful (non-error) `InvocationHandler`
+   completion log for a run that (per the ticket) produced **no PR comment**, matching "Approx $1.51
+   was burned producing nothing" almost exactly. This corroborates the tool/param names AND the
+   silent-success failure mode from an actual historical trace, not just static code reading.
+   **Caveat:** the `tool_input` in that log line is truncated at 200 chars (`truncateJson`) before
+   reaching `run_in_background` in the JSON (it comes after the long `prompt` field), so the param's
+   *presence in that specific call's payload* isn't directly visible in the log text — the param
+   name is confirmed by the `sdk-tools.d.ts` type declaration instead, which is authoritative.
+2. **`updatedInput` honored-ness — still unproven pre-rebuild, as the ticket anticipated.** No log
+   evidence exists for this because the current code (pre-fix) never logged `terminal_reason` on the
+   success branch — only the new Guard C code (this commit) does. I checked whether the string
+   `terminal_reason=background_requested` appears anywhere in that log file: it does, but **only**
+   inside `InvocationHandler`'s "Initial prompt" debug dump for a *later*, unrelated invocation
+   (this ticket's own finalize-ticket task, which quotes that string in its instructions) — i.e. a
+   false positive from prose, not a real SDK result frame. So honored-ness genuinely cannot be
+   confirmed without a rebuild + live run. **Decision:** left the `canUseTool` hedge in
+   `invocation-handler.service.ts` **disabled** per the ticket's own guidance ("optional... as a
+   hedge if the build-time check shows PreToolUse `updatedInput` is not honored" — the check hasn't
+   run yet, there's nothing to react to). The post-rebuild runbook step 2 below is the gating check;
+   if it shows the rewrite unhonored, enable the hedge then.
+3. **A (`CLAUDE_CODE_DISABLE_AGENT_VIEW`) left disabled.** Per the adjudicated design it is optional
+   belt-and-suspenders only, documented to affect the daemon/`--bg` surface rather than in-session
+   Agent-tool backgrounding — enabling it without evidence it does anything useful here would only
+   add an unverified variable to the post-rebuild runbook. Left as a fallback lever, not activated.
+
+**What the eventual reviewer / post-rebuild operator must watch:**
+- Run the Verification Runbook below in full after the next container rebuild — this commit does
+  not (and per the ticket, cannot) prove the fix works end-to-end; only build-time re-confirmation
+  and unit coverage are in scope for this commit.
+- Runbook step 2 (`updatedInput` honored-ness) is the load-bearing check: if sub-agents are still
+  observed backgrounding despite the hook firing, enable the `canUseTool` mirror hedge at
+  `invocation-handler.service.ts:46` (`toCanUseTool`'s allow branch) for `Agent`, per the ticket's
+  Residual Risk section.
+- If the rewrite is refuted even with the hedge, fall back to E (synchronous Deep-tier path, the #79
+  pattern) and record the runtime limitation in `docs/`.
 
 ## Dependencies and References
 

@@ -331,6 +331,40 @@ export class ClaudeCodeService implements OnApplicationShutdown {
 
       case 'result':
         if (message.subtype === 'success') {
+          // #87 Guard C: on SDK 0.3.207, a turn can end with pending
+          // background work (e.g. /code-review's Task-tool fan-out was
+          // still backgrounded and the model called ScheduleWakeup
+          // expecting a harness re-invoke that never comes in our
+          // single-shot query() model) yet still reports subtype
+          // 'success'. Without this guard that silently maps to
+          // `success: true` with no verdict ever produced ("No changes to
+          // push"). SDKResultSuccess only exposes `terminal_reason` here —
+          // `background_tasks` / `scheduled_tasks` live on StopHookInput
+          // only and are unreachable from this frame — so the guard keys
+          // off `terminal_reason` alone. With the companion PreToolUse
+          // `Agent` rewrite (sdk-hooks.factory.ts) forcing foreground
+          // sub-agents and `ScheduleWakeup` denied (role-tool-profiles.ts),
+          // this should not fire in practice; it remains as the
+          // fail-loud backstop.
+          if (message.terminal_reason === 'background_requested') {
+            this.logger.warn(
+              'Invocation ended with pending background work ' +
+                '(terminal_reason=background_requested) — sub-agent fan-out ' +
+                'did not complete in the single-shot turn; see #87',
+            );
+            return {
+              success: false,
+              error:
+                'Invocation ended with pending background work ' +
+                '(terminal_reason=background_requested) — sub-agent fan-out ' +
+                'did not complete in the single-shot turn; see #87',
+              durationMs: message.duration_ms,
+              totalCostUsd: message.total_cost_usd,
+              numTurns: message.num_turns,
+              terminalReason: message.terminal_reason,
+            };
+          }
+
           const { message: commitMessage, stripped } =
             ClaudeCodeService.extractCommitMessage(message.result);
           return {

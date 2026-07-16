@@ -47,6 +47,14 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.disallowedTools).toContain('ExitPlanMode');
     });
 
+    // #87: a wakeup can never fire in a single-shot invocation — denying
+    // the tool for every role stops the model from ever forming the
+    // "harness will re-invoke me" plan that stranded /code-review's
+    // background sub-agent fan-out.
+    it('should include ScheduleWakeup in disallowedTools (#87)', () => {
+      expect(profile.disallowedTools).toContain('ScheduleWakeup');
+    });
+
     it('should not have duplicate disallowedTools entries', () => {
       const unique = new Set(profile.disallowedTools);
       expect(unique.size).toBe(profile.disallowedTools.length);
@@ -72,9 +80,9 @@ describe('ROLE_TOOL_PROFILES', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.developer];
 
     it('should disallow common tools plus TodoWrite and the Task-tool family (BUG-010 / #68)', () => {
-      // AskUserQuestion, ExitPlanMode, TodoWrite,
+      // AskUserQuestion, ExitPlanMode, ScheduleWakeup, TodoWrite,
       // TaskCreate, TaskUpdate, TaskGet, TaskList, TaskStop, TaskOutput
-      expect(profile.disallowedTools).toHaveLength(9);
+      expect(profile.disallowedTools).toHaveLength(10);
       expect(profile.disallowedTools).toContain('TodoWrite');
       expect(profile.disallowedTools).toEqual(
         expect.arrayContaining([
@@ -137,7 +145,7 @@ describe('ROLE_TOOL_PROFILES', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.teamlead];
 
     it('should have no additional disallowed tools beyond common', () => {
-      expect(profile.disallowedTools).toHaveLength(2);
+      expect(profile.disallowedTools).toHaveLength(3);
     });
 
     it('should not have allowedWritePaths', () => {
@@ -163,7 +171,7 @@ describe('ROLE_TOOL_PROFILES', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.qa];
 
     it('should have no additional disallowed tools beyond common', () => {
-      expect(profile.disallowedTools).toHaveLength(2);
+      expect(profile.disallowedTools).toHaveLength(3);
     });
 
     it('should not have allowedWritePaths', () => {

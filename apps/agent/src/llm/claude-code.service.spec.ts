@@ -169,6 +169,86 @@ describe('ClaudeCodeService', () => {
     });
   });
 
+  // #87 Guard C — a success-subtype frame with pending background work
+  // (terminal_reason: 'background_requested') must map to a non-success
+  // envelope, not a silent success. This is the guard that catches
+  // /code-review's Task-tool fan-out getting stranded when the model calls
+  // ScheduleWakeup expecting a harness re-invoke that never comes.
+  it('should map a success-subtype result with terminal_reason=background_requested to a non-success envelope (#87 Guard C)', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+    mockQuery.mockReturnValue(
+      generateMessages([
+        initMessage(),
+        assistantMessage(),
+        successResult({ terminal_reason: 'background_requested' }),
+      ]),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('background_requested');
+      expect(result.terminalReason).toBe('background_requested');
+      expect(result.durationMs).toBe(1234);
+      expect(result.totalCostUsd).toBe(0.05);
+      expect(result.numTurns).toBe(3);
+    }
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('background_requested'),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  // #87 Guard C — no regression: an ordinary success frame with no
+  // terminal_reason, or terminal_reason 'completed', still maps to a clean
+  // success envelope.
+  it('should still map an ordinary success result to success:true when terminal_reason is absent or completed (#87 no-regression)', async () => {
+    mockQuery.mockReturnValueOnce(
+      generateMessages([initMessage(), successResult()]),
+    );
+    const noReasonResult = await service.execute(baseParams);
+    expect(noReasonResult.success).toBe(true);
+
+    mockQuery.mockReturnValueOnce(
+      generateMessages([
+        initMessage(),
+        successResult({ terminal_reason: 'completed' }),
+      ]),
+    );
+    const completedResult = await service.execute(baseParams);
+    expect(completedResult.success).toBe(true);
+  });
+
+  // #87 Guard C — the guard's failure string must not trip isResumeFailure
+  // (which matches only terminal_reason === 'turn_setup_failed'), so a
+  // background_requested guard failure on a resumed session must NOT
+  // trigger a spurious retry-fresh.
+  it('should not spuriously retry-fresh when Guard C fires on a resumed session (#87)', async () => {
+    mockQuery.mockReturnValueOnce(
+      generateMessages([
+        initMessage('sess-resumed'),
+        successResult({
+          session_id: 'sess-resumed',
+          terminal_reason: 'background_requested',
+        }),
+      ]),
+    );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-resumed',
+    });
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.terminalReason).toBe('background_requested');
+    }
+  });
+
   // 2. Error result
   it('should map an error result with joined errors string and numTurns', async () => {
     mockQuery.mockReturnValue(
