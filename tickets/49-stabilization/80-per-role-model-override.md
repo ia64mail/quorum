@@ -97,15 +97,48 @@ Findings from these checks should be recorded in Implementation Notes; there is 
 
 ## Acceptance Criteria
 
-- [ ] `docker-compose.yml` sets `ANTHROPIC_MODEL: ${<ROLE>_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}` in the `environment:` block of each of the three deployed agent services (architect, teamlead, developer), positioned **after** each service's `<<: *shared-env` merge so the explicit key wins.
-- [ ] With none of the role-scoped vars set, all three services resolve `ANTHROPIC_MODEL` to the current fleet-wide value from `x-shared-env` (no behavioral change vs. today).
-- [ ] With a role-scoped var set (e.g. `DEVELOPER_ANTHROPIC_MODEL=claude-sonnet-5`), only the matching service picks it up; the other agents keep the fleet-wide value.
-- [ ] `.env.example` no longer contains the stale two-line comment referencing `apps/terminal/src/llm/pricing.ts`.
-- [ ] `.env.example` documents the three role-scoped override vars as commented-out examples with a one-line note on the fallback chain (role-scoped → `ANTHROPIC_MODEL` → committed default).
-- [ ] `docs/claude-code-sdk.md` Configuration table (around line 239) documents the `<ROLE>_ANTHROPIC_MODEL` override convention and its fallback order.
-- [ ] `docker-compose.yml`'s moderator service `environment:` block is unchanged — no `MODERATOR_ANTHROPIC_MODEL` variable introduced; moderator continues not to inherit `<<: *shared-env`.
-- [ ] No source-code changes in `apps/` or `libs/` — the config path (env → `anthropic.config.ts` → SDK `query({model})`) is already per-container. Verified `npm run build && npm run lint && npm run test` green (no regressions from `docker-compose.yml` and `.env.example` edits; test count unchanged).
-- [ ] Manual smoke: `docker compose up -d --force-recreate developer` with `DEVELOPER_ANTHROPIC_MODEL` set surfaces the overridden model string in `logs/developer-*.jsonl` on a trivial dispatch. Fleet-wide default and moderator-unaffected checks (Verification steps 1, 3, 4 above) also pass.
+- [x] `docker-compose.yml` sets `ANTHROPIC_MODEL: ${<ROLE>_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}` in the `environment:` block of each of the three deployed agent services (architect, teamlead, developer), positioned **after** each service's `<<: *shared-env` merge so the explicit key wins.
+- [x] With none of the role-scoped vars set, all three services resolve `ANTHROPIC_MODEL` to the current fleet-wide value from `x-shared-env` (no behavioral change vs. today). *(Verified structurally by js-yaml parse — the merge-key semantics + `${ANTHROPIC_MODEL:-claude-opus-4-8}` fallback in the middle segment yield the fleet-wide value when the role-scoped var is unset; runtime confirmation is the operator smoke check below.)*
+- [x] With a role-scoped var set (e.g. `DEVELOPER_ANTHROPIC_MODEL=claude-sonnet-5`), only the matching service picks it up; the other agents keep the fleet-wide value. *(Structurally established by the three parallel per-service expressions; runtime confirmation is the operator smoke check below.)*
+- [x] `.env.example` no longer contains the stale two-line comment referencing `apps/terminal/src/llm/pricing.ts`.
+- [x] `.env.example` documents the three role-scoped override vars as commented-out examples with a one-line note on the fallback chain (role-scoped → `ANTHROPIC_MODEL` → committed default). The `DEVELOPER_ANTHROPIC_MODEL=claude-sonnet-5` example is baked in as the operator-uncomments-to-activate default; `ARCHITECT_`/`TEAMLEAD_` are shown as bare mechanism only (no suggested value).
+- [x] `docs/claude-code-sdk.md` Configuration table (around line 239) documents the `<ROLE>_ANTHROPIC_MODEL` override convention and its fallback order.
+- [x] `docker-compose.yml`'s moderator service `environment:` block is unchanged — no `MODERATOR_ANTHROPIC_MODEL` variable introduced; moderator continues not to inherit `<<: *shared-env`.
+- [x] No source-code changes in `apps/` or `libs/` — the config path (env → `anthropic.config.ts` → SDK `query({model})`) is already per-container. Verified `npm run build && npm run lint && npm run test` green (no regressions from `docker-compose.yml` and `.env.example` edits; test count unchanged at 48 suites / 905 tests).
+- [ ] Manual smoke: `docker compose up -d --force-recreate developer` with `DEVELOPER_ANTHROPIC_MODEL` set surfaces the overridden model string in `logs/developer-*.jsonl` on a trivial dispatch. Fleet-wide default and moderator-unaffected checks (Verification steps 1, 3, 4 above) also pass. *(Operator-driven — not runnable inside the agent worktree; deferred to post-merge deploy.)*
+
+## Implementation Notes
+
+### Files modified
+- `docker-compose.yml` — added `ANTHROPIC_MODEL: ${<ROLE>_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}` line to the `environment:` block of each of the three deployed agent services (architect at :200, teamlead at :228, developer at :256), positioned immediately after each service's `<<: *shared-env` merge so the explicit key wins per YAML 1.1 merge-key semantics. Each line carries a one-line inline comment referencing this ticket.
+- `.env.example` — removed the stale two-line `# NOTE: Token pricing for moderator cost tracking is hardcoded per model / in apps/terminal/src/llm/pricing.ts` comment (previously at :15–16). Added a new commented-out block after the `ANTHROPIC_MAX_TOKENS` line documenting the three role-scoped overrides and the fallback chain, with `# DEVELOPER_ANTHROPIC_MODEL=claude-sonnet-5` as the pre-populated example (still commented so copying `.env.example` verbatim does not silently switch developer to Sonnet).
+- `docs/claude-code-sdk.md` — extended the Configuration table with a new `<ROLE>_ANTHROPIC_MODEL` row after `ANTHROPIC_MODEL` (:239), documenting the resolution order and pointing at ticket #80. Clarified the existing `ANTHROPIC_MODEL` row to note it is the fleet-wide default via `x-shared-env`.
+
+### Stale `.env.example` comment correction (per spec §Stale-comment correction)
+The two lines removed were the exact literal referenced in the spec:
+```
+# NOTE: Token pricing for moderator cost tracking is hardcoded per model
+# in apps/terminal/src/llm/pricing.ts — update if changing ANTHROPIC_MODEL
+```
+Both claims were verified stale on the 2026-07-16 snapshot: `apps/terminal/` does not exist (removed in QRM6-009), `pricing.ts` does not exist anywhere in the repo, and `ANTHROPIC_MODEL` no longer reaches the moderator (moderator env at `docker-compose.yml:170–174` deliberately omits `<<: *shared-env`).
+
+### Model-id verification
+Confirmed `claude-sonnet-5` is the current Claude API alias for Claude Sonnet 5 via Anthropic's public models overview (2026-06-09 GA release; alias column, dateless-format post-4.6-generation pinned snapshot). It follows the same alias shape as the committed `claude-opus-4-8` default. No test-file model strings changed — they continue to reference dated snapshots like `claude-sonnet-4-5-20250929` and are not affected by this ticket.
+
+### Compose YAML parse verification
+Parsed the modified `docker-compose.yml` via `js-yaml` and confirmed:
+- Each of the three agent services resolves its `environment.ANTHROPIC_MODEL` to the expected nested-default expression (not the anchor's value), i.e. the explicit key wins over `<<: *shared-env`.
+- The moderator service's environment keys are unchanged: `GIT_AUTHOR_*` / `GIT_COMMITTER_*` (from `<<: *git-identity`), `MCP_SERVER_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `REPO_URL`. No `ANTHROPIC_MODEL` — no leakage risk.
+
+### Build/lint/test
+`npm run build && npm run lint && npm run test` → all green. 48 suites, 905 tests pass — matches the pre-change baseline from #78 exactly (spec predicted "test count unchanged"). Nest webpack build succeeds for all three targets; ESLint clean.
+
+### Not runnable in worktree (operator handoff)
+The manual smoke AC (`docker compose up -d --force-recreate ...` + log grep) requires a running Docker host, which the isolated agent worktree does not have. Left as unchecked. Suggested runbook once the change lands on a deploy host:
+1. Rebuild agent images not required — the change is env-only. `docker compose up -d --force-recreate architect teamlead developer` picks up the new env resolution.
+2. With none of `ARCHITECT_ANTHROPIC_MODEL` / `TEAMLEAD_ANTHROPIC_MODEL` / `DEVELOPER_ANTHROPIC_MODEL` set in `.env`, dispatch a trivial task to each and grep the model string in `logs/{architect,teamlead,developer}-*.jsonl` — expect `claude-opus-4-8` on all three (Verification step 1).
+3. Set `DEVELOPER_ANTHROPIC_MODEL=claude-sonnet-5` in `.env`, `--force-recreate developer`, dispatch again — expect the developer log to show `claude-sonnet-5` while the other two still show `claude-opus-4-8` (Verification step 2).
+4. Confirm the moderator container's `env` does not contain `ANTHROPIC_MODEL` (Verification step 4): `docker compose exec moderator env | grep -i anthropic` — should show only `CLAUDE_CODE_OAUTH_TOKEN`, not `ANTHROPIC_MODEL` or `ANTHROPIC_API_KEY`.
 
 ## Dependencies and References
 

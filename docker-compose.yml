@@ -195,6 +195,9 @@ services:
         condition: service_healthy
     environment:
       <<: *shared-env
+      # Per-role override (#80): resolves to ARCHITECT_ANTHROPIC_MODEL if set,
+      # else fleet-wide ANTHROPIC_MODEL, else the committed default.
+      ANTHROPIC_MODEL: ${ARCHITECT_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}
       PORT: 3002
       AGENT_ROLE: architect
       AGENT_CALLBACK_URL: http://architect:3002
@@ -220,6 +223,9 @@ services:
         condition: service_healthy
     environment:
       <<: *shared-env
+      # Per-role override (#80): resolves to TEAMLEAD_ANTHROPIC_MODEL if set,
+      # else fleet-wide ANTHROPIC_MODEL, else the committed default.
+      ANTHROPIC_MODEL: ${TEAMLEAD_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}
       PORT: 3002
       AGENT_ROLE: teamlead
       AGENT_CALLBACK_URL: http://teamlead:3002
@@ -245,6 +251,9 @@ services:
         condition: service_healthy
     environment:
       <<: *shared-env
+      # Per-role override (#80): resolves to DEVELOPER_ANTHROPIC_MODEL if set,
+      # else fleet-wide ANTHROPIC_MODEL, else the committed default.
+      ANTHROPIC_MODEL: ${DEVELOPER_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}
       PORT: 3002
       AGENT_ROLE: developer
       AGENT_CALLBACK_URL: http://developer:3002
