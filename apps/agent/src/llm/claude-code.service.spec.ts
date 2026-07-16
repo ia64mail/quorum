@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AgentConfigService } from '../config';
 import { ClaudeCodeService } from './claude-code.service';
@@ -1007,6 +1008,63 @@ describe('ClaudeCodeService', () => {
       expect(result.error).toBe('API outage');
     }
     expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
+
+  // #78 — SDKMirrorErrorMessage (system/mirror_error) must surface at warn
+  // level. Previously dropped silently by the case-'system' branch, which
+  // masked the /var/agent-sessions EACCES that broke QRM8 D3 durability.
+  // The frame must not abort the invocation — the model has completed its
+  // work, only the transcript-mirror write failed.
+  it('should log mirror_error at warn and still return the success result', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+    const mirrorErrorFrame = {
+      type: 'system',
+      subtype: 'mirror_error',
+      error:
+        "EACCES: permission denied, open '/var/agent-sessions/sess-1.jsonl'",
+      key: {
+        projectKey: '-var-agent-worktrees-corr-1',
+        sessionId: 'sess-1',
+      },
+      uuid: 'uuid-mirror-1',
+      session_id: 'sess-1',
+    };
+
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), mirrorErrorFrame, successResult()]),
+    );
+
+    try {
+      const result = await service.execute(baseParams);
+
+      // The invocation still completes successfully — mirror_error is
+      // observational, not a hard fault.
+      expect(result).toEqual({
+        success: true,
+        result: 'Task completed',
+        sessionId: 'sess-1',
+        durationMs: 1234,
+        totalCostUsd: 0.05,
+        numTurns: 3,
+      });
+
+      // The warn line must include the SDK-reported error text so it's
+      // grep-able in the JSONL logs (this is the whole point of the branch).
+      const warnCalls = warnSpy.mock.calls.map(
+        (call) => call[0] as unknown as string,
+      );
+      const mirrorWarn = warnCalls.find(
+        (line) => typeof line === 'string' && line.includes('mirror_error'),
+      );
+      expect(mirrorWarn).toBeDefined();
+      expect(mirrorWarn).toContain(
+        "EACCES: permission denied, open '/var/agent-sessions/sess-1.jsonl'",
+      );
+      expect(mirrorWarn).toContain('sess-1');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   // 9. Graceful shutdown

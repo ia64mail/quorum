@@ -138,7 +138,7 @@ A finding in any check is a gate on merge. Checks 1, 2, 5, 6, 7, 12 are the high
 - [x] Breaking changes #2–#4 addressed at the code layer: `role-tool-profiles.ts:58` now denies `TodoWrite + TaskCreate + TaskUpdate + TaskGet + TaskList + TaskStop + TaskOutput` for developer (breaking change #3); in-process `type:'sdk'` bridge remains at `mcp-tool-bridge.service.ts:58` with no `alwaysLoad` edit (breaking change #2 — Check 2 verifies at runtime); `SDK_ENV_ALLOWLIST` still applied via `buildSdkEnv` at `claude-code.service.ts:162` with the `ANTHROPIC_API_KEY` injection right after (breaking change #4 — Check 10 verifies at runtime).
 - [x] `Dockerfile:81` musl deletion retained and confirmed still required (0.3.207 lockfile entries still carry `libc: ["musl"]` fields for the `-musl` optional deps).
 - [x] `FileSessionStore` (QRM8 D3) still compiles against the 0.3.207 `SessionStore` interface (`npm run build` green); stale `InMemorySessionStore` comment tidied at `claude-code.service.ts:179–180`.
-- [ ] Verification runbook Checks 0–13 executed through the moderator; results (pass/finding) recorded in Implementation Notes. Checks 1, 2, 5, 6, 7, 12 pass. **(Deferred to post-rebuild operator run — out of scope for the code-review of PR #69.)**
+- [ ] Verification runbook Checks 0–13 executed through the moderator; results (pass/finding) recorded in Implementation Notes. Checks 1, 2, 5, 6, 7, 12 pass. **(Deferred to post-rebuild operator run — out of scope for the code-review of PR #69.)** (Check 12 durability restored by #78 — session resume survives `--force-recreate`; verified 2026-07-16. **Progress as of 2026-07-16 on the rebuilt image (CLI 2.1.207 / SDK 0.3.207):** Checks 2, 3, 4, 12 verified, and Finding 6's retry-fresh path fired end-to-end; agents now run `claude-opus-4-8` (6 opus-4-8 mentions in the developer log, host `.env` override lifted for Check 3). **Remaining gaps keeping AC-8 open:** Finding 5's deliberate uid-MISMATCH FATAL test (not run — requires a non-1000-uid image build); Check 7's full multi-hour OAuth idle window (deferred); and Check 10's runbook text fix + the four Check-5 doc/code drifts, now tracked under issue #84. Held at `[ ]` until those gaps close and every check 0–13 has a recorded result per this AC's contract.)
 
 ## Implementation Notes (2026-07-13, PR #69 review — Accepted)
 
@@ -222,7 +222,7 @@ Verification Runbook Checks 0–13 remain to be executed. Coherence check agains
 - [x] `mcp-tool-bridge.service.ts` injects `branch: request.branch` into the `invoke_agent` proxy call, mirroring the existing `callerRole` / `correlationId` / `depth` injection pattern.
 - [x] JSDoc at the top of `McpToolBridgeService` names `branch` as one of the auto-injected plumbing fields alongside the other three.
 - [x] Regression test asserts the bridged `invoke_agent` handler forwards `branch` from the closed-over `InvokeRequest` to the proxy even when the caller (LLM) does not supply it.
-- [ ] Runbook Check 4 re-run through the moderator (developer→teamlead code-review chain) completes without `-32602 branch: expected string, received undefined`.
+- [x] Runbook Check 4 re-run through the moderator (developer→teamlead code-review chain) completes without `-32602 branch: expected string, received undefined`. (verified 2026-07-16 on rebuilt image — nested dev→teamlead invoke_agent succeeded, bridge injected branch, no -32602)
 
 ### Finding 2 — Stale `Config` deny rule warns on every agent spawn
 
@@ -239,7 +239,7 @@ Verification Runbook Checks 0–13 remain to be executed. Coherence check agains
 **Acceptance criteria:**
 - [x] `role-tool-profiles.ts` no longer lists `'Config'` in `COMMON_DISALLOWED_TOOLS`; comment refresh documents the alternative guard chain.
 - [x] `role-tool-profiles.spec.ts` updated (length + membership) and passes.
-- [ ] Runbook Check 2 re-run (single developer dispatch) shows **no** `Permission deny rule "Config" matches no known tool` line in the developer subprocess stderr in `logs/developer-*.jsonl`. `TodoWrite` retained as belt-and-braces per Round-1; a `matches no known tool` warning on it (if the engine no longer emits it) is acceptable and out of scope for this ticket.
+- [x] Runbook Check 2 re-run (single developer dispatch) shows **no** `Permission deny rule "Config" matches no known tool` line in the developer subprocess stderr in `logs/developer-*.jsonl`. `TodoWrite` retained as belt-and-braces per Round-1; a `matches no known tool` warning on it (if the engine no longer emits it) is acceptable and out of scope for this ticket. (verified 2026-07-16 — 0 Config-deny warnings in developer-*.jsonl on the rebuilt image)
 
 **Post-review correction (PR #69 teamlead review, 2026-07-15):** The refreshed block comment above `COMMON_DISALLOWED_TOOLS` in `role-tool-profiles.ts` initially labeled the warning under "#68 Round-2 Finding 5" — the warning is Finding 2, not Finding 5 (Finding 5 is the unrelated uid-guard). The comment label has been corrected to "Finding 2".
 
@@ -279,7 +279,7 @@ Rationale for fail-loud over self-heal: the tmpfs is mounted before the entrypoi
 
 **Acceptance criteria:**
 - [x] `docker/agent/entrypoint.sh` (and `docker/moderator/entrypoint.sh` with the equivalent guard) emits a fail-loud diagnostic with the fix hint before the first tmpfs write, exiting non-zero on uid mismatch instead of dying on the opaque `mkdir … Permission denied`.
-- [ ] `./scripts/start.sh` boots cleanly (regression check — the guard must be a no-op when uids agree).
+- [x] `./scripts/start.sh` boots cleanly (regression check — the guard must be a no-op when uids agree). (verified 2026-07-16 — agents rebuilt & recreated with matching uids; clean boot, guard inert)
 - [ ] Manual test: with `HOST_UID` and `HOST_GID` unset in the shell and the image built with a non-1000 uid, `docker compose up -d --force-recreate developer` produces the FATAL diagnostic in the container log and exits 78, rather than `mkdir: Permission denied`.
 - [x] `docs/system-design.md` updated with the correct single-service recreate incantation and a cross-reference to this ticket.
 
@@ -315,13 +315,13 @@ Rationale for fail-loud over self-heal: the tmpfs is mounted before the entrypoi
 - [x] `execute()` in `claude-code.service.ts` routes a resume-failure error-result through the same retry-fresh path as a resume-failure thrown-error.
 - [x] Detection uses the SDK's structured signal (`terminal_reason` or equivalent) where available, falling back to the observed error-string match; the detection strategy is documented inline with a link to this ticket's Round-2 section.
 - [x] Two new tests in `claude-code.service.spec.ts`: (a) bogus resume-id → invocation completes fresh with `success: true`; (b) bogus resume-id **and** shutdown-in-progress → no retry, abort-guard behavior preserved.
-- [ ] Partial Runbook Check 12 re-run: with a stale `sessionId` from a pre-recreate container, the fresh developer produces a `Session resume failed … — retrying fresh` log line and completes the invocation with `success: true`, `turns > 0`. (Full Check 12 durability recovery depends on Finding 3 landing under #78 — this AC covers the retry-fresh behavior only.)
+- [x] Partial Runbook Check 12 re-run: with a stale `sessionId` from a pre-recreate container, the fresh developer produces a `Session resume failed … — retrying fresh` log line and completes the invocation with `success: true`, `turns > 0`. (Full Check 12 durability recovery depends on Finding 3 landing under #78 — this AC covers the retry-fresh behavior only.) (verified 2026-07-16 — bogus resume id `00000000-0000-4000-8000-000000000068` → `No conversation found with session ID` stderr → `Session resume failed … — retrying fresh` log line → fresh session `b9a55bd5-64d0-42d7-ab78-8044a1094683` completed `success: true`)
 
 ### Round-2 aggregate acceptance
 - [x] Findings 1, 2, 5, 6 all satisfy their per-finding AC blocks above (code + tests + docs; operator-driven re-runs remain).
 - [x] `npm run build`, `npm run lint`, `npm run test` all green on the amended branch.
 - [ ] PR description on the next revision references PR #69's end-of-run summary and lists these four findings resolved (leaving Findings 3, 4 tagged as tracked under #78, #79).
-- [ ] Round-1 AC-8 re-executed by the operator; Findings 1, 2, 6 verified via the specific check re-runs called out per finding; Finding 5 verified via the manual mismatch scenario. AC-8 then flipped to `[x]` in the Round-1 Acceptance Criteria block.
+- [ ] Round-1 AC-8 re-executed by the operator; Findings 1, 2, 6 verified via the specific check re-runs called out per finding; Finding 5 verified via the manual mismatch scenario. AC-8 then flipped to `[x]` in the Round-1 Acceptance Criteria block. (Progress 2026-07-16 on the rebuilt image: Findings 1, 2, 6 all verified end-to-end via their called-out re-runs — Check 4 dev→teamlead succeeded, 0 Config-deny warnings in developer-*.jsonl, and the stale-sessionId retry-fresh path fired with a fresh-session success. Check 3 also verified — agents run `claude-opus-4-8`. Finding 5's deliberate uid-MISMATCH FATAL test remains unrun (requires a non-1000-uid image build), and Check 7's full multi-hour OAuth idle window plus Check 10's runbook text fix and the four Check-5 doc/code drifts stay open — the latter now tracked under issue #84. Left `[ ]` until those close.)
 
 ### Recommendation on the shared-schema refactor (Finding 1 supplement)
 
@@ -365,5 +365,6 @@ The follow-up ticket should specifically: (a) audit which `InvokeRequest` fields
 - Verification Runbook Checks 0–13 re-execution by the operator through the moderator. The Round-2 per-finding ACs cite specific re-runs (Check 4 for Finding 1, Check 2 for Finding 2, partial Check 12 for Finding 6, and the manual mismatch scenario for Finding 5). AC-8 in the Round-1 Acceptance Criteria block remains the gate for full ticket closure.
 - Finding 3 (`FileSessionStore` bypassed on 0.3.207 — cross-recreate durability) tracked under issue #78, architect-scoped design work.
 - Finding 4 (commit-message extraction regex hitting prose mentions of the marker) tracked under issue #79.
+- Check-10 runbook text fix + the four Check-5 doc/code drifts (surfaced during the 2026-07-16 rebuild re-run) tracked under issue **#84** — the remaining loose ends keeping AC-8 open on the docs side, alongside the Finding 5 mismatch-scenario manual test and Check 7's long-idle OAuth window.
 - Retry-block duplication in `claude-code.service.ts:111` vs `139-153` — cleanup only, defer to a future hygiene pass. Two extraction options recorded on PR #69 for whoever picks it up.
 - `turn_setup_failed` predicate width in `isResumeFailure` — recorded as a future hardening item; requiring both structured signal AND substring narrows the false-positive envelope but bounded impact today is one wasted API call and one misleading log line per invocation.

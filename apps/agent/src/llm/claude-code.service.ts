@@ -237,13 +237,6 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         // FileSessionStore (QRM8 D3) persists transcripts as JSONL on the
         // /var/agent-sessions/ named volume, enabling resume across restarts.
         sessionStore: this.sessionStore,
-        // #78 verification spike: SDK 0.3.207's SessionStoreFlush defaults to
-        // 'batched', which buffers transcript_mirror frames and only flushes
-        // at end-of-turn. Hypothesis: the subprocess is torn down before that
-        // flush completes, so FileSessionStore.append() never fires and
-        // /var/agent-sessions stays empty (PR #69 Finding 3). 'eager'
-        // schedules a flush after every frame to confirm the root cause.
-        sessionStoreFlush: 'eager',
         ...(params.resume ? { resume: params.resume } : {}),
       },
     });
@@ -293,6 +286,22 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           } else {
             this.logger.debug(`Session started: ${message.session_id}`);
           }
+        } else if (message.subtype === 'mirror_error') {
+          // #78: FileSessionStore.append() failed the SDK's own 3-attempt
+          // retry (SDKMirrorErrorMessage in sdk.d.ts). Surface it at warn —
+          // silently dropping this frame is what masked the /var/agent-sessions
+          // EACCES for the entire PR #69 verification. Session persistence is
+          // broken for this session; the invocation itself is still
+          // recoverable (the model has completed its work) so we do NOT
+          // elevate to a hard failure.
+          const frame = message as unknown as Record<string, unknown>;
+          const terminalReason =
+            typeof frame.terminal_reason === 'string'
+              ? ` terminal_reason=${frame.terminal_reason}`
+              : '';
+          this.logger.warn(
+            `SDK session-store mirror_error (session=${message.session_id}): ${message.error}${terminalReason}`,
+          );
         }
         return null;
 
