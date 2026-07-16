@@ -232,7 +232,9 @@ The dispatcher (normally the moderator) picks one of three review tiers when aut
 2. **Standard (`/review`)** — **the default for most reviews.** One structured review pass over the PR. Moderate cost.
 3. **Deep (`/code-review`)** — for low-confidence, questionable, or hard-to-assess changes, and highly sensitive surfaces (permission guards, broker safeguards, git/commit handling, auth). A long, expensive multi-agent pipeline with confidence scoring.
 
-Escalate a tier (1 → 2 → 3) rather than repeat one when a review leaves open questions or its findings are disputed.
+**The tier binds the skill.** A `/review` dispatch is satisfied by the `review` skill and a `/code-review` dispatch by the `code-review` skill — never substitute one for the other, in either direction. At a skill tier, run the dispatched skill **first**, before your own review passes: its raw output is an *input* to the review, not a compliance artifact to generate after the fact.
+
+Escalation (1 → 2 → 3) is the **dispatcher's** decision, made when authoring the next brief — escalate rather than repeat a tier when a review leaves open questions or its findings are disputed. The reviewer never self-escalates the machinery mid-review: if the dispatched tier proves insufficient, record that in the verdict and leave the escalation to the dispatcher.
 
 ### Review Workflow
 
