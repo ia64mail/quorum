@@ -381,6 +381,15 @@ quorum/
 
 The Dockerfile uses a multi-target build: `default` target for mcp-server, `agent` target for agents, and `moderator` target for the Claude Code CLI moderator. All accept `HOST_UID`/`HOST_GID` build args to align container user ownership with the host. Use `./scripts/start.sh` to launch — it exports these automatically.
 
+**Single-service recreate.** For post-boot maintenance (e.g. recycling a single agent after a config change) export `HOST_UID`/`HOST_GID` **before** invoking compose, or the tmpfs uid/gid defaults (`${HOST_UID:-1000}`) diverge from the baked container user and the entrypoint aborts with `FATAL: /home/quorum/.claude is owned by uid=…` (agent) or `/home/quorum/.config is owned by uid=…` (moderator):
+
+```bash
+export HOST_UID=$(id -u) HOST_GID=$(id -g)
+docker compose up -d --force-recreate <service>
+```
+
+See [#68 Round-2 Finding 5](../tickets/68-bump-agent-sdk-cc-cli-opus-4-8.md) for the failure mode. The entrypoints emit a fail-loud diagnostic with the fix hint instead of dying on the opaque `mkdir: Permission denied`.
+
 Three YAML anchors provide shared configuration:
 
 | Anchor | Purpose |

@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Detect uid/gid mismatch between the baked user and the tmpfs mounts.
+# docker-compose.yml defaults tmpfs uid/gid to ${HOST_UID:-1000}; the image
+# bakes the quorum user from the build-time HOST_UID. A bare `docker compose
+# up --force-recreate` without HOST_UID/HOST_GID exported produces mounts
+# owned by uid 1000 while the user has a different uid → the first tmpfs
+# write (`mkdir -p /home/quorum/.config/git` in the GH_TOKEN block below)
+# fails with an opaque "Permission denied" (#68 Round-2 Finding 5). Fail
+# loud with a fix hint BEFORE any tmpfs write so the guard actually fires
+# on the real failure path — under `set -euo pipefail` those earlier writes
+# would abort the entrypoint with the exact opaque error this guard was
+# written to eliminate. Stat /home/quorum/.config because that is the first
+# tmpfs path this entrypoint touches. Matches the moderator entrypoint's
+# ordering.
+_home_config_owner_uid=$(stat -c '%u' /home/quorum/.config)
+_me_uid=$(id -u)
+if [ "${_home_config_owner_uid}" != "${_me_uid}" ]; then
+  echo "FATAL: /home/quorum/.config is owned by uid=${_home_config_owner_uid} but this entrypoint runs as uid=${_me_uid} (user $(id -un))." >&2
+  echo "This usually means \`docker compose up --force-recreate\` was run without HOST_UID/HOST_GID exported." >&2
+  echo "Fix: export HOST_UID=\$(id -u) HOST_GID=\$(id -g) before docker compose, or use ./scripts/start.sh." >&2
+  exit 78  # EX_CONFIG
+fi
+
 # Authenticate gh CLI with the PAT and configure git's credential helper,
 # then strip the raw token from the env so the NestJS process (and by
 # extension the SDK subprocess) never sees it. The credential persists at

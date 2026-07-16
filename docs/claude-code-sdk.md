@@ -236,7 +236,7 @@ Additionally, `ClaudeCodeService` extracts tool call information from assistant 
 |---------------------|---------|---------|
 | `AGENT_ROLE` | `developer` | Determines role prompt and permission profile |
 | `AGENT_WORKSPACE_DIR` | `/var/agent-repo` | Base git clone path. The actual SDK `cwd` per invocation is the worktree at `/var/agent-worktrees/<correlationId>` (QRM8 #11); this fallback is used only outside the worktree lifecycle (e.g. unit tests). |
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-5-20250929` | Model for SDK queries |
+| `ANTHROPIC_MODEL` | `claude-opus-4-8` | Model for SDK queries |
 | `ANTHROPIC_MAX_TOKENS` | `4096` | Max tokens per response |
 | `REPO_URL` | — (required) | HTTPS clone URL consumed by `docker/agent/entrypoint.sh` on first boot; not forwarded to the SDK subprocess |
 | `GH_TOKEN` | — (required) | Fine-grained PAT consumed by the entrypoint to configure the `gh` credential helper; `unset` before NestJS starts and **excluded from the SDK subprocess env** (QRM8 D5) |

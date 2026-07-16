@@ -886,6 +886,102 @@ describe('ClaudeCodeService', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
+  // #68 Round-2 Finding 6 — resume-failure delivered as an error-result
+  // envelope (SDK 0.3.207 semantic) instead of a thrown error. Must still
+  // route through the retry-fresh path.
+  it('should retry fresh when resume-failure is delivered as an error result envelope (bogus resume-id)', async () => {
+    const bogusResumeResult = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      // Preferred structured signal from the SDK (TerminalReason on 0.3.203+).
+      terminal_reason: 'turn_setup_failed',
+      errors: ['No conversation found with session ID: sess-bogus'],
+      duration_ms: 5,
+      total_cost_usd: 0,
+      num_turns: 0,
+      session_id: 'sess-bogus',
+    };
+
+    mockQuery
+      // First call (with bogus resume) — SDK RETURNS an error envelope, not a throw
+      .mockReturnValueOnce(
+        generateMessages([initMessage('sess-bogus'), bogusResumeResult]),
+      )
+      // Second call (retry-fresh) — success
+      .mockReturnValueOnce(
+        generateMessages([
+          initMessage('sess-new'),
+          successResult({ session_id: 'sess-new' }),
+        ]),
+      );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-bogus',
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+
+    // First call had resume set
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const firstCallArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(firstCallArgs.options.resume).toBe('sess-bogus');
+    expect(firstCallArgs.options).not.toHaveProperty('systemPrompt');
+
+    // Second call was fresh
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const secondCallArgs = mockQuery.mock.calls[1][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(secondCallArgs.options).not.toHaveProperty('resume');
+    expect(secondCallArgs.options.systemPrompt).toBe('You are a developer.');
+  });
+
+  // #68 Round-2 Finding 6 — abort-guard preserved on the envelope-path retry:
+  // if the controller is aborted while the envelope is in flight, do not
+  // spawn a second query — the retry would fail immediately and its result
+  // wouldn't be used.
+  it('should not retry-fresh on resume-failure envelope when controller is aborted', async () => {
+    const controller = new AbortController();
+    const bogusResumeResult = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      terminal_reason: 'turn_setup_failed',
+      errors: ['No conversation found with session ID: sess-stale'],
+      duration_ms: 5,
+      total_cost_usd: 0,
+      num_turns: 0,
+      session_id: 'sess-stale',
+    };
+
+    mockQuery.mockReturnValueOnce(
+      (async function* () {
+        yield initMessage('sess-stale');
+        controller.abort();
+        yield bogusResumeResult;
+      })(),
+    );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-stale',
+      abortController: controller,
+    });
+
+    // Retry MUST NOT fire under abort
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // Original envelope failure is what propagates
+      expect(result.error).toBe(
+        'No conversation found with session ID: sess-stale',
+      );
+    }
+  });
+
   it('should return error when retry itself fails', async () => {
     mockQuery
       .mockReturnValueOnce(
