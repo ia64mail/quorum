@@ -90,7 +90,42 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     const start = Date.now();
 
     try {
-      return await this.executeQuery(params, controller, start);
+      const result = await this.executeQuery(params, controller, start);
+
+      // Result-envelope resume-failure path (#68 Round-2 Finding 6):
+      // On SDK 0.3.207, a missing-resume-session is delivered as a
+      // result envelope with subtype !== 'success' rather than a thrown
+      // error, so the outer catch below never runs. Detect it here and
+      // route through the same retry-fresh path as thrown errors.
+      // Skip the retry when the controller was aborted (shutdown in
+      // progress) — mirrors the catch-path abort-guard below.
+      if (
+        !result.success &&
+        params.resume &&
+        !controller.signal.aborted &&
+        ClaudeCodeService.isResumeFailure(result.error, result.terminalReason)
+      ) {
+        this.logger.warn(
+          `Session resume failed (sessionId=${params.resume}): ${result.error} — retrying fresh`,
+        );
+        try {
+          return await this.executeQuery(
+            { ...params, resume: undefined },
+            controller,
+            Date.now(),
+          );
+        } catch (retryErr) {
+          return {
+            success: false,
+            error:
+              retryErr instanceof Error ? retryErr.message : String(retryErr),
+            durationMs: Date.now() - start,
+            totalCostUsd: 0,
+          };
+        }
+      }
+
+      return result;
     } catch (err) {
       // Graceful fallback: if resume was requested and the session is missing,
       // retry without resume so the agent starts a fresh session.
@@ -126,6 +161,29 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     } finally {
       this.activeControllers.delete(controller);
     }
+  }
+
+  /**
+   * Detect whether a failure result envelope from the SDK signals a
+   * missing-resume-session condition, so `execute()` can route it through
+   * the same retry-fresh fallback as thrown errors.
+   *
+   * Preferred signal: the SDK's structured `terminal_reason`
+   * (`TerminalReason` in `@anthropic-ai/claude-agent-sdk/sdk.d.ts`) —
+   * `turn_setup_failed` is what 0.3.207 emits when the CLI cannot resume
+   * the requested session. Fallback: substring match against the observed
+   * subprocess-stderr text `No conversation found with session ID`
+   * relayed through the joined `errors` field. See #68 Round-2 Finding 6.
+   */
+  private static isResumeFailure(
+    error: string | undefined,
+    terminalReason: string | undefined,
+  ): boolean {
+    if (terminalReason === 'turn_setup_failed') return true;
+    if (error && error.includes('No conversation found with session ID')) {
+      return true;
+    }
+    return false;
   }
 
   private async executeQuery(
@@ -179,6 +237,13 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         // FileSessionStore (QRM8 D3) persists transcripts as JSONL on the
         // /var/agent-sessions/ named volume, enabling resume across restarts.
         sessionStore: this.sessionStore,
+        // #78 verification spike: SDK 0.3.207's SessionStoreFlush defaults to
+        // 'batched', which buffers transcript_mirror frames and only flushes
+        // at end-of-turn. Hypothesis: the subprocess is torn down before that
+        // flush completes, so FileSessionStore.append() never fires and
+        // /var/agent-sessions stays empty (PR #69 Finding 3). 'eager'
+        // schedules a flush after every frame to confirm the root cause.
+        sessionStoreFlush: 'eager',
         ...(params.resume ? { resume: params.resume } : {}),
       },
     });
@@ -275,6 +340,12 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           durationMs: message.duration_ms,
           totalCostUsd: message.total_cost_usd,
           numTurns: message.num_turns,
+          // Surface terminal_reason (SDK 0.3.203+) so execute() can detect
+          // missing-resume-session failures without string matching. See
+          // #68 Round-2 Finding 6.
+          ...(message.terminal_reason !== undefined
+            ? { terminalReason: message.terminal_reason }
+            : {}),
         };
 
       default:
