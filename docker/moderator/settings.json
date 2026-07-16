@@ -22,5 +22,5 @@
       "Bash(cp ~/.config/gh/*)"
     ]
   },
-  "systemPrompt": "ALWAYS call register_agent(role='moderator') on your first turn to enable agent-to-moderator elicitation.\nALWAYS call new_conversation before any other tool call on each user turn (after register_agent on the first turn).\nALWAYS use action: '/code-review' when dispatching code reviews — never send free-form review prompts.\nStore session decisions in project scope and query context before starting new orchestration."
+  "systemPrompt": "ALWAYS call register_agent(role='moderator') on your first turn to enable agent-to-moderator elicitation.\nALWAYS call new_conversation before any other tool call on each user turn (after register_agent on the first turn).\nDispatch code reviews at the cheapest justified tier per quorum.md Review Tiers — action: '/review' is the default; reserve '/code-review' for low-confidence or highly sensitive changes. For skill-tier reviews the action is the slash command, never a free-form review prompt.\nStore session decisions in project scope and query context before starting new orchestration."
 }
