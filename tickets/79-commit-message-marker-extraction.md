@@ -72,13 +72,25 @@ The prompt example at `role-prompt-templates.ts:99` itself contains an inline `<
 
 ## Acceptance Criteria
 
-- [ ] `extractCommitMessage()` selects the **last well-formed `<commit-message>`→`</commit-message>` pair**, pairing the last closing tag with the last opening tag that precedes it (or documented-equivalent robust strategy).
-- [ ] Stripping removes **only the chosen block span** (by index), not a spanning global regex that can delete intervening prose; `\n{3,}`→`\n\n` collapse and final `.trim()` are preserved.
-- [ ] **Regression test** in `apps/agent/src/llm/claude-code.service.spec.ts` reproduces the prose-mention-before-real-block case: result text mentions `` `<commit-message>` `` in prose (mirroring commit `baec262`), then emits a real block; asserts `commitMessage` equals the real block's content (correct subject on line 1) and that the prose text is **not** used as the subject.
-- [ ] All existing `commit-message extraction` tests (single block, no block → `undefined`, multi-block last-wins, multi-line verbatim, malformed/unclosed → no block, middle-of-text) still pass unchanged.
-- [ ] Added tests for: empty block → `undefined`; stripped text retains legitimate prose that appeared before a prose-mention (no collateral deletion).
-- [ ] `npm run build`, `npm run lint`, `npm run test` all pass (baseline: 48 suites / 905 tests).
-- [ ] Ticket Implementation Notes added post-merge (files modified, deviations, verification results); acceptance criteria flipped to `- [x]`.
+- [x] `extractCommitMessage()` selects the **last well-formed `<commit-message>`→`</commit-message>` pair**, pairing the last closing tag with the last opening tag that precedes it (or documented-equivalent robust strategy).
+- [x] Stripping removes **only the chosen block span** (by index), not a spanning global regex that can delete intervening prose; `\n{3,}`→`\n\n` collapse and final `.trim()` are preserved. *(Implemented as iterative index-based removal of every well-formed pair — see Implementation Notes deviation below.)*
+- [x] **Regression test** in `apps/agent/src/llm/claude-code.service.spec.ts` reproduces the prose-mention-before-real-block case: result text mentions `` `<commit-message>` `` in prose (mirroring commit `baec262`), then emits a real block; asserts `commitMessage` equals the real block's content (correct subject on line 1) and that the prose text is **not** used as the subject.
+- [x] All existing `commit-message extraction` tests (single block, no block → `undefined`, multi-block last-wins, multi-line verbatim, malformed/unclosed → no block, middle-of-text) still pass unchanged.
+- [x] Added tests for: empty block → `undefined`; stripped text retains legitimate prose that appeared before a prose-mention (no collateral deletion).
+- [x] `npm run build`, `npm run lint`, `npm run test` all pass (baseline: 48 suites / 905 tests).
+- [x] Ticket Implementation Notes added post-merge (files modified, deviations, verification results); acceptance criteria flipped to `- [x]`.
+
+## Implementation Notes
+
+**Files modified:**
+- `apps/agent/src/llm/claude-code.service.ts` — rewrote `extractCommitMessage()` (~lines 365–420).
+- `apps/agent/src/llm/claude-code.service.spec.ts` — added two regression tests to the `commit-message extraction` describe block: the prose-mention-before-real-block case (mirrors `baec262`) and the empty-block case.
+
+**Algorithm implemented:** A `findLastPair(haystack)` helper does the two-step index scan the ticket specifies — case-insensitive `lastIndexOf` for `</commit-message>`, then case-insensitive `lastIndexOf` for `<commit-message>` searching only *before* that close index. This is run once against the original text to determine `message` (the real block, correctly skipping any earlier unmatched/prose opening tag, since the search for the opening tag starts from just before the chosen close and finds the *nearest* preceding open — the real one — not the more distant prose one).
+
+**Deviation from the ticket's literal proposal (§ "Recommended strategy," step 4):** the ticket describes stripping *only* the single chosen pair's span via one index-based removal. Implemented instead: `findLastPair` is invoked in a loop against a working copy of the text, removing one well-formed pair per iteration (right-to-left) until no `</commit-message>` remains. This was necessary to keep the existing "two genuine blocks (revision)" test passing unchanged (AC requires it): that test asserts **both** blocks are removed from the stripped result, not just the last one. A single-span strip would leave the first, earlier well-formed block's tags in the stripped text, breaking `expect(result.result).not.toContain('commit-message')`. The iterative approach still fixes the reported bug: a *dangling* unmatched opening tag (the prose mention) is never paired with any close, so the loop terminates without ever touching it — the prose sentence survives in the stripped output exactly as the behavior matrix requires. Net effect: identical outcome to the ticket's matrix for every row, differing only in the internal mechanism (loop of index-pair removals vs. a single index-pair removal) needed to reconcile "strip only the chosen span" with "multiple genuine blocks are both removed."
+
+**Verification:** `npm run build && npm run lint && npm run test` — 48 suites / 907 tests pass (905 baseline + 2 new tests added by this ticket). No regressions in the pre-existing six `commit-message extraction` tests.
 
 ## Dependencies and References
 
