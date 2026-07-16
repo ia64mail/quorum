@@ -117,7 +117,7 @@ Agents have built-in skills activated by setting the `action` field to a slash c
 | 2 — Standard | `/review\n\n<focus areas>` | **The default for most reviews** — normal feature and fix PRs | Moderate — one structured review pass |
 | 3 — Deep | `/code-review\n\n<focus areas>` | Low confidence in the change, questionable or hard-to-assess implementations, highly sensitive surfaces (permission guards, broker safeguards, git/commit handling, auth) | Long and expensive — multi-agent pipeline (parallel CLAUDE.md compliance auditors, bug detector, git-blame history analyzer, confidence scoring); the reason the teamlead timeout is 15 min |
 
-Tier selection is part of authoring the brief. Escalate (1 → 2 → 3) rather than repeat a tier when a review leaves open questions, its findings are disputed, or the diff turns out riskier than briefed. Whatever the tier, the reviewer's reporting duty is identical — the full review report lands on the PR per quorum.md's Review Protocol; tier 1 changes the machinery, not the depth bar.
+Tier selection is part of authoring the brief, and escalation is yours alone: the tier binds the skill the reviewer runs, and reviewers never switch tiers mid-review — if a dispatched tier proves insufficient, the verdict says so and you escalate on the next brief. Escalate (1 → 2 → 3) rather than repeat a tier when a review leaves open questions, its findings are disputed, or the diff turns out riskier than briefed. Whatever the tier, the reviewer's reporting duty is identical — the full review report lands on the PR per quorum.md's Review Protocol; tier 1 changes the machinery, not the depth bar.
 
 | Intent | Target | action |
 |--------|--------|--------|
@@ -151,7 +151,7 @@ When dispatching `developer` for implementation, split into separate invocations
 
 ### Gating `/simplify`
 
-`/simplify` is the most expensive per-turn skill (it spawns sub-agents). Dispatch it only when one of the following is true: (a) the implementation touched > 7 source files, (b) the developer's own report flagged TODOs / hygiene concerns / format-only churn, or (c) the prior iteration introduced new abstractions. Otherwise skip and go straight to `/code-review`.
+`/simplify` is the most expensive per-turn skill (it spawns sub-agents). Dispatch it only when one of the following is true: (a) the implementation touched > 7 source files, (b) the developer's own report flagged TODOs / hygiene concerns / format-only churn, or (c) the prior iteration introduced new abstractions. Otherwise skip and go straight to the review dispatch, tiered per the table above.
 
 ## Ticket Workflow Discipline
 
@@ -162,7 +162,7 @@ Every ticket follows a **two-phase user-review process**. Never skip the pauses 
 1. **Clarify user inputs.** Ask if scope or intent is ambiguous. Settle epic-vs-standalone before creating anything.
 2. **Drive `/gh-workflow`** to create infrastructure: draft a ticket MD file in `tickets/` → GH issue (with milestone if epic-attached) → branch off staging-or-main → PR. Always use the `Resolves:` two-step retarget trick when the PR targets a non-`main` base.
 3. **Phase 1 — User Spec Review.** Pause after the ticket-only PR is open. The user reviews the spec MD in the PR. **Do not dispatch implementation work until the user explicitly approves.** This is non-negotiable — the spec review is the user's opportunity to refine requirements, adjust scope, or reject the approach entirely.
-4. **Run the dev flow.** Optional teamlead expansion of implementation details in the ticket. Optional architect design review for cross-cutting or design-heavy tickets. Developer implements. Teamlead dispatches `/code-review`. Developer addresses review feedback.
+4. **Run the dev flow.** Optional teamlead expansion of implementation details in the ticket. Optional architect design review for cross-cutting or design-heavy tickets. Developer implements. Teamlead reviews at the tier you dispatched (see Skill Dispatch — Reviews Are Tiered). Developer addresses review feedback.
 5. **Phase 2 — User Final Review.** Pause again when implementation and reviews are complete. The user reviews the completed PR and merges — to `main` for standalone issues, to the staging branch for sub-issues under an epic. Do not merge on the user's behalf.
 
 ### Workspace Model
