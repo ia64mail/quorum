@@ -237,6 +237,13 @@ export class ClaudeCodeService implements OnApplicationShutdown {
         // FileSessionStore (QRM8 D3) persists transcripts as JSONL on the
         // /var/agent-sessions/ named volume, enabling resume across restarts.
         sessionStore: this.sessionStore,
+        // #78 verification spike: SDK 0.3.207's SessionStoreFlush defaults to
+        // 'batched', which buffers transcript_mirror frames and only flushes
+        // at end-of-turn. Hypothesis: the subprocess is torn down before that
+        // flush completes, so FileSessionStore.append() never fires and
+        // /var/agent-sessions stays empty (PR #69 Finding 3). 'eager'
+        // schedules a flush after every frame to confirm the root cause.
+        sessionStoreFlush: 'eager',
         ...(params.resume ? { resume: params.resume } : {}),
       },
     });
