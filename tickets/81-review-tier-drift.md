@@ -59,13 +59,13 @@ Verify the tier table and the escalation note agree with the sharpened `quorum.m
 
 ## Acceptance Criteria
 
-- [ ] `quorum.md` § Review Tiers states the tier→skill binding: no substitution, skill runs first, reviewer never self-escalates (escalation belongs to the dispatcher).
-- [ ] `quorum.md` § Reporting prohibits retroactive skill runs and scopes the two-comment format to reviews where the dispatched tier's skill actually ran.
-- [ ] Teamlead role template carries the same rules; `role-prompt-templates.spec.ts` pins the new wording and is green.
-- [ ] `docker/moderator/settings.json` no longer contains the "ALWAYS use action: '/code-review'" instruction; the replacement references the tier model.
-- [ ] `docker/moderator/CLAUDE.md` tier guidance is consistent with the sharpened `quorum.md` text.
-- [ ] `npm run build`, `npm run lint`, `npm run test` pass.
-- [ ] Operator runtime check (post container rebuild, next `/review` dispatch): the teamlead invokes `Skill {"skill":"review"}` exactly once, before its own passes; invocation cost lands back in the historical $1.8–$2.7 band.
+- [x] `quorum.md` § Review Tiers states the tier→skill binding: no substitution, skill runs first, reviewer never self-escalates (escalation belongs to the dispatcher).
+- [x] `quorum.md` § Reporting prohibits retroactive skill runs and scopes the two-comment format to reviews where the dispatched tier's skill actually ran.
+- [x] Teamlead role template carries the same rules; `role-prompt-templates.spec.ts` pins the new wording and is green.
+- [x] `docker/moderator/settings.json` no longer contains the "ALWAYS use action: '/code-review'" instruction; the replacement references the tier model.
+- [x] `docker/moderator/CLAUDE.md` tier guidance is consistent with the sharpened `quorum.md` text.
+- [x] `npm run build`, `npm run lint`, `npm run test` pass. (Green in the #78 verification runs this session — the suite includes the #81 spec pins on `The tier binds the skill` / `never self-escalate` / `never retroactively`; not re-run here.)
+- [x] Operator runtime check (post container rebuild, next `/review` dispatch): the teamlead invokes `Skill {"skill":"review"}` exactly once, before its own passes; invocation cost lands back in the historical $1.8–$2.7 band. (verified 2026-07-16 via PR #83 `/review` — $2.49, single `review`-skill run, raw output at https://github.com/ia64mail/quorum/pull/83#issuecomment-4987661148)
 
 ## Dependencies and References
 
