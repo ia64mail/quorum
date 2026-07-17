@@ -12,15 +12,6 @@ The #68 runbook exercised several subsystems and, as a side effect, exposed doc 
 
 Risk of not doing it: `docs/` is the architect role's "desired system" reference; drift here propagates into future design and review decisions. The Check-10 error is worse than cosmetic — it tells an operator running the runbook to treat a *by-design* env var as a leak, producing a false failure.
 
-### ⚠️ Base-branch prerequisite (verify before implementing)
-
-**This ticket's file was authored on branch `84-doc-runbook-drift-cluster`, which was cut from `main` (`15b7745`). That base is ~111 commits behind `origin/49-stabilization` and does NOT contain #68, #72, #74, or #59.** On the `main` base:
-
-- `tickets/68-bump-agent-sdk-cc-cli-opus-4-8.md` **does not exist** (Item 5 cannot be edited).
-- `teamlead` timeout is still `10 min` and `CONTEXT_DEFAULT_MAX_TOKENS` default is still `2000` — so "correct the doc to match code" would produce the *wrong* targets (Items 2 and 3 would look like no-ops).
-
-**The implementation must be done on a branch cut from `origin/49-stabilization`** (the QRM9 epic integration branch), not `main`. All verified targets below were confirmed against `origin/49-stabilization` (tip `461996e`, Merge PR #88). Line numbers are from that tip — re-grep before editing, as they shift.
-
 ## Implementation Details
 
 Five edits. Each was verified by reading the source of truth on `origin/49-stabilization`; the delta (doc-says → code-says) is recorded so the developer edits to the confirmed value.
@@ -86,13 +77,13 @@ The regions are disjoint (L161/L202 vs L327), so **no textual merge conflict is 
 
 ## Acceptance Criteria
 
-- [ ] Implementation performed on a branch cut from `origin/49-stabilization` (NOT `main`); base confirmed to contain #68/#72/#74/#59 before editing.
-- [ ] `docs/message-broker.md` ROLE_TIMEOUTS snippet updated: architect 5→15, teamlead 10→15, moderator explicit 5-min entry added, and the "roles not in the map" prose reconciled. developer/qa/productowner unchanged.
-- [ ] `docs/mcp-connectivity.md` teamlead timeout corrected 10→15 min at every occurrence (verified via grep).
-- [ ] `docs/context-store.md` `CONTEXT_DEFAULT_MAX_TOKENS` default corrected 2000→3000.
-- [ ] `docs/system-design.md` agent-scope wording (~L327) reworded to state agent scope is role-keyed (`agent:<role>:<key>`), distinguishing agent-scope id (role) from conversation-scope id (correlationId), per #59.
-- [ ] `tickets/68-…md` Check 10 expected-absent list has `ANTHROPIC_API_KEY` removed (GH_TOKEN/REPO_URL/MCP_* retained).
-- [ ] No code files modified; `npm run build`/`lint`/`test` unaffected (doc-only change — record that no code paths were touched).
+- [x] Implementation performed on a branch cut from `origin/49-stabilization` (NOT `main`); base confirmed to contain #68/#72/#74/#59 before editing.
+- [x] `docs/message-broker.md` ROLE_TIMEOUTS snippet updated: architect 5→15, teamlead 10→15, moderator explicit 5-min entry added, and the "roles not in the map" prose reconciled. developer/qa/productowner unchanged.
+- [x] `docs/mcp-connectivity.md` teamlead timeout corrected 10→15 min at every occurrence (verified via grep).
+- [x] `docs/context-store.md` `CONTEXT_DEFAULT_MAX_TOKENS` default corrected 2000→3000.
+- [x] `docs/system-design.md` agent-scope wording (~L327) reworded to state agent scope is role-keyed (`agent:<role>:<key>`), distinguishing agent-scope id (role) from conversation-scope id (correlationId), per #59.
+- [x] `tickets/68-…md` Check 10 expected-absent list has `ANTHROPIC_API_KEY` removed (GH_TOKEN/REPO_URL/MCP_* retained).
+- [x] No code files modified; `npm run build`/`lint`/`test` unaffected (doc-only change — record that no code paths were touched).
 - [ ] Coordination note left on #67 to rebase its `system-design.md` edits after #84 lands.
 
 ## Dependencies and References

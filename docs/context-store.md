@@ -359,7 +359,7 @@ When `backend=inmemory`, `OpenSearchModule` and `EmbeddingModule` are **not impo
 
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|
-| `CONTEXT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for `context_query` search mode |
+| `CONTEXT_DEFAULT_MAX_TOKENS` | `3000` | Default token budget for `context_query` search mode |
 | `CONTEXT_TOKEN_CHAR_RATIO` | `4` | Characters per token estimate (used by `context_summarize`) |
 
 ### OpenSearch
