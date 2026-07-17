@@ -58,6 +58,12 @@ export const CODE_REVIEW_PLUGIN = {
 const COMMON_DISALLOWED_TOOLS: string[] = [
   'AskUserQuestion', // Hangs indefinitely — no interactive user in agent sessions
   'ExitPlanMode', // Agent sessions don't enter plan mode
+  // #87: a wakeup can never fire in a single-shot invocation — one query()
+  // per invoke_agent, no harness re-invoke — so denying the tool stops the
+  // model from ever forming the "harness will wake me later" plan that left
+  // /code-review's background sub-agent fan-out stranded (see the PreToolUse
+  // `Agent` rewrite in sdk-hooks.factory.ts for the companion fix).
+  'ScheduleWakeup',
 ];
 
 type DeployableRole = (typeof DEPLOYABLE_AGENT_ROLES)[number];

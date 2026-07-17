@@ -72,6 +72,64 @@ describe('createObservabilityHooks', () => {
     );
   });
 
+  // #87 — Agent tool background-by-default on SDK 0.3.207 strands
+  // fan-out skills like /code-review inside a single-shot invocation.
+  // The PreToolUse hook must rewrite Agent calls to run_in_background:false.
+  it('should rewrite Agent tool calls to run_in_background:false via updatedInput (#87)', async () => {
+    const input: PreToolUseHookInput = {
+      ...BASE,
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { description: 'review', prompt: 'do a review' },
+    };
+
+    const result = await firstHookFn(hooks.PreToolUse)(input, 'toolu_agent1', {
+      signal,
+    });
+
+    expect(result).toEqual({
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: {
+          description: 'review',
+          prompt: 'do a review',
+          run_in_background: false,
+        },
+      },
+    });
+  });
+
+  it('should leave an explicit run_in_background:false Agent call untouched (no redundant rewrite)', async () => {
+    const input: PreToolUseHookInput = {
+      ...BASE,
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { description: 'review', run_in_background: false },
+    };
+
+    const result = await firstHookFn(hooks.PreToolUse)(input, 'toolu_agent2', {
+      signal,
+    });
+
+    expect(result).toEqual({ continue: true });
+  });
+
+  it('should NOT rewrite Bash calls even though they share the run_in_background param (#87 scope guard)', async () => {
+    const input: PreToolUseHookInput = {
+      ...BASE,
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'npm run build', run_in_background: true },
+    };
+
+    const result = await firstHookFn(hooks.PreToolUse)(input, 'toolu_bash1', {
+      signal,
+    });
+
+    expect(result).toEqual({ continue: true });
+  });
+
   it('should truncate long tool_input to 200 chars', async () => {
     const input: PreToolUseHookInput = {
       ...BASE,
