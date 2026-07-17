@@ -110,3 +110,34 @@ Notes / edge cases the loop handles correctly:
 - Normalising other git global flags that could reposition the subcommand (`--git-dir=`, `--work-tree=`, `-p`/`--paginate`) — not in #65's threat model; note as possible future hardening only.
 - Any change to the `SDK_ENV_ALLOWLIST` boundary itself (Item 2 is doc-only — the code is already correct).
 - Turning `splitShellSegments`/`extractSegmentHead` into a full shell/quoting parser — the deliberately-naive posture from #65 is retained.
+
+## Implementation Notes
+
+**Status:** Complete — accepted (deep-tier `/code-review`, PR #90, base `49-stabilization`).
+**Date:** 2026-07-17
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `apps/agent/src/config/tool-guard-hook.ts` | `extractSegmentHead` (`:159-171`): replaced the single non-global `s.replace(/^git\s+-c\s+\S+\s+/, 'git ')` with a repeat-until-stable `do { prev = s; s = s.replace(...) } while (s !== prev)` loop, stripping **all** leading `-c <k=v>`/`-C <path>` flags before deny-verb matching. Explanatory block comment added. |
+| `apps/agent/src/config/tool-guard-hook.spec.ts` | +4 tests in the `#65 token-aware deny-guard` block: two-flag `commit`, reversed-order `commit`, interleaved `-c a=b -C … -c c=d commit`, and multi-flag `push` — each asserts `allowed === false` and `reason` contains the denied verb. |
+| `docs/system-design.md` | `:161` git-auth row now names both `GH_TOKEN` and `GIT_CONFIG_GLOBAL` as `SDK_ENV_ALLOWLIST` omissions; `:202` step 4 now describes the commit-if-dirty → rev-list-against-origin → push-if-ahead gate. `:327` (#84) untouched. |
+
+### Deviations from Ticket Spec
+
+None. The implementation matches the ticket's prescribed `do/while` loop and doc edits verbatim.
+
+### Verification
+
+- `npm run build && npm run lint && npm run test` — all green. 48 suites / **922 tests** (918 baseline + 4 new), 0 lint errors.
+- Loop termination: each successful match strictly shortens `s` (replaces `git -c <arg> ` ≥ 9 chars with `git ` = 4 chars); `prev !== s` guard is sound — no infinite loop, no under-strip for unquoted flags.
+- Multi-flag bypass forms (both orderings, interleaved, N≥2) confirmed DENIED; read-only allow-tests (`git -C <wt> status`, `git -C <wt> log --oneline`, `git log --grep=commit`) still pass — no regression, no new false positives.
+
+### Known Scope Boundaries (deferred, non-load-bearing)
+
+Two bypass classes remain open and are **explicitly out of scope** per the ticket, each neutralised by the #65 keystone (`commitAndPush` pushes anything ahead of origin, so a snuck commit never orphans):
+- Long-form `--git-dir=`/`--work-tree=` global flags are not stripped (regex matches only `-c`/`-C`) — `git --git-dir=… commit` remains reachable.
+- A quoted `-c` value containing a space (`git -c user.name="a b" commit`) desyncs the `\S+` regex — pre-existing since #65's single-strip form; the naive-parser posture is deliberate.
+
+Recommended follow-up ticket: generalise the strip to all verb-repositioning global flags (or move to argv-aware matching) as QRM9+ hardening.
