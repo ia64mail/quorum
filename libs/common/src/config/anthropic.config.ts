@@ -10,7 +10,7 @@ const schema = z.object({
 export const anthropicConfig = registerAs('anthropic', () =>
   schema.parse({
     apiKey: process.env.ANTHROPIC_API_KEY,
-    model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929',
+    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
     maxTokens: parseInt(process.env.ANTHROPIC_MAX_TOKENS || '4096', 10),
   }),
 );

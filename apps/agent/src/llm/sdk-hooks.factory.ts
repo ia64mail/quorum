@@ -32,6 +32,32 @@ export function createObservabilityHooks(
             logger.debug(
               `SDK tool start: ${tool_name} ${truncateJson(tool_input, 200)}`,
             );
+
+            // #87: on SDK 0.3.207 the `Agent` tool (subagent spawner used by
+            // fan-out skills like /code-review) runs in the background by
+            // default. Quorum invocations are single-shot — one query() per
+            // invoke_agent, the message loop returns at the first `result`
+            // frame (claude-code.service.ts executeQuery) — so a
+            // backgrounded sub-agent is killed with the subprocess before it
+            // can report back, and the turn silently completes with no
+            // verdict. Deterministically rewrite `Agent` calls to run
+            // synchronously via the documented PreToolUse `updatedInput`
+            // mechanism (sdk.d.ts PreToolUseHookSpecificOutput). Scoped
+            // strictly to `Agent` — `run_in_background` also appears on
+            // `BashInput` and must NOT be touched here.
+            if (tool_name === 'Agent') {
+              const ti = (tool_input ?? {}) as Record<string, unknown>;
+              if (ti.run_in_background !== false) {
+                return {
+                  continue: true,
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    updatedInput: { ...ti, run_in_background: false },
+                  },
+                };
+              }
+            }
+
             return PASS_THROUGH;
           },
         ],

@@ -202,16 +202,16 @@ Different agents have different expected response times. The broker wraps delive
 
 ```typescript
 const ROLE_TIMEOUTS: Partial<Record<AgentRole, number>> = {
-  architect:    5 * 60_000,   // 5 min — design review
-  teamlead:    10 * 60_000,   // 10 min — ticket creation
+  moderator:    5 * 60_000,   // 5 min — user clarification via elicitation
+  architect:   15 * 60_000,   // 15 min — design review / research
+  teamlead:    15 * 60_000,   // 15 min — /code-review pipeline
   developer:   30 * 60_000,   // 30 min — implementation
   qa:          15 * 60_000,   // 15 min — test execution
   productowner: 2 * 60_000,   // 2 min — clarification
-  // moderator: uses defaultTimeoutMs (user interaction time varies)
 };
 ```
 
-Roles not in the map (currently `moderator`) fall back to `defaultTimeoutMs`.
+Every role is now explicit in the map, including `moderator`. Roles not in the map fall back to `defaultTimeoutMs` — currently no deployable role relies on that fallback, but it remains the safety net for any future role added without an explicit entry.
 
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|

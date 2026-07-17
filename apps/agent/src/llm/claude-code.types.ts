@@ -78,4 +78,8 @@ export type ExecuteResult =
       totalCostUsd: number;
       /** Number of conversation turns consumed (may be absent on pre-API failures). */
       numTurns?: number;
+      /** SDK-reported terminal reason (0.3.203+). Structured signal used to
+       *  detect missing-resume-session failures without brittle string
+       *  matching. See #68 Round-2 Finding 6. */
+      terminalReason?: string;
     };

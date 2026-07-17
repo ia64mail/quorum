@@ -208,10 +208,10 @@ No labels needed — the sub-issue graph and milestone carry the signal.
 
 ### Commit Messages
 - **Canonical format (post-#20):** `#<issue-number>: <concise description>` — use the GitHub issue number as the prefix. This format was established by ticket #20 (PR-based workflow bootstrap) and applies to all subsequent work.
-- **Bug/no-ticket:** `QRMX(no-ticket): <description>` for ad-hoc fixes not tied to an issue. Prefer filing an issue first so commits are traceable.
+- **Bug/no-ticket:** `QRMX(no-ticket): <description>` for ad-hoc fixes not tied to an issue, where `QRMX` is the milestone currently in flight (e.g. `QRM9`). When no milestone is in flight, use `(no-ticket): <description>`. Prefer filing an issue first so commits are traceable.
 - **Legacy format:** `QRMX-NNN: <concise description>` is retained for historical commits and remains acceptable on tickets that predate the GH-issue-numbered convention.
 - Keep the description concise — what changed and why, not how
-- Multiple logical units → separate commits, each with the same issue-number prefix
+- Multiple logical units → separate commits, each with the same issue-number prefix. **Agent caveat:** the invocation handler makes exactly **one commit per invocation** — an agent cannot split its work into multiple commits; write one commit message covering the whole change, and reserve multi-commit splits for work spread across separate invocations
 - Examples:
   - `#20: add PR-based workflow bootstrap spec`
   - `#42: implement multi-agent conversation routing`
@@ -223,6 +223,18 @@ No labels needed — the sub-issue graph and milestone carry the signal.
 ## Review Protocol
 
 This protocol defines how implementation work is reviewed against ticket requirements. It is the Team Lead's primary reference during code review (see [Team Lead → Code review](#team-lead)).
+
+### Review Tiers
+
+The dispatcher (normally the moderator) picks one of three review tiers when authoring the brief. The tier sets the machinery, not the discipline — the Review Workflow below and the Reporting rules apply at every tier:
+
+1. **Lightweight** — a natural-language review ask, no skill. For small, mechanical, or low-risk changes with high prior confidence, and follow-up re-reviews of feedback fixes. Quick and cheap; produces no raw skill output (single-comment reporting).
+2. **Standard (`/review`)** — **the default for most reviews.** One structured review pass over the PR. Moderate cost.
+3. **Deep (`/code-review`)** — for low-confidence, questionable, or hard-to-assess changes, and highly sensitive surfaces (permission guards, broker safeguards, git/commit handling, auth). A long, expensive multi-agent pipeline with confidence scoring.
+
+**The tier binds the skill.** A `/review` dispatch is satisfied by the `review` skill and a `/code-review` dispatch by the `code-review` skill — never substitute one for the other, in either direction. At a skill tier, run the dispatched skill **first**, before your own review passes: its raw output is an *input* to the review, not a compliance artifact to generate after the fact.
+
+Escalation (1 → 2 → 3) is the **dispatcher's** decision, made when authoring the next brief — escalate rather than repeat a tier when a review leaves open questions or its findings are disputed. The reviewer never self-escalates the machinery mid-review: if the dispatched tier proves insufficient, record that in the verdict and leave the escalation to the dispatcher.
 
 ### Review Workflow
 
@@ -245,6 +257,8 @@ This protocol defines how implementation work is reviewed against ticket require
    c. **Convention compliance** — Check that the implementation follows patterns defined in this file (import patterns, testing patterns, code style) and existing codebase conventions. Only flag violations that materially affect maintainability — skip pedantic nitpicks.
 
    d. **Integration check** — Verify the changes integrate correctly with the rest of the system: module wiring, barrel exports, dependency injection, cross-module contracts. Run `npm run build` and `npm run test` to confirm nothing is broken.
+
+   e. **Out-of-charter pass** — At least one pass must look beyond what the review brief asked for. Ask: **which ticket owns the interaction this change touches?** If none does, examine that seam directly. A review charter can accidentally fence out the defect — verifying only what the brief lists confirms the fence, not the change.
 
 4. **Score and filter** — For each finding, assess confidence (is this a real issue or a false positive?):
    - **High confidence**: The issue is verified against code, will affect functionality or maintainability, and the evidence is clear. Include in review.
@@ -289,17 +303,19 @@ This protocol defines how implementation work is reviewed against ticket require
 
 ### Reporting (PR workflow)
 
-When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github-workflow)), the Team Lead **must** publish the verdict as a PR comment. This applies to **every** PR-based review — `/code-review` skill dispatches, lightweight reviews, and follow-up re-reviews alike. A review is not concluded until its outcome is visible on the PR. The exact format depends on whether a `/code-review` run produced raw output:
+When the review is conducted on a PR-based ticket (per [GitHub Workflow](#github-workflow)), the Team Lead **must** publish the verdict as a PR comment. This applies to **every** PR-based review at **every** tier — skill dispatches (`/review`, `/code-review`), lightweight reviews, and follow-up re-reviews alike. A review is not concluded until its outcome is visible on the PR. The exact format depends on whether a review-skill run produced raw output:
 
-**With `/code-review` skill output** — report as **two separate PR comments**, in order:
+**With review-skill output** (`/review` or `/code-review` — the dispatched tier's skill actually ran as part of conducting the review) — report as **two separate PR comments**, in order:
 
-1. **Raw skill output** — post the verbatim output of the `/code-review` skill as the first PR comment, unmodified. No paraphrasing, no editorial cuts. This gives the user direct visibility into what the structured review pipeline produced before any agent judgment is applied.
+1. **Raw skill output** — post the verbatim output of the review skill as the first PR comment, unmodified. No paraphrasing, no editorial cuts. This gives the user direct visibility into what the structured review pipeline produced before any agent judgment is applied.
 
-2. **Verdict summary** — post a second comment containing the Accept/Decline verdict (per the format in step 5 above). The summary **must reference the prior raw comment rather than restate its findings**: if you agree with the skill, say so and proceed to the verdict; if you disagree with specific findings or downgrade their confidence, name which ones and why. Do not duplicate the raw output in the summary.
+2. **Verdict comment — the full review report** — post a second comment containing the complete review report, not a bare verdict: an overview of what the change does, the acceptance-criteria audit with evidence (`file:line`), the outcome of the convention/integration/out-of-charter passes, findings triage, and the Accept/Decline verdict (per the format in step 5 above). **Depth bar:** the comment must show *what was verified and how* — a comment that is only a verdict line (or only "no issues found") is not a concluded review. The report **must reference the prior raw comment rather than restate its findings**: if you agree with the skill, say so and proceed; if you disagree with specific findings or downgrade their confidence, name which ones and why. Do not duplicate the raw output.
 
-The split exists so the user can audit *what the skill said* vs *what the Team Lead decided* independently. Both comments are required when the review used `/code-review`.
+The split exists so the user can audit *what the skill said* vs *what the Team Lead decided* independently. Both comments are required when the review used a review skill.
 
-**Without `/code-review` skill output** (lightweight review, follow-up re-review, or any review where no raw skill output exists) — post a single PR comment containing the Accept/Decline verdict in the same format as step 5 above. No raw-output comment is needed because none exists; the verdict comment alone satisfies the rule.
+**Without review-skill output** (lightweight tier-1 review, follow-up re-review, or any review where no raw skill output exists) — post a single PR comment containing the full review report to the same depth bar as above. No raw-output comment is needed because none exists; the report comment alone satisfies the rule.
+
+**Never run a review skill retroactively** — after the review is already done — solely to manufacture a raw-output comment. The two-comment format follows from how the review was conducted; it never dictates running extra machinery. If no skill ran, single-comment reporting applies.
 
 ---
 
@@ -315,7 +331,7 @@ You are the **technical authority** and the **owner of `docs/`**. Your primary r
 
 2. **Documentation ownership** — Every file in `docs/` is your responsibility. Documentation must be a living reference that describes the **current desired state** of the system. When designs evolve through milestones, update docs accordingly. Documentation is not aspirational — it describes what the system should be after the current milestone completes.
 
-3. **Design review** — When reviewing implementations or tickets, read the actual code (`Grep`, `Glob`, `FileRead`). Never review based on descriptions alone. Ground every design judgment in what the codebase actually contains.
+3. **Design review** — When reviewing implementations or tickets, read the actual code (`Grep`, `Glob`, `Read`). Never review based on descriptions alone. Ground every design judgment in what the codebase actually contains.
 
 4. **Staying in sync** — Continuously follow the ticket library (`tickets/`) to understand how the project evolves. Every ticket is a time snapshot of reasoning — read them to understand not just what was built, but why.
 
@@ -357,7 +373,7 @@ You are the **coordination and decomposition specialist** responsible for transl
 
 2. **Implementation guidance** — Your tickets are the developer's primary input. Implementation details should be specific enough that the developer knows *what* to build, *where* to put it, and *how* it integrates with existing code. Reference specific files, modules, and patterns from the current codebase.
 
-3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria. When reviewing PR-based work, also follow [Reporting (PR workflow)](#reporting-pr-workflow): every PR-based review concludes with a verdict comment on the PR — two comments (raw `/code-review` output + verdict summary) when the skill produced raw output, a single verdict comment for lightweight reviews where it didn't.
+3. **Code review** — After implementation, you review the developer's work following the [Review Protocol](#review-protocol). The protocol defines the full workflow: eligibility check, context gathering, multi-pass review (acceptance criteria, bugs, conventions, integration), confidence filtering, and verdict format. Your review results in Accept or Decline — see the protocol for exact output format and criteria. When reviewing PR-based work, also follow [Reporting (PR workflow)](#reporting-pr-workflow): every PR-based review concludes with the full review report posted on the PR — two comments (raw skill output + full review report) when a review skill produced raw output, a single report comment for lightweight reviews where it didn't. The review tier (`/review` vs `/code-review` vs lightweight) is set by the dispatcher per [Review Tiers](#review-tiers).
 
    After accepting a review, also store a **project-scope synthesis** in the Context Store (key: `{ticket-id}-project-notes`, scope: `project`) summarizing what this implementation established at the project level:
    - Patterns introduced or reused (with file paths as evidence)
@@ -422,7 +438,7 @@ You are the **implementation specialist** — the final and only person responsi
 
 #### Implementation Protocol
 
-1. **Read first**: Use `Grep`, `Glob`, and `FileRead` to understand existing patterns before writing new code
+1. **Read first**: Use `Grep`, `Glob`, and `Read` to understand existing patterns before writing new code
 2. **Query context**: Check Context Store for architectural decisions, constraints, and prior work in the task chain
 3. **Read `quorum.md`**: This file — for project-specific conventions
 4. **Match existing patterns**: Follow the codebase's established conventions for imports, naming, testing, module structure
@@ -466,8 +482,8 @@ Operational rules for the moderator's ticket lifecycle — the 5-step workflow, 
 
 ## Constraints
 
-- **Shared workspace**: All agents see the same files. Changes are immediately visible to everyone. Coordinate through Context Store and tickets, not assumptions about file state.
-- **Git discipline**: No force-pushes. Developers commit implementation; team leads can commit ticket updates. Architects do not commit.
+- **Isolated workspaces**: Agents do NOT share a filesystem — each invocation runs in its own git worktree on that agent's clone, and changes propagate only through git commit/push to the remote. Never assume another agent's edits are visible without a pull. Coordinate through Context Store and tickets, not assumptions about file state.
+- **Git discipline**: No force-pushes. Developers commit implementation; team leads can commit ticket updates. Architects do not commit. (For agents, "commit" means authoring the commit message — the invocation handler runs the actual `git commit`/`git push`, one commit per invocation; see Commit Messages.)
 - **Context Store**: Store decisions so others can find them. Query before assuming. This is what makes multi-agent collaboration work.
 - **Ticket library as knowledge base**: Tickets are the project's memory. They explain *why* decisions were made. Always read relevant tickets before starting work on a related area.
 - **Documentation as source of truth for design**: `docs/` describes the desired system. The codebase is the source of truth for implementation. Tickets explain the reasoning trail between them.

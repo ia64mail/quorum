@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Detect uid/gid mismatch between the baked user and the tmpfs mounts.
+# The moderator's ~/.claude is on a named volume, but ~/.config, ~/.local,
+# ~/.cache (x-base-security) are tmpfs mounts that default their uid/gid
+# to ${HOST_UID:-1000},${HOST_GID:-1000}. A bare `docker compose up
+# --force-recreate` without HOST_UID/HOST_GID exported produces mounts
+# owned by uid 1000 while the baked user has a different uid → the first
+# tmpfs write (`mkdir -p /home/quorum/.config/git` below) fails with an
+# opaque "Permission denied". See #68 Round-2 Finding 5.
+_home_config_owner_uid=$(stat -c '%u' /home/quorum/.config)
+_me_uid=$(id -u)
+if [ "${_home_config_owner_uid}" != "${_me_uid}" ]; then
+  echo "FATAL: /home/quorum/.config is owned by uid=${_home_config_owner_uid} but this entrypoint runs as uid=${_me_uid} (user $(id -un))." >&2
+  echo "This usually means \`docker compose up --force-recreate\` was run without HOST_UID/HOST_GID exported." >&2
+  echo "Fix: export HOST_UID=\$(id -u) HOST_GID=\$(id -g) before docker compose, or use ./scripts/start.sh." >&2
+  exit 78  # EX_CONFIG
+fi
+
 # Restore baked config into the writable home directory (tmpfs in the agent profile,
 # named volume in the moderator profile). The build-time COPY at /etc/claude/ is the
 # source of truth.

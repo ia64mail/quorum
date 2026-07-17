@@ -1,13 +1,11 @@
 import { AgentRole } from '../messaging/agent-role.enum';
 import {
   getRolePromptTemplate,
-  GENERIC_PROMPT_TEMPLATE,
   SYSTEM_PREAMBLE,
 } from './role-prompt-templates';
 
 describe('getRolePromptTemplate', () => {
   const rolesWithTemplates: AgentRole[] = [
-    AgentRole.moderator,
     AgentRole.architect,
     AgentRole.teamlead,
     AgentRole.developer,
@@ -16,7 +14,7 @@ describe('getRolePromptTemplate', () => {
   ];
 
   describe('system preamble', () => {
-    it.each(Object.values(AgentRole))(
+    it.each(rolesWithTemplates)(
       'should include the system preamble for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
@@ -34,6 +32,7 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('wait: true');
       expect(SYSTEM_PREAMBLE).toContain('wait: false');
       expect(SYSTEM_PREAMBLE).toContain('depth limit');
+      expect(SYSTEM_PREAMBLE).toContain('wait_invocation');
     });
 
     it('should describe the pull-based context model', () => {
@@ -42,6 +41,12 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('project');
       expect(SYSTEM_PREAMBLE).toContain('conversation');
       expect(SYSTEM_PREAMBLE).toContain('correlationId');
+    });
+
+    it('should include a project-scope size rubric (#76 M4)', () => {
+      expect(SYSTEM_PREAMBLE).toContain(
+        'store a compact summary (≤ ~400 tokens) plus a pointer',
+      );
     });
 
     it('should list all team roles', () => {
@@ -55,17 +60,18 @@ describe('getRolePromptTemplate', () => {
 
     it('should include a Capabilities section describing Claude Code tools', () => {
       expect(SYSTEM_PREAMBLE).toContain('## Capabilities');
-      expect(SYSTEM_PREAMBLE).toContain('FileRead');
-      expect(SYSTEM_PREAMBLE).toContain('FileWrite');
-      expect(SYSTEM_PREAMBLE).toContain('FileEdit');
+      expect(SYSTEM_PREAMBLE).toContain('`Read`');
+      expect(SYSTEM_PREAMBLE).toContain('`Write`');
+      expect(SYSTEM_PREAMBLE).toContain('`Edit`');
       expect(SYSTEM_PREAMBLE).toContain('Glob');
       expect(SYSTEM_PREAMBLE).toContain('Grep');
       expect(SYSTEM_PREAMBLE).toContain('Bash');
     });
 
-    it('should include a Workspace section describing the shared workspace', () => {
+    it('should include a Workspace section describing the isolated worktree model', () => {
       expect(SYSTEM_PREAMBLE).toContain('## Workspace');
-      expect(SYSTEM_PREAMBLE).toContain('/mnt/quorum/workspace');
+      expect(SYSTEM_PREAMBLE).toContain('isolated per-invocation git worktree');
+      expect(SYSTEM_PREAMBLE).toContain('do NOT share a filesystem');
       expect(SYSTEM_PREAMBLE).toContain('quorum.md');
       expect(SYSTEM_PREAMBLE).toContain('docs/');
       expect(SYSTEM_PREAMBLE).toContain('tickets/');
@@ -106,6 +112,9 @@ describe('getRolePromptTemplate', () => {
     it('should specify commit message format with canonical conventions', () => {
       expect(SYSTEM_PREAMBLE).toContain(
         '#<issue-number>: <concise description>',
+      );
+      expect(SYSTEM_PREAMBLE).toContain(
+        'QRMX(no-ticket): <concise description>',
       );
       expect(SYSTEM_PREAMBLE).toContain('QRMX-NNN: <concise description>');
     });
@@ -205,10 +214,9 @@ describe('getRolePromptTemplate', () => {
 
   describe('specific templates', () => {
     it.each(rolesWithTemplates)(
-      'should return a role-specific template for %s (not generic fallback)',
+      'should return a role-specific template for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
-        expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
         expect(template.length).toBeGreaterThan(SYSTEM_PREAMBLE.length);
       },
     );
@@ -227,9 +235,9 @@ describe('getRolePromptTemplate', () => {
       const template = getRolePromptTemplate(AgentRole.developer);
       expect(template).toContain('Full filesystem access');
       expect(template).toContain('Full bash access');
-      expect(template).toContain('FileRead');
-      expect(template).toContain('FileWrite');
-      expect(template).toContain('FileEdit');
+      expect(template).toContain('`Read`');
+      expect(template).toContain('`Write`');
+      expect(template).toContain('`Edit`');
     });
 
     it('should describe git restrictions', () => {
@@ -301,12 +309,36 @@ describe('getRolePromptTemplate', () => {
       expect(template).toContain('tickets/');
       expect(template).toContain('ticket files');
     });
+
+    it('should define code-review execution and PR reporting discipline (#76 follow-up)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('## Code Review');
+      expect(template).toContain('gh pr comment');
+      expect(template).toContain(
+        '"no issues found" is a skill output, not a review report',
+      );
+    });
+
+    it('should describe the three review tiers (#76 follow-up)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('`/review`');
+      expect(template).toContain('`/code-review`');
+      expect(template).toContain('lightweight');
+    });
+
+    it('should bind review tiers to their skills (#81)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('The tier binds the skill');
+      expect(template).toContain('never substitute one for the other');
+      expect(template).toContain('never self-escalate');
+      expect(template).toContain('run the dispatched skill **first**');
+      expect(template).toContain('never retroactively');
+    });
   });
 
   describe('qa template', () => {
-    it('should have a dedicated template (not generic fallback)', () => {
+    it('should have a dedicated template', () => {
       const template = getRolePromptTemplate(AgentRole.qa);
-      expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
       expect(template).toContain('QA Agent');
     });
 
@@ -328,9 +360,8 @@ describe('getRolePromptTemplate', () => {
   });
 
   describe('productowner template', () => {
-    it('should have a dedicated template (not generic fallback)', () => {
+    it('should have a dedicated template', () => {
       const template = getRolePromptTemplate(AgentRole.productowner);
-      expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
       expect(template).toContain('Product Owner');
     });
 
@@ -347,68 +378,8 @@ describe('getRolePromptTemplate', () => {
     });
   });
 
-  describe('moderator template', () => {
-    it('should mention agent code-capability awareness', () => {
-      const template = getRolePromptTemplate(AgentRole.moderator);
-      expect(template).toContain('Claude Code instances');
-      expect(template).toContain('read, write, and test code');
-    });
-
-    it('should describe the clarification flow', () => {
-      const template = getRolePromptTemplate(AgentRole.moderator);
-      expect(template).toContain('clarification');
-      expect(template).toContain("do not answer on the user's behalf");
-    });
-
-    describe('failure recovery scope (#59)', () => {
-      it('should not reference agent-scope get-all by correlationId for task-checkpoint recovery', () => {
-        const template = getRolePromptTemplate(AgentRole.moderator);
-        const failureSection = template.slice(
-          template.indexOf('## Failure Recovery'),
-          template.indexOf('## Constraints'),
-        );
-        // Step 2 (agent scope query by correlationId) should be removed
-        expect(failureSection).not.toContain('Query **agent** scope with');
-        // Step 1 (conversation scope) should remain
-        expect(failureSection).toContain('Query **conversation** scope with');
-        expect(failureSection).toContain('per-task checkpoints live here');
-      });
-    });
-
-    describe('failure recovery documentation (#63)', () => {
-      it('should reference conversation scope and get-all in the Failure Recovery section', () => {
-        const template = getRolePromptTemplate(AgentRole.moderator);
-        const failureSection = template.slice(
-          template.indexOf('## Failure Recovery'),
-          template.indexOf('## Constraints'),
-        );
-        expect(failureSection).toContain('conversation');
-        expect(failureSection).toContain('get-all');
-      });
-    });
-  });
-
-  describe('generic fallback', () => {
-    it('should contain {{caller}} placeholder', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('{{caller}}');
-    });
-
-    it('should mention Claude Code built-in tools and permission restrictions', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('Claude Code built-in tools');
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('permission restrictions');
-    });
-
-    it('should reference quorum.md', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('quorum.md');
-    });
-
-    it('should be a non-empty string', () => {
-      expect(GENERIC_PROMPT_TEMPLATE.length).toBeGreaterThan(0);
-    });
-  });
-
   describe('all templates', () => {
-    it.each(Object.values(AgentRole))(
+    it.each(rolesWithTemplates)(
       'should return a non-empty string for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
@@ -416,5 +387,13 @@ describe('getRolePromptTemplate', () => {
         expect(template.length).toBeGreaterThan(0);
       },
     );
+  });
+
+  describe('non-deployable roles (#76 M1)', () => {
+    it('should throw for moderator — no template exists and none should render', () => {
+      expect(() => getRolePromptTemplate(AgentRole.moderator)).toThrow(
+        'No role prompt template for role "moderator"',
+      );
+    });
   });
 });

@@ -9,7 +9,7 @@ x-shared-env: &shared-env
   GH_TOKEN: ${GH_TOKEN}
   REPO_URL: ${REPO_URL}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
   ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-4096}
   MCP_SERVER_URL: http://mcp-server:3000
   MCP_REQUEST_TIMEOUT_MS: ${MCP_REQUEST_TIMEOUT_MS:-1800000}
@@ -119,7 +119,7 @@ services:
       CONTEXT_STORE_BACKEND: opensearch
       # OpenSearch (QRM5)
       OPENSEARCH_NODE: http://opensearch:9200
-      OPENSEARCH_INDEX: quorum-context
+      OPENSEARCH_INDEX: ${OPENSEARCH_INDEX:-quorum-context}
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: admin
       # Ollama embedding (QRM5)
@@ -195,6 +195,9 @@ services:
         condition: service_healthy
     environment:
       <<: *shared-env
+      # Per-role override (#80): resolves to ARCHITECT_ANTHROPIC_MODEL if set,
+      # else fleet-wide ANTHROPIC_MODEL, else the committed default.
+      ANTHROPIC_MODEL: ${ARCHITECT_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}
       PORT: 3002
       AGENT_ROLE: architect
       AGENT_CALLBACK_URL: http://architect:3002
@@ -220,6 +223,9 @@ services:
         condition: service_healthy
     environment:
       <<: *shared-env
+      # Per-role override (#80): resolves to TEAMLEAD_ANTHROPIC_MODEL if set,
+      # else fleet-wide ANTHROPIC_MODEL, else the committed default.
+      ANTHROPIC_MODEL: ${TEAMLEAD_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}
       PORT: 3002
       AGENT_ROLE: teamlead
       AGENT_CALLBACK_URL: http://teamlead:3002
@@ -245,6 +251,9 @@ services:
         condition: service_healthy
     environment:
       <<: *shared-env
+      # Per-role override (#80): resolves to DEVELOPER_ANTHROPIC_MODEL if set,
+      # else fleet-wide ANTHROPIC_MODEL, else the committed default.
+      ANTHROPIC_MODEL: ${DEVELOPER_ANTHROPIC_MODEL:-${ANTHROPIC_MODEL:-claude-opus-4-8}}
       PORT: 3002
       AGENT_ROLE: developer
       AGENT_CALLBACK_URL: http://developer:3002

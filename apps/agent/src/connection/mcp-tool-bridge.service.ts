@@ -14,8 +14,8 @@ import { McpClientService } from './mcp-client.service';
  *
  * Each call to {@link createBridge} produces a request-scoped MCP server
  * whose tool handlers capture the active {@link InvokeRequest}'s plumbing
- * parameters (`correlationId`, `callerRole`, `depth`) in closures, so the
- * Claude Code LLM never needs to provide them.
+ * parameters (`correlationId`, `callerRole`, `depth`, `branch`) in closures,
+ * so the Claude Code LLM never needs to provide them.
  *
  * Tool calls are proxied to the remote MCP server through
  * {@link McpClientService.callTool}.
@@ -83,11 +83,17 @@ export class McpToolBridgeService {
         wait: z.boolean().default(true).describe('Block until target responds'),
       },
       async (args) => {
+        // Bridge-injected plumbing fields — never sourced from the LLM.
+        // `branch` is required by the server validator (mcp.service.ts) and
+        // is inherited from the caller's worktree branch (see the broker's
+        // per-branch lock in message-broker.service.ts). See #68 Round-2
+        // Finding 1.
         return this.proxy('invoke_agent', {
           ...args,
           callerRole: this.config.agent.role,
           correlationId: request.correlationId,
           depth: request.depth + 1,
+          branch: request.branch,
         });
       },
     );

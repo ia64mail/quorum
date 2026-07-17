@@ -63,22 +63,36 @@ Vendored from the QRM8 context-usage research. Host log paths (`logs/…`) are r
 |-------|-------|--------|
 | [#55](https://github.com/ia64mail/quorum/issues/55) | Bootstrap context — recency ordering broken under OpenSearch (`getAll` unsorted) · PR #57 | Done |
 | [#56](https://github.com/ia64mail/quorum/issues/56) | Bootstrap context — token budget excludes project-notes records (depends on #55) · PR #58 | Done |
-| [#59](https://github.com/ia64mail/quorum/issues/59) | Context Store — agent scope provides no cross-invocation role persistence; role-key the partition · PR #60 | Spec |
-| [#61](https://github.com/ia64mail/quorum/issues/61) | Context search — `context_query` skip-and-stop budget empties result set when the top-ranked record exceeds the budget; add return-at-least-one floor · PR #62 | Spec |
-| [#63](https://github.com/ia64mail/quorum/issues/63) | Conversation-scope addressing — moderator-bound correlationId reuse across collaborating agents · PR (pending) | Spec |
+| [#59](https://github.com/ia64mail/quorum/issues/59) | Context Store — agent scope provides no cross-invocation role persistence; role-key the partition · PR #60 | Done |
+| [#61](https://github.com/ia64mail/quorum/issues/61) | Context search — `context_query` skip-and-stop budget empties result set when the top-ranked record exceeds the budget; add return-at-least-one floor · PR #62 | Done |
+| [#63](https://github.com/ia64mail/quorum/issues/63) | Conversation-scope addressing — moderator-bound correlationId reuse across collaborating agents · PR #64 | Done |
 | [#70](https://github.com/ia64mail/quorum/issues/70) | Bootstrap context — task-aware project-scope selection via moderator-authored `searchQuery` (realizes design-conclusion #4) · PR #71 | Done |
+| [#74](https://github.com/ia64mail/quorum/issues/74) | Bootstrap context at scale — `getAll` 10,000-doc cap × ascending sort silently drops the newest records · PR #75 | Done |
 
-### Residual hygiene (unrelated to context)
+### Infrastructure & runtime stabilization
+
+| Issue | Title | Status |
+|-------|-------|--------|
+| [#65](https://github.com/ia64mail/quorum/issues/65) | Worktree commit/push hardening — agent commits orphan in the shared clone instead of reaching origin · PR #66 | Done |
+| [#67](https://github.com/ia64mail/quorum/issues/67) | Deny-guard multi-`-c` bypass + `system-design.md` doc staleness — #65 review follow-ups | Spec |
+| [#68](https://github.com/ia64mail/quorum/issues/68) | Bump Claude Agent SDK + Claude Code CLI to latest; default to Opus 4.8 · PR #69 | Done |
+| [#72](https://github.com/ia64mail/quorum/issues/72) | Increase teamlead invocation timeout 10 → 15 min for `/code-review` · PR #73 | Done |
+| [#78](https://github.com/ia64mail/quorum/issues/78) | Session-resume durability broken on SDK 0.3.207: FileSessionStore bypassed, agent transcripts on tmpfs · PR #83 (open) | In review |
+| [#80](https://github.com/ia64mail/quorum/issues/80) | Per-role agent model override via environment | Spec |
+
+### Residual hygiene
 
 | Issue | Title | Status |
 |-------|-------|--------|
 | [#50](../50-entropy-report-halstead-correctness.md) | Entropy report — Halstead score & chart calculation correctness | Done (closed) |
 | [#51](../51-ticket-library-verification-discipline.md) | Ticket library — "truth about a change, not current state" consumption discipline | Done (closed) |
+| [#76](https://github.com/ia64mail/quorum/issues/76) | Agent prompt actualization — review built-in role prompts + `quorum.md`; land the tested ticket-consumption guidance · PR #77 | Done |
+| [#81](https://github.com/ia64mail/quorum/issues/81) | Review Protocol tier drift — bind review tiers to their skills, ban retroactive skill runs · PR #82 | Done |
 
 ## Deferred
 
-- **Conversation-scope addressing redesign** — managing `correlationId` so a ticket's collaborating agents share one conversation partition (moderator-driven, analogous to session resume), naturally populating it as the ticket progresses so each subsequent agent has predecessor context to read. **Picked up as [#63](https://github.com/ia64mail/quorum/issues/63)** after the #61 / #59 verification sessions provided the empirical case (shared vs rotated correlationId → handoff vs no handoff).
-- **Agent-scope quality upgrades** — bootstrap injection of agent scope, background summarization, decay/TTL. All depend on #59 (role-keyed partition) landing first.
+- **Conversation-scope addressing redesign** — managing `correlationId` so a ticket's collaborating agents share one conversation partition (moderator-driven, analogous to session resume), naturally populating it as the ticket progresses so each subsequent agent has predecessor context to read. **Landed as [#63](https://github.com/ia64mail/quorum/issues/63) · PR #64** after the #61 / #59 verification sessions provided the empirical case (shared vs rotated correlationId → handoff vs no handoff).
+- **Agent-scope quality upgrades** — bootstrap injection of agent scope, background summarization, decay/TTL. Unblocked now that #59 (role-keyed partition) has landed; no ticket filed yet.
 
 ## References
 
