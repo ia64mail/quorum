@@ -324,7 +324,7 @@ The Context Store backend is configurable via `CONTEXT_STORE_BACKEND`:
 - **`opensearch`** (production): `OpenSearchStore` backed by OpenSearch with hybrid BM25 + k-NN vector search. Embedding vectors are computed asynchronously via Ollama (`mxbai-embed-large`). Documents are BM25-searchable immediately on write and hybrid-searchable within ~300ms after async embedding completes. Graceful degradation ensures the system continues with BM25-only search when Ollama is unavailable.
 - **`inmemory`** (default): `InMemoryStore` — a `Map<string, ContextItem>` with case-insensitive substring search and JSON file persistence (`quorum.context`). Used for tests and development without Docker infrastructure.
 
-Both backends use composite keys (`{scope}:{id}:{key}`) managed by `CompositeKeyBuilder`. Project scope always uses `_` as ID; conversation/agent scopes require an explicit ID (correlationId or agentId).
+Both backends use composite keys (`{scope}:{id}:{key}`) managed by `CompositeKeyBuilder`. Project scope always uses `_` as ID; conversation scope requires an explicit `correlationId` as ID; agent scope requires an explicit **role** as ID (`agent:<role>:<key>`) — records persist per-role, not per-invocation, so a role's durable memory survives across all of its future invocations (#59).
 
 When switching from `inmemory` to `opensearch`, `MigrationService` performs a one-time import of existing `quorum.context` records into the OpenSearch index on first startup.
 
