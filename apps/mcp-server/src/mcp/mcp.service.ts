@@ -300,6 +300,15 @@ export class McpService implements OnModuleInit {
               'Task for the target agent. Use a slash command (e.g. "/code-review") ' +
                 'to invoke a built-in skill directly, or natural language for general tasks',
             ),
+          searchQuery: z
+            .string()
+            .optional()
+            .describe(
+              "One-sentence description of this task's domain concept, used to retrieve " +
+                "the most relevant prior decisions into the target's starting context. " +
+                'Include exact identifiers (ticket #, feature/file name) and a plain-language ' +
+                'concept description; omit slash commands, commit hashes, and branch names.',
+            ),
           context: z
             .record(z.string(), z.unknown())
             .optional()
@@ -382,6 +391,7 @@ export class McpService implements OnModuleInit {
           caller: callerRole,
           target,
           action: args.action,
+          searchQuery: args.searchQuery,
           context: args.context,
           wait: args.wait,
           depth: args.depth,

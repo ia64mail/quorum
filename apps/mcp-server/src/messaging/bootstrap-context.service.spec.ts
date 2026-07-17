@@ -8,6 +8,7 @@ describe('BootstrapContextService', () => {
 
   const mockContextStore = {
     getAll: jest.fn(),
+    search: jest.fn(),
   };
 
   const defaultBootstrapConfig = {
@@ -16,8 +17,13 @@ describe('BootstrapContextService', () => {
     projectRatio: 0.8,
   };
 
+  const defaultContextStoreConfig = {
+    backend: 'inmemory' as 'inmemory' | 'opensearch',
+  };
+
   const mockConfig = {
     bootstrap: { ...defaultBootstrapConfig },
+    contextStore: { ...defaultContextStoreConfig },
   };
 
   /** Helper: estimate tokens for a value (matches production formula). */
@@ -28,7 +34,9 @@ describe('BootstrapContextService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockConfig.bootstrap = { ...defaultBootstrapConfig };
+    mockConfig.contextStore = { ...defaultContextStoreConfig };
     mockContextStore.getAll.mockResolvedValue({});
+    mockContextStore.search.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -388,6 +396,189 @@ describe('BootstrapContextService', () => {
       const result = await service.assemble('corr-1');
 
       expect(result!.meta.scopesQueried).toEqual(['project', 'conversation']);
+    });
+  });
+
+  describe('relevance search (#70)', () => {
+    beforeEach(() => {
+      mockConfig.contextStore = { backend: 'opensearch' };
+    });
+
+    it('should use ContextStore.search for project scope when a query is present and backend is opensearch', async () => {
+      mockContextStore.search.mockResolvedValue([
+        {
+          key: 'hit-1',
+          value: 'relevant note',
+          scope: ContextScope.project,
+          createdAt: 1,
+        },
+      ]);
+      mockContextStore.getAll.mockResolvedValue({}); // conversation getAll only
+
+      const result = await service.assemble(
+        'corr-1',
+        'ticket #70 bootstrap search',
+      );
+
+      expect(mockContextStore.search).toHaveBeenCalledWith(
+        ContextScope.project,
+        'ticket #70 bootstrap search',
+        undefined,
+        4000, // floor(5000 * 0.8)
+      );
+      expect(result).not.toBeNull();
+      expect(result!.project).toEqual({ 'hit-1': 'relevant note' });
+    });
+
+    it('should not call getAll(project) when the search path is used', async () => {
+      mockContextStore.search.mockResolvedValue([
+        { key: 'hit-1', value: 'x', scope: ContextScope.project, createdAt: 1 },
+      ]);
+
+      await service.assemble(undefined, 'some query');
+
+      expect(mockContextStore.getAll).not.toHaveBeenCalledWith(
+        ContextScope.project,
+      );
+    });
+
+    it('should sum tokens across returned search hits for the budget reclaim step', async () => {
+      mockConfig.bootstrap.maxTokens = 100;
+      mockConfig.bootstrap.projectRatio = 0.6; // project budget = 60, conversation budget = 40
+
+      const value = 'x'.repeat(38); // JSON adds 2 quotes -> ceil(40/4) = 10 tokens
+      mockContextStore.search.mockResolvedValue([
+        { key: 'hit-1', value, scope: ContextScope.project, createdAt: 1 },
+      ]);
+      // Conversation item needs ~70 tokens — only fits with the 50 tokens
+      // reclaimed from the unused project budget (60 - 10 = 50; 40 + 50 = 90).
+      const convValue = 'c'.repeat(276); // ceil(278/4) = 70 tokens
+      mockContextStore.getAll.mockResolvedValue({ conv: convValue });
+
+      const result = await service.assemble('corr-1', 'query');
+
+      expect(result).not.toBeNull();
+      expect(result!.project).toEqual({ 'hit-1': value });
+      expect(result!.meta.estimatedTokens).toBe(10 + 70);
+      expect(result!.conversation).toHaveProperty('conv');
+    });
+
+    // Team-lead code review of PR #71 (AC5): the #61 top-hit floor means
+    // `search` can return a top hit larger than projectBudget, so
+    // projectTokensUsed can exceed projectBudget. The Step-6 reclaim must
+    // clamp at 0 (never subtract more than the budget) instead of driving
+    // conversationBudget negative, which would otherwise make applyBudget
+    // silently drop ALL conversation-scope context.
+    describe('over-budget top hit (#61 interaction — review fix)', () => {
+      it('should not drop conversation context or go negative when a top hit exceeds the ENTIRE bootstrap budget', async () => {
+        mockConfig.bootstrap.maxTokens = 100;
+        mockConfig.bootstrap.projectRatio = 0.5; // project budget = 50, conversation budget = 50
+
+        // Oversized top hit: 150 tokens — bigger than the whole 100-token
+        // bootstrap budget, not just its own 50-token project share. Under
+        // the pre-fix formula, conversationBudget = maxTokens -
+        // projectTokensUsed = 100 - 150 = -50 (negative), which would make
+        // applyBudget drop every conversation item regardless of size.
+        const oversizedValue = 'x'.repeat(598); // ceil(600/4) = 150 tokens
+        mockContextStore.search.mockResolvedValue([
+          {
+            key: 'huge-hit',
+            value: oversizedValue,
+            scope: ContextScope.project,
+            createdAt: 1,
+          },
+        ]);
+
+        const convValue = 'c'.repeat(118); // ceil(120/4) = 30 tokens
+        mockContextStore.getAll.mockResolvedValue({ conv: convValue });
+
+        const result = await service.assemble('corr-1', 'query');
+
+        expect(result).not.toBeNull();
+        // Conversation context must survive — it gets its full base
+        // allocation (conversationBudgetBase = 50) rather than a negative
+        // budget, because the reclaim term is clamped to Math.max(0, ...).
+        expect(result!.conversation).toEqual({ conv: convValue });
+        expect(result!.project).toEqual({ 'huge-hit': oversizedValue });
+        // Note: meta.estimatedTokens (180) legitimately exceeds
+        // BOOTSTRAP_MAX_TOKENS (100) here — that's the accepted, documented
+        // consequence of #61's "return at least the top hit even when
+        // oversized" floor, not something this fix eliminates. What the fix
+        // guarantees is that the OTHER scope (conversation) is never
+        // collaterally zeroed out by that oversized hit.
+        expect(result!.meta.estimatedTokens).toBe(150 + 30);
+      });
+
+      it('should keep total estimatedTokens within BOOTSTRAP_MAX_TOKENS for a modestly over-budget top hit (realistic #61 magnitude)', async () => {
+        mockConfig.bootstrap.maxTokens = 100;
+        mockConfig.bootstrap.projectRatio = 0.8; // project budget = 80, conversation budget = 20
+
+        // Top hit exceeds its own 80-token project share by 10 tokens — the
+        // realistic #61 scenario (e.g. a *-design-notes record running a
+        // few hundred tokens over its slice), not the pathological
+        // whole-budget-exceeding case above.
+        const value = 'x'.repeat(358); // ceil(360/4) = 90 tokens
+        mockContextStore.search.mockResolvedValue([
+          { key: 'hit-1', value, scope: ContextScope.project, createdAt: 1 },
+        ]);
+
+        const convValue = 'c'.repeat(30); // ceil(32/4) = 8 tokens
+        mockContextStore.getAll.mockResolvedValue({ conv: convValue });
+
+        const result = await service.assemble('corr-1', 'query');
+
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'hit-1': value });
+        expect(result!.conversation).toEqual({ conv: convValue });
+        expect(result!.meta.estimatedTokens).toBe(90 + 8);
+        expect(result!.meta.estimatedTokens).toBeLessThanOrEqual(
+          mockConfig.bootstrap.maxTokens,
+        );
+      });
+    });
+
+    describe('fallback to recency — never worse than pre-#70', () => {
+      it('should use recency getAll when query is absent', async () => {
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1');
+
+        expect(mockContextStore.search).not.toHaveBeenCalled();
+        expect(mockContextStore.getAll).toHaveBeenCalledWith(
+          ContextScope.project,
+        );
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+      });
+
+      it('should use recency getAll when backend is inmemory even if query is present', async () => {
+        mockConfig.contextStore = { backend: 'inmemory' };
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(mockContextStore.search).not.toHaveBeenCalled();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+      });
+
+      it('should fall back to recency when search throws', async () => {
+        mockContextStore.search.mockRejectedValue(new Error('opensearch down'));
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+      });
+
+      it('should fall back to recency when search returns an empty array', async () => {
+        mockContextStore.search.mockResolvedValue([]);
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+      });
     });
   });
 });

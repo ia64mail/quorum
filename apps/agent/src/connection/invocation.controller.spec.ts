@@ -138,4 +138,26 @@ describe('InvocationController', () => {
     const passedArg = mockHandler.handle.mock.calls[0][0];
     expect(passedArg.bootstrapContext).toBeUndefined();
   });
+
+  // #70: searchQuery is caller-set/broker-read and must reach the Message
+  // Broker so it can drive relevance-ranked bootstrap selection. The agent's
+  // /invoke schema validates against the SAME shared invokeRequestSchema
+  // (QRM7-002) and therefore does NOT strip it — the schema-drift framing in
+  // the original ticket ("searchQuery sidesteps the agent schema") is stale.
+  // It is the Message Broker's responsibility (message-broker.service.ts) to
+  // delete it from the request before agent.handle() is invoked; this test
+  // only pins that the schema itself is not the guard.
+  it('should pass optional searchQuery through to handler if present (broker, not schema, strips it before delivery — #70)', async () => {
+    const bodyWithSearchQuery = {
+      ...validBody,
+      searchQuery: 'ticket #70 bootstrap search',
+    };
+    mockHandler.handle.mockResolvedValue({ success: true });
+
+    await controller.invoke(bodyWithSearchQuery);
+
+    expect(mockHandler.handle).toHaveBeenCalledWith(
+      expect.objectContaining({ searchQuery: 'ticket #70 bootstrap search' }),
+    );
+  });
 });
