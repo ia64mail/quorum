@@ -46,8 +46,14 @@ export class BootstrapContextService {
       ? await this.contextStore.getAll(ContextScope.conversation, correlationId)
       : {};
 
-    // Step 6 — Reclaim unused project budget
-    conversationBudget += projectBudget - projectTokensUsed;
+    // Step 6 — Reclaim unused project budget. Clamped at 0: the #61
+    // top-hit floor means the search path can return a single oversized
+    // hit with projectTokensUsed > projectBudget (`search` guarantees at
+    // least the top hit even when it alone exceeds the budget) — an
+    // oversized project selection reclaims nothing rather than driving
+    // conversationBudget negative (which would silently zero out
+    // conversation-scope selection in applyBudget below).
+    conversationBudget += Math.max(0, projectBudget - projectTokensUsed);
 
     // Step 7 — Apply budget to conversation items
     const {
@@ -159,12 +165,17 @@ export class BootstrapContextService {
     const selected: Record<string, unknown> = {};
     let tokensUsed = 0;
 
+    // Defensive floor: a negative budget must never reach the loop below —
+    // whatever the caller computed (e.g. a reclaim), treat anything below 0
+    // as 0 so this never accidentally admits items on a negative budget.
+    const safeBudget = Math.max(0, budget);
+
     // Reverse entry order to prefer newer items (later in Map insertion order)
     const entries = Object.entries(items).reverse();
 
     for (const [key, value] of entries) {
       const tokens = this.estimateTokens(value);
-      if (tokensUsed + tokens > budget) {
+      if (tokensUsed + tokens > safeBudget) {
         continue;
       }
       tokensUsed += tokens;
