@@ -156,8 +156,19 @@ function extractSegmentHead(segment: string): string {
     return '';
   }
 
-  // `git -C <path> <verb> …` → `git <verb> …`
-  s = s.replace(/^git\s+-c\s+\S+\s+/, 'git ');
+  // `git [-c <k=v> | -C <path>]… <verb> …` → `git <verb> …`
+  // Strip ALL leading config/dir flags, not just the first. After the
+  // lowercase above, `-C` and `-c` are identical, and both take exactly one
+  // following token (`-c key=value` is one token; `-C path` consumes the next
+  // token). git accepts them repeated and interleaved before the subcommand,
+  // so loop until no leading `-c <arg>` remains. git rejects the attached
+  // forms `-ckey=value` / `-C<path>`, so only the space-separated shape is
+  // reachable and one regex covers both flags.
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(/^git\s+-c\s+\S+\s+/, 'git ');
+  } while (s !== prev);
 
   return s;
 }
