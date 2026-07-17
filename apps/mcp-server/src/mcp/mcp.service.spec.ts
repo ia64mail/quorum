@@ -269,6 +269,49 @@ describe('McpService', () => {
       expect(call.parentRequestId).toBeUndefined();
     });
 
+    // #70: searchQuery is a sibling field to `action`, forwarded into the
+    // InvokeRequest built for the broker. The broker (not the schema) is
+    // responsible for stripping it before delivery to the target agent.
+    it('should pass searchQuery through to the broker when provided', async () => {
+      mockBroker.invoke.mockResolvedValue({ success: true });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      await handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        action: '/code-review',
+        searchQuery:
+          'ticket #70 bootstrap search — task-aware project selection',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-corr-70',
+        branch: 'feature-branch',
+      });
+
+      const call = mockBroker.invoke.mock.calls[0][0];
+      expect(call.searchQuery).toBe(
+        'ticket #70 bootstrap search — task-aware project selection',
+      );
+    });
+
+    it('should not set searchQuery when omitted', async () => {
+      mockBroker.invoke.mockResolvedValue({ success: true });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      await handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        action: 'implement feature',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-corr-71',
+        branch: 'feature-branch',
+      });
+
+      const call = mockBroker.invoke.mock.calls[0][0];
+      expect(call.searchQuery).toBeUndefined();
+    });
+
     it('should pass sessionId to broker when provided', async () => {
       mockBroker.invoke.mockResolvedValue({
         success: true,

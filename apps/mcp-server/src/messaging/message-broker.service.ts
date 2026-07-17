@@ -109,7 +109,10 @@ export class MessageBroker {
       if (!request.sessionId) {
         let bootstrapResult: BootstrapContext | null = null;
         try {
-          bootstrapResult = await this.bootstrapContext.assemble(correlationId);
+          bootstrapResult = await this.bootstrapContext.assemble(
+            correlationId,
+            request.searchQuery,
+          );
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.warn(
@@ -121,6 +124,13 @@ export class MessageBroker {
           request.bootstrapContext = bootstrapResult;
         }
       }
+
+      // searchQuery is caller-set/broker-read only (#70) — the inverse of
+      // bootstrapContext (broker-set/agent-read). It has already been
+      // consumed above (or was never present); strip it unconditionally
+      // (fresh and resumed sessions alike) so it never reaches the target
+      // agent's payload.
+      delete request.searchQuery;
 
       const response = await this.deliverWithTimeout(
         agent.handle(request, timeout),

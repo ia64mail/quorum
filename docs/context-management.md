@@ -323,21 +323,28 @@ sequenceDiagram
     participant CS as ContextStore
     participant D as Developer
 
-    TL->>B: invoke_agent(developer, "implement QRM-042")
+    TL->>B: invoke_agent(developer, action: "implement QRM-042",<br/>searchQuery: "ticket #42 ...")
 
     alt fresh session (request.sessionId empty)
-        B->>BCS: assemble(correlationId)
-        BCS->>CS: getAll(project)
-        CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+        B->>BCS: assemble(correlationId, request.searchQuery)
+        alt searchQuery present and backend is OpenSearch
+            BCS->>CS: search(project, query, undefined, projectBudget)
+            CS-->>BCS: relevance-ranked ContextItem[] (within budget)
+        else no query, InMemory backend, or search throws/empty
+            BCS->>CS: getAll(project)
+            CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+            Note over BCS: Apply token budget (greedy, newer items first)
+        end
         BCS->>CS: getAll(conversation, correlationId)
         CS-->>BCS: {taskBreakdown: [...], constraints: [...]}
-        Note over BCS: Apply token budget (greedy, newer items first)
+        Note over BCS: Conversation scope stays recency — already correlationId-scoped
         BCS-->>B: BootstrapContext
 
         B->>B: request.bootstrapContext = assembled context
     else resumed session (request.sessionId set)
         Note over B,BCS: Skip assembly — Prior Decisions already in session transcript
     end
+    B->>B: delete request.searchQuery (never forwarded)
     B->>D: handle(request)
 
     Note over D: buildPrompt() renders "## Prior Decisions"<br/>with ### Project Context and ### Conversation Context
@@ -348,7 +355,13 @@ sequenceDiagram
 
 **How it works:**
 
-The broker calls `BootstrapContextService.assemble(correlationId)` after safeguard checks pass. The service queries `ContextStore.getAll()` for project-scope items (always) and conversation-scope items (when a `correlationId` is present). A token budget (`BOOTSTRAP_MAX_TOKENS`, default 5000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.8, i.e. a 4000-token project budget). Items are selected via greedy bin-packing in reverse insertion order (newer items preferred). Unused project budget reclaims to the conversation allocation.
+The broker calls `BootstrapContextService.assemble(correlationId, request.searchQuery)` after safeguard checks pass. Conversation-scope selection (Step 7) is unchanged: `ContextStore.getAll()` for the current `correlationId`, greedy bin-packed in reverse insertion order (newer items preferred) — it stays recency-based because every conversation-scope item is already `correlationId`-scoped to the task, so ranking buys nothing.
+
+Project-scope selection is **task-aware since #70**: when a `searchQuery` is present *and* the Context Store backend is OpenSearch, the service calls `ContextStore.search(ContextScope.project, query, undefined, projectBudget)` — the same hybrid BM25 + k-NN search used for `context_query`, already scope-filtered and token-budgeted, and guaranteed to return at least the top-ranked hit even if it exceeds the budget (#61). The returned `ContextItem[]` is mapped into the selected record and its tokens re-summed for the budget-reclaim step. This falls back to the pre-#70 recency `getAll` + greedy bin-pack whenever `searchQuery` is absent, the backend is InMemoryStore (its `search` is substring-only, not ranked), or `search` throws or returns an empty result set — strictly additive, never a regression.
+
+A token budget (`BOOTSTRAP_MAX_TOKENS`, default 5000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.8, i.e. a 4000-token project budget). Unused project budget reclaims to the conversation allocation regardless of which project-selection path ran.
+
+`searchQuery` itself is a caller-set, broker-read `InvokeRequest` field — the moderator authors a one-sentence retrieval-shaped query as a sibling to `action` on every `invoke_agent` call. It is the inverse of `bootstrapContext` (broker-set, agent-read): the broker consumes it during assembly and then deletes it from the request before delivery, so it never reaches the target agent's payload.
 
 The assembled `BootstrapContext` is attached to `request.bootstrapContext`. On the agent side, `InvocationHandler.buildPrompt()` renders it as a `## Prior Decisions` section (with `### Project Context` and `### Conversation Context` subsections) prepended before the task description. The `meta` field (item count, estimated tokens, scopes queried) is not rendered — it is internal bookkeeping.
 

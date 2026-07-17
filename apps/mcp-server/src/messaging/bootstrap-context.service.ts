@@ -17,7 +17,10 @@ export class BootstrapContextService {
     private readonly config: McpServerConfigService,
   ) {}
 
-  async assemble(correlationId?: string): Promise<BootstrapContext | null> {
+  async assemble(
+    correlationId?: string,
+    query?: string,
+  ): Promise<BootstrapContext | null> {
     // Step 1 — Check enabled
     if (!this.config.bootstrap.enabled) {
       this.logger.debug(
@@ -31,17 +34,17 @@ export class BootstrapContextService {
     const projectBudget = Math.floor(maxTokens * projectRatio);
     let conversationBudget = maxTokens - projectBudget;
 
-    // Step 3 — Fetch project items (always)
-    const projectItems = await this.contextStore.getAll(ContextScope.project);
+    // Step 3/5 — Select project items: relevance-ranked search when a
+    // searchQuery is present and the backend supports ranked search (#70),
+    // recency getAll + greedy bin-pack otherwise (unchanged, strictly a
+    // fallback — never a regression from pre-#70 behavior).
+    const { selected: selectedProject, tokensUsed: projectTokensUsed } =
+      await this.selectProjectItems(query, projectBudget);
 
     // Step 4 — Fetch conversation items (only when correlationId is provided)
     const conversationItems = correlationId
       ? await this.contextStore.getAll(ContextScope.conversation, correlationId)
       : {};
-
-    // Step 5 — Apply budget to project items (prefer newer — reverse insertion order)
-    const { selected: selectedProject, tokensUsed: projectTokensUsed } =
-      this.applyBudget(projectItems, projectBudget);
 
     // Step 6 — Reclaim unused project budget
     conversationBudget += projectBudget - projectTokensUsed;
@@ -89,6 +92,64 @@ export class BootstrapContextService {
 
   private estimateTokens(value: unknown): number {
     return Math.ceil(JSON.stringify(value).length / 4);
+  }
+
+  /**
+   * Select project-scope items for bootstrap injection.
+   *
+   * Relevance path (#70): when `query` is present and the Context Store
+   * backend is OpenSearch, delegate to `ContextStore.search` — it is
+   * already scope-filtered and token-budgeted, returns relevance-ranked
+   * items, and (since #61) guarantees at least the top hit even when it
+   * exceeds the budget. Falls back to the recency path whenever:
+   * - `query` is absent;
+   * - the backend is InMemoryStore (its `search` is substring-only, not
+   *   ranked — see ContextStore.search doc);
+   * - `search` throws or returns an empty result set (embedding-service
+   *   downtime already degrades to BM25-only *inside* search; a true empty
+   *   result here still falls back to recency so bootstrap is never worse
+   *   than the pre-#70 behavior).
+   */
+  private async selectProjectItems(
+    query: string | undefined,
+    projectBudget: number,
+  ): Promise<{ selected: Record<string, unknown>; tokensUsed: number }> {
+    const canSearch =
+      !!query && this.config.contextStore.backend === 'opensearch';
+
+    if (canSearch) {
+      try {
+        const hits = await this.contextStore.search(
+          ContextScope.project,
+          query,
+          undefined,
+          projectBudget,
+        );
+
+        if (hits.length > 0) {
+          const selected: Record<string, unknown> = {};
+          let tokensUsed = 0;
+          for (const item of hits) {
+            selected[item.key] = item.value;
+            tokensUsed += this.estimateTokens(item.value);
+          }
+          return { selected, tokensUsed };
+        }
+
+        this.logger.debug(
+          'Project relevance search returned no hits — falling back to recency',
+        );
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `Project relevance search failed — falling back to recency: ${message}`,
+        );
+      }
+    }
+
+    // Recency fallback (pre-#70 behavior, unchanged).
+    const projectItems = await this.contextStore.getAll(ContextScope.project);
+    return this.applyBudget(projectItems, projectBudget);
   }
 
   private applyBudget(

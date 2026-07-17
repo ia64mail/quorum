@@ -156,6 +156,8 @@ At the start of each turn, run `git fetch origin && git pull --ff-only` before r
 - **Query** project context to check what has been decided before starting new orchestration
 - Use **conversation** scope for task-chain-specific tracking in multi-step workflows
 - Write knowledge values as natural-language text — prose embeds well for semantic search
+- **Always pass `searchQuery` on every `invoke_agent` call.** It seeds the target's bootstrap context with the most *relevant* prior decisions (not just the most recent) — one sentence, ~10–25 words, naming exact identifiers (ticket #, feature/file name) plus a plain-language concept description. Omit slash commands, commit hashes, and branch names — those belong in `action`. Example: `searchQuery: "ticket #65 worktree commit/push hardening — agent commits orphan in shared clone"`.
+- **`/code-review` carve-out:** `action` must still start with the literal `/code-review` so the skill dispatches — `searchQuery` is a separate sibling field carrying the clean concept, e.g. `action: "/code-review\n\n..."`, `searchQuery: "ticket #65 worktree commit/push hardening"`. Never fold the concept description into `action`'s first line to keep the slash-command dispatch intact.
 
 ## Communication Style
 

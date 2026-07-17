@@ -44,13 +44,13 @@ Suggested description (drives both retrieval legs without leaking mechanism):
       'Include exact identifiers (ticket #, feature/file name) and a plain-language ' +
       'concept description; omit slash commands, commit hashes, and branch names.')
 
-**Schema-drift guard (known bug class).** The agent `/invoke` Zod schema has twice silently dropped fields added to `InvokeRequest` (`sessionId`, `bootstrapContext` — see the recurring InvokeRequest schema-drift class, [QRM6-BUG-014](QRM6-BUG-014-invoke-request-schema-strips-bootstrap-context.md)). `searchQuery` is broker-consumed and must *not* reach the agent, so it sidesteps the agent-side schema entirely — but add a test asserting the broker reads it and that it is absent from the delivered agent payload, so the omission is intentional and pinned.
+**Schema-drift correction (architect re-review, binding).** The framing above is stale as of QRM7-002 (Option B): the agent no longer has a separate `/invoke` schema — it imports the SAME shared `invokeRequestSchema` from `libs/common/src/messaging/invoke.types.ts` (`invocation.controller.ts:9,20`, `.safeParse(body)`). Adding `searchQuery` to that shared schema means the agent's parse **accepts** it, and `http-agent-connection.ts` (`body: JSON.stringify(request)`) **delivers** it — there is no schema-drift bug to sidestep here; the field is not silently dropped, it is silently *forwarded* unless something explicitly removes it. To meet AC2 (absent from the delivered payload), the **Message Broker** must explicitly strip `searchQuery` after passing it to `assemble()` and before `agent.handle()` — implemented as `delete request.searchQuery` in `message-broker.service.ts`, unconditionally (fresh and resumed sessions alike), right before `deliverWithTimeout`. This is a new "caller-set, broker-read, stripped-before-delivery" contract that no prior ticket owns (`bootstrapContext` is the mirror-image "broker-set, agent-read" contract) — #70 owns it. The payload-omission test (`message-broker.service.spec.ts`) pins the broker-side strip, not schema behavior; a companion test in `invocation.controller.spec.ts` documents that the shared schema does *not* strip `searchQuery` on its own, so the broker strip is load-bearing.
 
 ### 2. `assemble(correlationId, query?)` — relevance for project, recency for conversation
 
 In `BootstrapContextService.assemble` (`apps/mcp-server/src/messaging/bootstrap-context.service.ts:20`):
 
-- **Project scope (Step 3/5):** when `query` is present, replace `getAll(project)` + recency `applyBudget` with `contextStore.search(ContextScope.project, query, projectBudget)` (the existing method, `opensearch-store.ts:202`) — it is already scope-filtered and token-budgeted, returns relevance-ranked items, and (since #61) returns at least the top hit even when it exceeds the budget. Map the returned `ContextItem[]` into the `selected` record shape and sum `tokensUsed` for the reclaim step.
+- **Project scope (Step 3/5):** when `query` is present *and the backend is OpenSearch* (see correction 3 below), replace `getAll(project)` + recency `applyBudget` with `contextStore.search(ContextScope.project, query, undefined, projectBudget)` (the existing method, `opensearch-store.ts:202`) — it is already scope-filtered and token-budgeted, returns relevance-ranked items, and (since #61) returns at least the top hit even when it exceeds the budget. **Correction (architect re-review, binding):** the `ContextStore.search` signature is `search(scope, query, id?, maxTokens?, onTrace?)` — the token budget is the **4th** positional argument, not the 3rd; calling `search(ContextScope.project, query, projectBudget)` binds `projectBudget` to the `id` parameter, filters project items by a non-`'_'` id, returns zero hits, and silently falls back to recency — the feature would never activate. Pass `undefined` explicitly for `id`. `search` returns `ContextItem[]` (not a `Record`) — map each hit's `{key, value}` into the `selected` record shape and sum `estimateTokens(item.value)` for the Step-6 reclaim (the `estimateTokens` formula, `Math.ceil(JSON.stringify(value).length / 4)`, is identical across `BootstrapContextService`, `OpenSearchStore`, and `InMemoryStore`, so re-summing here is consistent with the budget the search call itself enforced).
 - **Conversation scope (Step 7):** unchanged — it is `correlationId`-partitioned, so every record is already on-task; keep `getAll` + recency. Ranking buys nothing.
 - **Budget reclaim (Step 6):** unchanged — unused project budget still flows to conversation.
 
@@ -67,6 +67,8 @@ Recency `getAll` selection is retained and used whenever any of these hold, so t
 - `search` throws or returns empty (embedding service down is already handled inside `search` via BM25-only, `opensearch-store.ts:257`; a true empty result falls back to recency).
 
 Assembly is already non-fatal (`message-broker.service.ts:113-118`); the fallback extends that posture.
+
+**Correction 3 (architect re-review, binding) — backend discriminator was not exposed.** `contextStoreConfig.backend` (`'inmemory' | 'opensearch'`, `context-store.config.ts`) was registered in `ConfigModule.forRoot` (consumed directly by `OpenSearchStore`/`InMemoryStore` via `@Inject(contextStoreConfig.KEY)`) but was **not** exposed on `McpServerConfigService` — only `app`/`bootstrap`/`broker`/`context` were. `BootstrapContextService` only injects `McpServerConfigService`, so it had no way to read the backend to gate the search path. Fixed by adding a fourth `@Inject(contextStoreConfig.KEY) public readonly contextStore` getter to `McpServerConfigService` (`mcp-server-config.service.ts`) — no new module wiring needed since the config was already loaded, only the getter was missing.
 
 ### 5. Moderator persona instruction
 
@@ -85,19 +87,39 @@ Update [docs/context-management.md](../docs/context-management.md) "Bootstrap Co
 
 ## Acceptance Criteria
 
-- [ ] `invoke_agent` accepts an optional `searchQuery`; `InvokeRequest` carries it.
-- [ ] `searchQuery` is consumed by the broker at assembly and is **absent** from the delivered agent payload (asserted by test).
-- [ ] When `searchQuery` is present and the backend is OpenSearch, project-scope bootstrap is selected via `ContextStore.search` (relevance-ranked) within the project budget; conversation scope remains recency `getAll`.
-- [ ] When `searchQuery` is absent, the store is InMemory, or `search` errors/returns empty, project selection falls back to the current recency behavior (no regression).
-- [ ] Project→conversation budget reclaim still works with the search path.
-- [ ] Moderator persona instructs authoring `searchQuery` (contract + purpose + `/code-review` carve-out), without retrieval internals.
-- [ ] `docs/context-management.md` and the epic Tasks table updated.
-- [ ] `npm run build` / `npm run lint` / `npm run test` green; new tests cover the search path, the recency fallback, and the payload-omission guard.
+- [x] `invoke_agent` accepts an optional `searchQuery`; `InvokeRequest` carries it.
+- [x] `searchQuery` is consumed by the broker at assembly and is **absent** from the delivered agent payload (asserted by test).
+- [x] When `searchQuery` is present and the backend is OpenSearch, project-scope bootstrap is selected via `ContextStore.search` (relevance-ranked) within the project budget; conversation scope remains recency `getAll`.
+- [x] When `searchQuery` is absent, the store is InMemory, or `search` errors/returns empty, project selection falls back to the current recency behavior (no regression).
+- [x] Project→conversation budget reclaim still works with the search path.
+- [x] Moderator persona instructs authoring `searchQuery` (contract + purpose + `/code-review` carve-out), without retrieval internals.
+- [x] `docs/context-management.md` and the epic Tasks table updated.
+- [x] `npm run build` / `npm run lint` / `npm run test` green; new tests cover the search path, the recency fallback, and the payload-omission guard.
 
 ## Dependencies and References
 
 - **Builds on:** #55 (recency ordering), #56 (budget `5000`/`0.8`) — both Done. Inherits #61's "return-at-least-the-top-hit" floor on the `search` path.
 - **Realizes:** epic [#49](49-stabilization/49-stabilization.md) design-conclusion #4; supersedes the #55 recency-stopgap caveat noted there for project bootstrap.
-- **Guards against:** the InvokeRequest schema-drift class (QRM6-BUG-014) — `searchQuery` is broker-only by design.
-- **Touchpoints:** `apps/mcp-server/src/mcp/mcp.service.ts` (tool schema + request build), `libs/common/src/messaging/invoke.types.ts` (InvokeRequest), `apps/mcp-server/src/messaging/message-broker.service.ts` (assemble call), `apps/mcp-server/src/messaging/bootstrap-context.service.ts` (selection), `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts` (`search`, reused), `apps/mcp-server/src/embedding/embedding.service.ts` (query prefix / model constraints), `docker/moderator/CLAUDE.md`, `docs/context-management.md`.
+- **Guards against:** the InvokeRequest schema-drift class (QRM6-BUG-014) in spirit, but not by sidestepping the schema (see correction under Implementation Details §1) — `searchQuery` IS declared on the shared schema and DOES reach the agent's parsed request; the guarantee it never reaches the agent's *delivered payload* comes from an explicit Message Broker strip, tested directly.
+- **Touchpoints:** `apps/mcp-server/src/mcp/mcp.service.ts` (tool schema + request build), `libs/common/src/messaging/invoke.types.ts` (InvokeRequest), `apps/mcp-server/src/messaging/message-broker.service.ts` (assemble call + strip), `apps/mcp-server/src/messaging/bootstrap-context.service.ts` (selection), `apps/mcp-server/src/config/mcp-server-config.service.ts` (backend discriminator getter), `apps/mcp-server/src/context-store/opensearch/opensearch-store.ts` (`search`, reused), `apps/mcp-server/src/embedding/embedding.service.ts` (query prefix / model constraints), `docker/moderator/CLAUDE.md`, `docs/context-management.md`.
 - **Evidence:** [#65 context audit](../logs/sessions/2026-06-20-qrm9-65-context-audit.md) (B1 recency-vs-relevance); 28-action `searchQuery`-feasibility sample (this session).
+
+## Implementation Notes
+
+**Files modified:**
+- `libs/common/src/messaging/invoke.types.ts` — added optional `searchQuery: z.string().optional()` to `invokeRequestSchema`, sibling to `action`, documented as the inverse contract of `bootstrapContext` (caller-set/broker-read vs broker-set/agent-read).
+- `apps/mcp-server/src/mcp/mcp.service.ts` — added `searchQuery` to the `invoke_agent` `inputSchema` (next to `action`) and to the `InvokeRequest` build (`request.searchQuery = args.searchQuery`).
+- `apps/mcp-server/src/config/mcp-server-config.service.ts` — added a fourth constructor param, `@Inject(contextStoreConfig.KEY) public readonly contextStore`, exposing `backend` for gating.
+- `apps/mcp-server/src/messaging/bootstrap-context.service.ts` — `assemble(correlationId?, query?)`; new private `selectProjectItems(query, projectBudget)` implements the search-then-fallback logic described in corrections 1 and 3; `assemble`'s Step 3/5 now delegates to it.
+- `apps/mcp-server/src/messaging/message-broker.service.ts` — `this.bootstrapContext.assemble(correlationId, request.searchQuery)`; added `delete request.searchQuery` unconditionally (both fresh and resumed-session branches) immediately before `deliverWithTimeout`.
+- `docker/moderator/CLAUDE.md` — Context Management section: instructs authoring `searchQuery` on every `invoke_agent` (one sentence, ~10–25 words, identifiers + concept, no slash/hash/branch), plus an explicit `/code-review` carve-out example.
+- `docs/context-management.md` — "Pattern 4: Bootstrap Context Injection" sequence diagram and prose updated to show the search-vs-recency branch and the broker-side strip; config table unchanged (no new env var — `CONTEXT_STORE_BACKEND` already existed).
+- `tickets/49-stabilization/49-stabilization.md` — added the #70 row (PR #71, Done) to the Tasks table; annotated design-conclusion #4 as addressed.
+- Tests: `bootstrap-context.service.spec.ts` (+9: search-path call shape incl. budget arg position, no-getAll-when-searching, token re-sum for reclaim, 4 fallback triggers), `message-broker.service.spec.ts` (+5, +1 updated assertion for the new 2-arg `assemble` call: searchQuery forwarded to assemble, absent from delivered payload with/without bootstrapContext, stripped on resumed sessions, undefined-passthrough when never set), `mcp.service.spec.ts` (+2: searchQuery flows into the built request when present/absent), `mcp-server-config.service.spec.ts` (+1, +1 updated: `contextStore` getter defined and backend is a valid enum value), `invocation.controller.spec.ts` (+1: shared schema does NOT strip `searchQuery` — documents why the broker-side strip is load-bearing).
+
+**Deviations from the literal ticket text (all per architect design-notes corrections, applied before implementation):**
+1. `search` called as `search(ContextScope.project, query, undefined, projectBudget)` — budget is the 4th positional arg, not 3rd as the ticket's original example showed.
+2. The "schema-drift sidestep" framing was corrected: `searchQuery` is declared on the one shared `invokeRequestSchema`, reaches the agent's parsed request, and is removed only by an explicit broker-side `delete` — not by schema omission.
+3. Added the `contextStore` getter to `McpServerConfigService` (not previously exposed) so `BootstrapContextService` can gate on `backend === 'opensearch'`.
+
+**Verification:** `npm run build` clean (3 webpack bundles). `npm run lint` clean (no new warnings). `npm run test`: 48 suites / 897 tests, all green.

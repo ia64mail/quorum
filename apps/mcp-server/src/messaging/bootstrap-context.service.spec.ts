@@ -8,6 +8,7 @@ describe('BootstrapContextService', () => {
 
   const mockContextStore = {
     getAll: jest.fn(),
+    search: jest.fn(),
   };
 
   const defaultBootstrapConfig = {
@@ -16,8 +17,13 @@ describe('BootstrapContextService', () => {
     projectRatio: 0.8,
   };
 
+  const defaultContextStoreConfig = {
+    backend: 'inmemory' as 'inmemory' | 'opensearch',
+  };
+
   const mockConfig = {
     bootstrap: { ...defaultBootstrapConfig },
+    contextStore: { ...defaultContextStoreConfig },
   };
 
   /** Helper: estimate tokens for a value (matches production formula). */
@@ -28,7 +34,9 @@ describe('BootstrapContextService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockConfig.bootstrap = { ...defaultBootstrapConfig };
+    mockConfig.contextStore = { ...defaultContextStoreConfig };
     mockContextStore.getAll.mockResolvedValue({});
+    mockContextStore.search.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -388,6 +396,115 @@ describe('BootstrapContextService', () => {
       const result = await service.assemble('corr-1');
 
       expect(result!.meta.scopesQueried).toEqual(['project', 'conversation']);
+    });
+  });
+
+  describe('relevance search (#70)', () => {
+    beforeEach(() => {
+      mockConfig.contextStore = { backend: 'opensearch' };
+    });
+
+    it('should use ContextStore.search for project scope when a query is present and backend is opensearch', async () => {
+      mockContextStore.search.mockResolvedValue([
+        {
+          key: 'hit-1',
+          value: 'relevant note',
+          scope: ContextScope.project,
+          createdAt: 1,
+        },
+      ]);
+      mockContextStore.getAll.mockResolvedValue({}); // conversation getAll only
+
+      const result = await service.assemble(
+        'corr-1',
+        'ticket #70 bootstrap search',
+      );
+
+      expect(mockContextStore.search).toHaveBeenCalledWith(
+        ContextScope.project,
+        'ticket #70 bootstrap search',
+        undefined,
+        4000, // floor(5000 * 0.8)
+      );
+      expect(result).not.toBeNull();
+      expect(result!.project).toEqual({ 'hit-1': 'relevant note' });
+    });
+
+    it('should not call getAll(project) when the search path is used', async () => {
+      mockContextStore.search.mockResolvedValue([
+        { key: 'hit-1', value: 'x', scope: ContextScope.project, createdAt: 1 },
+      ]);
+
+      await service.assemble(undefined, 'some query');
+
+      expect(mockContextStore.getAll).not.toHaveBeenCalledWith(
+        ContextScope.project,
+      );
+    });
+
+    it('should sum tokens across returned search hits for the budget reclaim step', async () => {
+      mockConfig.bootstrap.maxTokens = 100;
+      mockConfig.bootstrap.projectRatio = 0.6; // project budget = 60, conversation budget = 40
+
+      const value = 'x'.repeat(38); // JSON adds 2 quotes -> ceil(40/4) = 10 tokens
+      mockContextStore.search.mockResolvedValue([
+        { key: 'hit-1', value, scope: ContextScope.project, createdAt: 1 },
+      ]);
+      // Conversation item needs ~70 tokens — only fits with the 50 tokens
+      // reclaimed from the unused project budget (60 - 10 = 50; 40 + 50 = 90).
+      const convValue = 'c'.repeat(276); // ceil(278/4) = 70 tokens
+      mockContextStore.getAll.mockResolvedValue({ conv: convValue });
+
+      const result = await service.assemble('corr-1', 'query');
+
+      expect(result).not.toBeNull();
+      expect(result!.project).toEqual({ 'hit-1': value });
+      expect(result!.meta.estimatedTokens).toBe(10 + 70);
+      expect(result!.conversation).toHaveProperty('conv');
+    });
+
+    describe('fallback to recency — never worse than pre-#70', () => {
+      it('should use recency getAll when query is absent', async () => {
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1');
+
+        expect(mockContextStore.search).not.toHaveBeenCalled();
+        expect(mockContextStore.getAll).toHaveBeenCalledWith(
+          ContextScope.project,
+        );
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+      });
+
+      it('should use recency getAll when backend is inmemory even if query is present', async () => {
+        mockConfig.contextStore = { backend: 'inmemory' };
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(mockContextStore.search).not.toHaveBeenCalled();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+      });
+
+      it('should fall back to recency when search throws', async () => {
+        mockContextStore.search.mockRejectedValue(new Error('opensearch down'));
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+      });
+
+      it('should fall back to recency when search returns an empty array', async () => {
+        mockContextStore.search.mockResolvedValue([]);
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+      });
     });
   });
 });
