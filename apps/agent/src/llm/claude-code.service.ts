@@ -339,10 +339,10 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           // 'success'. Without this guard that silently maps to
           // `success: true` with no verdict ever produced ("No changes to
           // push"). SDKResultSuccess only exposes `terminal_reason` here —
-          // `background_tasks` / `scheduled_tasks` live on StopHookInput
-          // only and are unreachable from this frame — so the guard keys
-          // off `terminal_reason` alone. With the companion PreToolUse
-          // `Agent` rewrite (sdk-hooks.factory.ts) forcing foreground
+          // `background_tasks` / `session_crons` live on StopHookInput and
+          // SubagentStopHookInput only and are unreachable from this frame —
+          // so the guard keys off `terminal_reason` alone. With the companion
+          // PreToolUse `Agent` rewrite (sdk-hooks.factory.ts) forcing foreground
           // sub-agents and `ScheduleWakeup` denied (role-tool-profiles.ts),
           // this should not fire in practice; it remains as the
           // fail-loud backstop.
