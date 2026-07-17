@@ -85,17 +85,17 @@ Notes / edge cases the loop handles correctly:
 
 ## Acceptance Criteria
 
-- [ ] `extractSegmentHead` strips **all** leading `-c <k=v>`/`-C <path>` flags (repeated and interleaved) from a `git …` segment before verb matching, not just the first.
-- [ ] **Item-1 acceptance gate:** new unit tests in `apps/agent/src/config/tool-guard-hook.spec.ts` (extending the `#65 token-aware deny-guard` block) prove the multi-flag bypass forms are now **DENIED**, covering at minimum:
+- [x] `extractSegmentHead` strips **all** leading `-c <k=v>`/`-C <path>` flags (repeated and interleaved) from a `git …` segment before verb matching, not just the first.
+- [x] **Item-1 acceptance gate:** new unit tests in `apps/agent/src/config/tool-guard-hook.spec.ts` (extending the `#65 token-aware deny-guard` block) prove the multi-flag bypass forms are now **DENIED**, covering at minimum:
   - `git -c user.name=x -C <wt> commit …` → denied (`reason` contains `git commit`)
   - `git -C <wt> -c user.name=x commit …` → denied
   - interleaved `git -c a=b -C <wt> -c c=d commit …` → denied
   - a multi-flag `git … push` form → denied (`reason` contains `git push`)
-- [ ] Existing single-flag deny tests and all read-only allow tests (`git -C <wt> status`, `git -C <wt> log --oneline`, `git log --grep=commit`) still pass — no regression, no new false positives.
-- [ ] `docs/system-design.md:202` describes the current rev-list-against-origin push gate (commit-if-dirty, push-if-ahead), not "if dirty, commit and push".
-- [ ] `docs/system-design.md:161` lists both `GH_TOKEN` and `GIT_CONFIG_GLOBAL` as excluded from `SDK_ENV_ALLOWLIST`, mirroring `claude-code.service.ts:26-34`.
-- [ ] `:327` (the #84 edit) is untouched.
-- [ ] `npm run build`, `npm run lint`, `npm run test` all green; new tests added on top of the existing baseline.
+- [x] Existing single-flag deny tests and all read-only allow tests (`git -C <wt> status`, `git -C <wt> log --oneline`, `git log --grep=commit`) still pass — no regression, no new false positives.
+- [x] `docs/system-design.md:202` describes the current rev-list-against-origin push gate (commit-if-dirty, push-if-ahead), not "if dirty, commit and push".
+- [x] `docs/system-design.md:161` lists both `GH_TOKEN` and `GIT_CONFIG_GLOBAL` as excluded from `SDK_ENV_ALLOWLIST`, mirroring `claude-code.service.ts:26-34`.
+- [x] `:327` (the #84 edit) is untouched.
+- [x] `npm run build`, `npm run lint`, `npm run test` all green; new tests added on top of the existing baseline.
 
 ## Dependencies and References
 

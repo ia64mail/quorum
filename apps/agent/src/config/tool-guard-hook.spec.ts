@@ -336,6 +336,46 @@ describe('createToolGuardHook', () => {
       expect(result.reason).toContain('git commit');
     });
 
+    // ── #67: multi-flag `-c`/`-C` bypass (only the first flag was
+    // previously stripped, leaving a residual token that dodged the verb
+    // match) ──
+
+    it('should deny `git -c user.name=x -C <wt> commit …` (two leading flags)', () => {
+      const result = hook('Bash', {
+        command:
+          'git -c user.name=x -C /var/agent-worktrees/abc commit -m "msg"',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny `git -C <wt> -c user.name=x commit …` (reversed flag order)', () => {
+      const result = hook('Bash', {
+        command:
+          'git -C /var/agent-worktrees/abc -c user.name=x commit -m "msg"',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny interleaved `git -c a=b -C <wt> -c c=d commit …`', () => {
+      const result = hook('Bash', {
+        command:
+          'git -c a=b -C /var/agent-worktrees/abc -c c=d commit -m "msg"',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git commit');
+    });
+
+    it('should deny a multi-flag `git … push` form', () => {
+      const result = hook('Bash', {
+        command:
+          'git -c user.name=x -C /var/agent-worktrees/abc push origin main',
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('git push');
+    });
+
     // ── Read-only git must still be allowed ──
 
     it('should allow `git log --grep=commit` (read-only, contains denied verb as substring)', () => {
