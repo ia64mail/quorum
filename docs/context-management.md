@@ -329,13 +329,18 @@ sequenceDiagram
         B->>BCS: assemble(correlationId, request.searchQuery)
         alt searchQuery present and backend is OpenSearch
             BCS->>CS: search(project, query, undefined, projectBudget, onTrace)
-            CS-->>BCS: relevance-ranked ContextItem[] (within budget)
-            BCS->>BCS: traceLogger.log({source: "bootstrap", ...}) if a hit was used or search errored
-        else no query, InMemory backend, or search throws/empty
+            CS-->>BCS: ContextItem[] (relevance-ranked, possibly empty)
+            BCS->>BCS: traceLogger.log({source: "bootstrap", ...}) — emitted for every completed or errored ranked search, regardless of hit count
+            opt zero hits, or search threw after capturing a trace
+                BCS->>CS: getAll(project)
+                CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+                Note over BCS: Recency fallback for selection only — the trace above already recorded the ranked search
+            end
+        else no query, InMemory backend, or search threw before capturing a trace
             BCS->>CS: getAll(project)
             CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
             Note over BCS: Apply token budget (greedy, newer items first)
-            Note over BCS: No trace emitted — recency fallback
+            Note over BCS: No trace emitted — no ranked search ran
         end
         BCS->>CS: getAll(conversation, correlationId)
         CS-->>BCS: {taskBreakdown: [...], constraints: [...]}
@@ -363,7 +368,7 @@ Project-scope selection is **task-aware since #70**: when a `searchQuery` is pre
 
 A token budget (`BOOTSTRAP_MAX_TOKENS`, default 5000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.8, i.e. a 4000-token project budget). Unused project budget reclaims to the conversation allocation regardless of which project-selection path ran.
 
-**Observability (#70 follow-up).** The ranked project-scope search is traced into the same `logs/context-search-*.jsonl` stream used by `context_query` (see [Search Observability](context-store.md#search-observability)), tagged `source: 'bootstrap'` so it is attributable and distinguishable from `context_query` traces. A trace is emitted when the search produces the returned selection, and also when it throws after already capturing a trace (errorMessage populated) — but **not** on the recency-fallback branch (absent query, InMemory backend, a search that completes with zero hits, or a search that throws before capturing anything), by design: an absent bootstrap trace means "recency fallback ran," not "observability broken."
+**Observability (#70 follow-up).** The ranked project-scope search is traced into the same `logs/context-search-*.jsonl` stream used by `context_query` (see [Search Observability](context-store.md#search-observability)), tagged `source: 'bootstrap'` so it is attributable and distinguishable from `context_query` traces. A trace is emitted whenever a ranked search actually runs — i.e. whenever `onTrace` fires — regardless of hit count: a completed search that matches nothing is still traced (mirroring `context_query`'s `if (capturedTrace)` guard, which is not a hit-count check), because that's exactly the recency-vs-relevance state #70 exists to surface. A trace is also emitted when the search throws after already capturing a trace (`errorMessage` populated). No trace is emitted when **no ranked search executes at all** — `searchQuery` absent, InMemory backend, or a search that throws before ever capturing a trace — by design: an absent bootstrap trace means "no ranked search ran," not "observability broken." Project *selection* still falls back to recency whenever the ranked search yields no hits (traced or not) — selection and tracing are independent outcomes.
 
 `searchQuery` itself is a caller-set, broker-read `InvokeRequest` field — the moderator authors a one-sentence retrieval-shaped query as a sibling to `action` on every `invoke_agent` call. It is the inverse of `bootstrapContext` (broker-set, agent-read): the broker consumes it during assembly and then deletes it from the request before delivery, so it never reaches the target agent's payload.
 

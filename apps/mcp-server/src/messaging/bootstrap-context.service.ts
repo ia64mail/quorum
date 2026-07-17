@@ -123,11 +123,13 @@ export class BootstrapContextService {
    * Observability (#70 follow-up): the ranked search leg is traced via
    * `ContextSearchTraceLogger`, mirroring the `context_query` MCP tool path
    * (`mcp.service.ts`), tagged `source: 'bootstrap'` so it is attributable.
-   * A trace is emitted only when the ranked search actually produced (or
-   * attempted to produce, on error) the returned selection — the recency
-   * fallback branch, for any of the reasons above including a search that
-   * completes with zero hits, emits no trace, by design (parity with
-   * `context_query`, which only logs when a ranked search ran to a result).
+   * A trace is emitted whenever a ranked search actually ran — i.e.
+   * whenever `onTrace` fired, regardless of hit count (a completed
+   * zero-hit search still ran a real ranked query and is exactly the
+   * recency-vs-relevance state #70 exists to surface) — or when the search
+   * threw after `onTrace` already captured a trace. No trace is emitted
+   * when no ranked search executed at all: `query` absent, InMemory
+   * backend, or `search` throwing before ever capturing a trace.
    */
   private async selectProjectItems(
     query: string | undefined,
@@ -154,6 +156,20 @@ export class BootstrapContextService {
           },
         );
 
+        // Emit as soon as the ranked search completes — mirroring
+        // context_query's `if (capturedTrace)` guard (mcp.service.ts),
+        // which is not conditioned on hit count. A completed search that
+        // matches nothing still ran a real ranked query (onTrace fired
+        // with hitCountRaw: 0) and is exactly the recency-vs-relevance
+        // state #70 exists to surface — it must not be indistinguishable
+        // from "no ranked search ran" (review fix, PR #91).
+        this.emitBootstrapSearchTrace(
+          capturedTrace,
+          searchQuery,
+          projectBudget,
+          correlationId,
+        );
+
         if (hits.length > 0) {
           const selected: Record<string, unknown> = {};
           let tokensUsed = 0;
@@ -161,12 +177,6 @@ export class BootstrapContextService {
             selected[item.key] = item.value;
             tokensUsed += this.estimateTokens(item.value);
           }
-          this.emitBootstrapSearchTrace(
-            capturedTrace,
-            searchQuery,
-            projectBudget,
-            correlationId,
-          );
           return { selected, tokensUsed };
         }
 
@@ -191,7 +201,10 @@ export class BootstrapContextService {
       }
     }
 
-    // Recency fallback (pre-#70 behavior, unchanged). No trace emitted.
+    // Recency fallback (pre-#70 behavior, unchanged). Reached either
+    // because no ranked search ran at all (no trace emitted above) or
+    // because the ranked search completed with zero hits (a trace was
+    // already emitted above, for that search).
     const projectItems = await this.contextStore.getAll(ContextScope.project);
     return this.applyBudget(projectItems, projectBudget);
   }
