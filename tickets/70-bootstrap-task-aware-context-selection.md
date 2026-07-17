@@ -128,3 +128,71 @@ Update [docs/context-management.md](../docs/context-management.md) "Bootstrap Co
 - Added `bootstrap-context.service.spec.ts` describe block `'over-budget top hit (#61 interaction — review fix)'` (+2 tests): (a) a top hit exceeding the *entire* bootstrap budget (150 tokens vs. 100 total) — asserts conversation context survives intact with its full base allocation rather than being silently dropped, and documents that `meta.estimatedTokens` legitimately exceeds `BOOTSTRAP_MAX_TOKENS` in this extreme case (an accepted, pre-existing #61 trade-off, not a new regression); (b) a modestly over-budget top hit (90 vs. 80-token project share, realistic `#61` magnitude) — asserts total `estimatedTokens` stays within `BOOTSTRAP_MAX_TOKENS` and conversation context is preserved. Updated Implementation Details §2's "Budget reclaim (Step 6): unchanged" claim, which this review proved false — see the corrected text above.
 
 **Verification (post-fix):** `npm run build` clean (3 webpack bundles). `npm run lint` clean (no new warnings). `npm run test`: 48 suites / 899 tests, all green.
+
+## Follow-up — Bootstrap search observability
+
+*Authored during QRM9 close-out (2026-07-17), after #70 merged to staging (PR #71) and was verified working live. Spec only — no implementation in this commit. Branch: `70-bootstrap-search-observability` off `49-stabilization`.*
+
+### Problem Statement
+
+The `context_query` tool path emits a per-search `ContextSearchTrace` record (`logs/context-search-*.jsonl`) via the `onTrace` callback — `mcp.service.ts:930-966` passes a 5th `onTrace` arg into `ContextStore.search`, captures the backend `SearchTrace`, and writes a full `ContextSearchTraceRecord` through the injected `ContextSearchTraceLogger`. The bootstrap project-scope search does **not**: `BootstrapContextService.selectProjectItems` calls `search(ContextScope.project, query, undefined, projectBudget)` (`bootstrap-context.service.ts:128-133`) with **no `onTrace` argument**, so the #70 relevance path — the whole point of task-aware bootstrap — produces **zero trace records**. Bootstrap search is the single most consequential ranked query in the system (it seeds every fresh agent's starting context) and is currently the only ranked-search caller with no observability.
+
+**Live evidence (2026-07-17T16:43:33).** A bootstrap dispatch logged only `"OpenSearchStore: Hybrid search for scope=project: ..."` + `"BootstrapContextService: Assembled bootstrap context: 2 items"` — no `ContextSearchTrace` — while tool-invoked `context_query` searches in the same session each produced a full trace record. There is no way to audit *which* project records bootstrap selected, their scores, the engine used (hybrid vs BM25-only degrade), or whether the token budget truncated the result — exactly the diagnostics the trace stream exists to provide.
+
+**Attribution gap.** Even once bootstrap emits a trace, `ContextSearchTraceRecord` (`context-search-trace-logger.service.ts:10-32`) has no field distinguishing a bootstrap-originated search from a `context_query`-originated one. `callerRole` cannot serve this purpose: it means "which agent invoked the tool" (a role enum), and bootstrap is a server-push with no invoking agent — for bootstrap it would be `null`, which is indistinguishable from a `context_query` issued before `register_agent`. A dedicated discriminator is required.
+
+**Scope:** observability only. No change to selection behavior, ranking, budgets, the `searchQuery` contract, or the recency fallback. This does not alter which records bootstrap injects — only whether that decision is traceable.
+
+### Implementation Details
+
+**1. Attribution field on `ContextSearchTraceRecord` (`apps/mcp-server/src/observability/context-search-trace-logger.service.ts`).**
+Add a discriminator to the record interface (the observability-layer wrapper — **not** the backend `SearchTrace` in `libs/common/src/context-store/context-store.abstract.ts`, which stays unchanged):
+
+    source: 'context_query' | 'bootstrap';
+
+Place it near `callerRole`. Make it **required** and update the single existing writer (`mcp.service.ts:949` `traceLogger.log({...})`) to set `source: 'context_query'` — there is exactly one existing call site, so a required field is safe and self-documenting. (Optional-with-omit is the alternative if strict backward-compatibility of already-written historical JSONL matters; not required here since the field is additive and old lines are simply missing it. Recommend required.)
+
+**2. Wire `ObservabilityModule` into `MessagingModule` (`apps/mcp-server/src/messaging/messaging.module.ts`).**
+`MessagingModule` currently imports only `RegistryModule`; it must add `ObservabilityModule` to `imports` so `ContextSearchTraceLogger` (exported by `ObservabilityModule`) is injectable into `BootstrapContextService`. No circular-dependency risk: `ObservabilityModule` has no imports of its own. `McpModule` already imports both `MessagingModule` and `ObservabilityModule`, so the shared singleton logger instance is reused (one JSONL stream, not two).
+
+**3. Inject the logger and thread `correlationId` (`apps/mcp-server/src/messaging/bootstrap-context.service.ts`).**
+- Add a third constructor param: `private readonly traceLogger: ContextSearchTraceLogger` (import from `../observability`).
+- `selectProjectItems` currently receives `(query, projectBudget)`; add `correlationId?: string` so the emitted record can populate its `correlationId` field. `assemble` already holds `correlationId` — pass it through at the `selectProjectItems` call site (`:41-42`).
+
+**4. Capture and emit the trace in the search path (`selectProjectItems`, `bootstrap-context.service.ts:126-153`).**
+Mirror the `context_query` capture pattern exactly:
+- Declare `let capturedTrace: SearchTrace | undefined;` before the `search` call (import `SearchTrace` from `@app/common`).
+- Pass a 5th arg to `search`: `(trace) => { capturedTrace = trace; }`.
+- After the `try` block's search work — and critically **also on the catch path** — if `capturedTrace` is defined, call `this.traceLogger.log({...})`. The catch-path emit matters: per QRM7-016, `OpenSearchStore.search` fires `onTrace` with `errorMessage` set even when it throws after `embedQuery` succeeds, so a bootstrap search that throws can still have a capturable trace. Structure the capture so the record is emitted whether search returns or throws (e.g. build the record in a `finally`, or emit at both the success and catch sites guarded by `if (capturedTrace)`). Use `randomUUID()` (from `node:crypto`) for `queryId` and `new Date().toISOString()` for `timestamp`, matching `mcp.service.ts`.
+- Record field mapping for the bootstrap emit:
+  - `source: 'bootstrap'`
+  - `queryId`: fresh `randomUUID()`
+  - `correlationId`: the threaded `correlationId ?? null`
+  - `callerRole: null` (server-push, no invoking agent)
+  - `scope: 'project'`, `id: null`
+  - `queryText: query`, `maxTokens: projectBudget`
+  - `engine`, `durationMs`, `hitCountRaw`, `hitCountReturned`, `truncatedByTokenBudget`, `results`, `errorMessage`: copied from `capturedTrace`, identical to the `context_query` mapping.
+
+**5. Fallback paths emit no trace — by design (parity with `context_query`).**
+When the recency fallback runs (no `query`, InMemory backend, empty result, or `canSearch === false`), no ranked `search` executes, so no trace is emitted — this matches `context_query`, which only logs when `capturedTrace` is present. Document this in the trace section of `docs/context-management.md` so an absent bootstrap trace is correctly read as "recency fallback / no ranked search ran," not "observability broken."
+
+**SearchTrace shape considerations.** The backend `SearchTrace` interface (`context-store.abstract.ts:24-32`) and both stores' `onTrace` implementations are **unchanged** — bootstrap reuses the identical callback contract `context_query` already exercises. All attribution lives in the MCP/observability-layer `ContextSearchTraceRecord`. The only new type surface is the `source` field on that wrapper.
+
+**Docs.** Update `docs/context-management.md` (the QRM7-016 context-search-trace / observability section, and the "Bootstrap Context Injection" section) to note that bootstrap project-scope search now emits `ContextSearchTrace` records tagged `source: "bootstrap"`, and that recency-fallback selection emits none.
+
+### Acceptance Criteria
+
+- [ ] Bootstrap project-scope relevance search emits a `ContextSearchTrace` record to the `logs/context-search-*.jsonl` stream (the same sink `context_query` uses), including engine, per-hit scores/snippets, `truncatedByTokenBudget`, and `errorMessage`.
+- [ ] The emitted record is attributable to bootstrap via `source: 'bootstrap'`, distinct from `context_query` records (`source: 'context_query'`); the single existing `context_query` writer is updated to set `source` and remains correct.
+- [ ] The bootstrap trace populates `correlationId` (when the invocation carries one), `queryText`, `maxTokens` (= project budget), `scope: 'project'`, `callerRole: null`.
+- [ ] A traceable failure inside `search` (post-`embedQuery` throw) still emits a record carrying `errorMessage`, mirroring `context_query`.
+- [ ] Recency-fallback selection (absent query / InMemory backend / empty result / search throws before any trace) emits **no** trace record — behavior and rationale documented.
+- [ ] Selection behavior, ranking, budgets, the `searchQuery` contract, and the recency fallback are unchanged (observability-only; no diff to which records bootstrap injects).
+- [ ] New test coverage: `bootstrap-context.service.spec.ts` — (a) search path calls `traceLogger.log` once with `source: 'bootstrap'` and the mapped fields (scope, queryText, correlationId, budget); (b) recency-fallback path does **not** call `traceLogger.log`; (c) error-with-captured-trace path still logs. `mcp.service.spec.ts` — existing `context_query` trace assertion updated for `source: 'context_query'`. `messaging.module` DI resolves `BootstrapContextService` with the new dependency.
+- [ ] `npm run build` / `npm run lint` / `npm run test` green.
+
+### Dependencies and References
+
+- **Builds on:** #70 (this ticket — bootstrap task-aware selection), QRM7-016 (`onTrace` callback, `ContextSearchTraceLogger`, `context-search-*.jsonl` stream, budget-exhausted/error-path trace semantics).
+- **Touchpoints:** `apps/mcp-server/src/observability/context-search-trace-logger.service.ts` (`source` field), `apps/mcp-server/src/messaging/messaging.module.ts` (import `ObservabilityModule`), `apps/mcp-server/src/messaging/bootstrap-context.service.ts` (inject logger, thread `correlationId`, capture + emit trace), `apps/mcp-server/src/mcp/mcp.service.ts` (set `source: 'context_query'` on the existing emit), `docs/context-management.md`.
+- **Evidence:** live bootstrap dispatch 2026-07-17T16:43:33 (no trace) vs. concurrent `context_query` searches (full traces) during QRM9 close-out.
