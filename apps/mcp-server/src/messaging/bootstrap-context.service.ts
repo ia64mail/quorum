@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   BootstrapContext,
@@ -5,7 +6,9 @@ import {
   ContextScope,
   ContextStore,
 } from '@app/common';
+import type { SearchTrace } from '@app/common';
 import { McpServerConfigService } from '../config';
+import { ContextSearchTraceLogger } from '../observability';
 
 @Injectable()
 export class BootstrapContextService {
@@ -15,6 +18,7 @@ export class BootstrapContextService {
     @Inject(ContextStore)
     private readonly contextStore: ContextStore,
     private readonly config: McpServerConfigService,
+    private readonly traceLogger: ContextSearchTraceLogger,
   ) {}
 
   async assemble(
@@ -39,7 +43,7 @@ export class BootstrapContextService {
     // recency getAll + greedy bin-pack otherwise (unchanged, strictly a
     // fallback — never a regression from pre-#70 behavior).
     const { selected: selectedProject, tokensUsed: projectTokensUsed } =
-      await this.selectProjectItems(query, projectBudget);
+      await this.selectProjectItems(query, projectBudget, correlationId);
 
     // Step 4 — Fetch conversation items (only when correlationId is provided)
     const conversationItems = correlationId
@@ -115,21 +119,39 @@ export class BootstrapContextService {
    *   downtime already degrades to BM25-only *inside* search; a true empty
    *   result here still falls back to recency so bootstrap is never worse
    *   than the pre-#70 behavior).
+   *
+   * Observability (#70 follow-up): the ranked search leg is traced via
+   * `ContextSearchTraceLogger`, mirroring the `context_query` MCP tool path
+   * (`mcp.service.ts`), tagged `source: 'bootstrap'` so it is attributable.
+   * A trace is emitted only when the ranked search actually produced (or
+   * attempted to produce, on error) the returned selection — the recency
+   * fallback branch, for any of the reasons above including a search that
+   * completes with zero hits, emits no trace, by design (parity with
+   * `context_query`, which only logs when a ranked search ran to a result).
    */
   private async selectProjectItems(
     query: string | undefined,
     projectBudget: number,
+    correlationId?: string,
   ): Promise<{ selected: Record<string, unknown>; tokensUsed: number }> {
     const canSearch =
       !!query && this.config.contextStore.backend === 'opensearch';
 
     if (canSearch) {
+      // Narrowed by canSearch above, but kept as a local const for the
+      // non-null query reference passed into search/trace emission.
+      const searchQuery = query;
+      let capturedTrace: SearchTrace | undefined;
+
       try {
         const hits = await this.contextStore.search(
           ContextScope.project,
-          query,
+          searchQuery,
           undefined,
           projectBudget,
+          (trace) => {
+            capturedTrace = trace;
+          },
         );
 
         if (hits.length > 0) {
@@ -139,6 +161,12 @@ export class BootstrapContextService {
             selected[item.key] = item.value;
             tokensUsed += this.estimateTokens(item.value);
           }
+          this.emitBootstrapSearchTrace(
+            capturedTrace,
+            searchQuery,
+            projectBudget,
+            correlationId,
+          );
           return { selected, tokensUsed };
         }
 
@@ -150,12 +178,57 @@ export class BootstrapContextService {
         this.logger.warn(
           `Project relevance search failed — falling back to recency: ${message}`,
         );
+        // Per QRM7-016, OpenSearchStore.search can fire onTrace (capturing
+        // errorMessage) even when it subsequently throws — emit whatever
+        // was captured so the failure stays auditable, even though
+        // selection still falls back to recency below.
+        this.emitBootstrapSearchTrace(
+          capturedTrace,
+          searchQuery,
+          projectBudget,
+          correlationId,
+        );
       }
     }
 
-    // Recency fallback (pre-#70 behavior, unchanged).
+    // Recency fallback (pre-#70 behavior, unchanged). No trace emitted.
     const projectItems = await this.contextStore.getAll(ContextScope.project);
     return this.applyBudget(projectItems, projectBudget);
+  }
+
+  /**
+   * Emit a `ContextSearchTrace` record for the bootstrap project-scope
+   * relevance search (#70 follow-up), tagged `source: 'bootstrap'`. No-op
+   * when `trace` is undefined (search never reached the `onTrace` callback).
+   */
+  private emitBootstrapSearchTrace(
+    trace: SearchTrace | undefined,
+    queryText: string,
+    maxTokens: number,
+    correlationId?: string,
+  ): void {
+    if (!trace) {
+      return;
+    }
+
+    this.traceLogger.log({
+      timestamp: new Date().toISOString(),
+      queryId: randomUUID(),
+      correlationId: correlationId ?? null,
+      callerRole: null,
+      source: 'bootstrap',
+      scope: ContextScope.project,
+      id: null,
+      queryText,
+      maxTokens,
+      engine: trace.engine,
+      durationMs: trace.durationMs,
+      hitCountRaw: trace.hitCountRaw,
+      hitCountReturned: trace.hitCountReturned,
+      truncatedByTokenBudget: trace.truncatedByTokenBudget,
+      results: trace.results,
+      errorMessage: trace.errorMessage,
+    });
   }
 
   private applyBudget(

@@ -635,6 +635,7 @@ describe('McpService', () => {
       >;
       const record = calls[0][0];
       expect(record.engine).toBe('hybrid');
+      expect(record.source).toBe('context_query');
       expect(record.queryText).toBe('test trace');
       expect(record.scope).toBe('project');
       expect(record.maxTokens).toBe(2000);
