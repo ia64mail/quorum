@@ -328,12 +328,19 @@ sequenceDiagram
     alt fresh session (request.sessionId empty)
         B->>BCS: assemble(correlationId, request.searchQuery)
         alt searchQuery present and backend is OpenSearch
-            BCS->>CS: search(project, query, undefined, projectBudget)
-            CS-->>BCS: relevance-ranked ContextItem[] (within budget)
-        else no query, InMemory backend, or search throws/empty
+            BCS->>CS: search(project, query, undefined, projectBudget, onTrace)
+            CS-->>BCS: ContextItem[] (relevance-ranked, possibly empty)
+            BCS->>BCS: traceLogger.log({source: "bootstrap", ...}) — emitted for every completed or errored ranked search, regardless of hit count
+            opt zero hits, or search threw after capturing a trace
+                BCS->>CS: getAll(project)
+                CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+                Note over BCS: Recency fallback for selection only — the trace above already recorded the ranked search
+            end
+        else no query, InMemory backend, or search threw before capturing a trace
             BCS->>CS: getAll(project)
             CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
             Note over BCS: Apply token budget (greedy, newer items first)
+            Note over BCS: No trace emitted — no ranked search ran
         end
         BCS->>CS: getAll(conversation, correlationId)
         CS-->>BCS: {taskBreakdown: [...], constraints: [...]}
@@ -360,6 +367,8 @@ The broker calls `BootstrapContextService.assemble(correlationId, request.search
 Project-scope selection is **task-aware since #70**: when a `searchQuery` is present *and* the Context Store backend is OpenSearch, the service calls `ContextStore.search(ContextScope.project, query, undefined, projectBudget)` — the same hybrid BM25 + k-NN search used for `context_query`, already scope-filtered and token-budgeted, and guaranteed to return at least the top-ranked hit even if it exceeds the budget (#61). The returned `ContextItem[]` is mapped into the selected record and its tokens re-summed for the budget-reclaim step. This falls back to the pre-#70 recency `getAll` + greedy bin-pack whenever `searchQuery` is absent, the backend is InMemoryStore (its `search` is substring-only, not ranked), or `search` throws or returns an empty result set — strictly additive, never a regression.
 
 A token budget (`BOOTSTRAP_MAX_TOKENS`, default 5000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.8, i.e. a 4000-token project budget). Unused project budget reclaims to the conversation allocation regardless of which project-selection path ran.
+
+**Observability (#70 follow-up).** The ranked project-scope search is traced into the same `logs/context-search-*.jsonl` stream used by `context_query` (see [Search Observability](context-store.md#search-observability)), tagged `source: 'bootstrap'` so it is attributable and distinguishable from `context_query` traces. A trace is emitted whenever a ranked search actually runs — i.e. whenever `onTrace` fires — regardless of hit count: a completed search that matches nothing is still traced (mirroring `context_query`'s `if (capturedTrace)` guard, which is not a hit-count check), because that's exactly the recency-vs-relevance state #70 exists to surface. A trace is also emitted when the search throws after already capturing a trace (`errorMessage` populated). No trace is emitted when **no ranked search executes at all** — `searchQuery` absent, InMemory backend, or a search that throws before ever capturing a trace — by design: an absent bootstrap trace means "no ranked search ran," not "observability broken." Project *selection* still falls back to recency whenever the ranked search yields no hits (traced or not) — selection and tracing are independent outcomes.
 
 `searchQuery` itself is a caller-set, broker-read `InvokeRequest` field — the moderator authors a one-sentence retrieval-shaped query as a sibling to `action` on every `invoke_agent` call. It is the inverse of `bootstrapContext` (broker-set, agent-read): the broker consumes it during assembly and then deletes it from the request before delivery, so it never reaches the target agent's payload.
 

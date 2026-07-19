@@ -951,6 +951,7 @@ export class McpService implements OnModuleInit {
               queryId,
               correlationId: correlationId ?? null,
               callerRole: state?.role ?? null,
+              source: 'context_query',
               scope,
               id: id ?? null,
               queryText: args.query ?? '',

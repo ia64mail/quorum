@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ContextScope, ContextStore } from '@app/common';
 import { McpServerConfigService } from '../config';
+import { ContextSearchTraceLogger } from '../observability';
 import { BootstrapContextService } from './bootstrap-context.service';
 
 describe('BootstrapContextService', () => {
@@ -9,6 +10,10 @@ describe('BootstrapContextService', () => {
   const mockContextStore = {
     getAll: jest.fn(),
     search: jest.fn(),
+  };
+
+  const mockTraceLogger = {
+    log: jest.fn(),
   };
 
   const defaultBootstrapConfig = {
@@ -43,6 +48,7 @@ describe('BootstrapContextService', () => {
         BootstrapContextService,
         { provide: ContextStore, useValue: mockContextStore },
         { provide: McpServerConfigService, useValue: mockConfig },
+        { provide: ContextSearchTraceLogger, useValue: mockTraceLogger },
       ],
     }).compile();
 
@@ -425,6 +431,7 @@ describe('BootstrapContextService', () => {
         'ticket #70 bootstrap search',
         undefined,
         4000, // floor(5000 * 0.8)
+        expect.any(Function), // onTrace (#70 follow-up)
       );
       expect(result).not.toBeNull();
       expect(result!.project).toEqual({ 'hit-1': 'relevant note' });
@@ -548,6 +555,7 @@ describe('BootstrapContextService', () => {
           ContextScope.project,
         );
         expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
       });
 
       it('should use recency getAll when backend is inmemory even if query is present', async () => {
@@ -558,6 +566,7 @@ describe('BootstrapContextService', () => {
 
         expect(mockContextStore.search).not.toHaveBeenCalled();
         expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
       });
 
       it('should fall back to recency when search throws', async () => {
@@ -568,6 +577,9 @@ describe('BootstrapContextService', () => {
 
         expect(result).not.toBeNull();
         expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        // Search rejected before ever invoking onTrace — nothing was
+        // captured, so there is nothing to log.
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
       });
 
       it('should fall back to recency when search returns an empty array', async () => {
@@ -578,6 +590,241 @@ describe('BootstrapContextService', () => {
 
         expect(result).not.toBeNull();
         expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
+      });
+
+      it('should still log exactly one trace when search completes (onTrace fires) but returns zero hits (review fix, PR #91)', async () => {
+        // A completed zero-hit search ran a real ranked query — onTrace
+        // fired with hitCountRaw: 0 — and is exactly the
+        // recency-vs-relevance state #70 exists to surface. It must be
+        // traced, mirroring context_query's `if (capturedTrace)` guard
+        // (mcp.service.ts), which is not conditioned on hit count. Project
+        // *selection* still falls back to recency (no hits to use), but
+        // that is orthogonal to whether the search itself was traced.
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'hybrid',
+              durationMs: 5,
+              hitCountRaw: 0,
+              hitCountReturned: 0,
+              truncatedByTokenBudget: false,
+              results: [],
+              errorMessage: null,
+            });
+            return Promise.resolve([]);
+          },
+        );
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        // Selection still falls back to recency...
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        // ...but the completed (zero-hit) ranked search is still traced,
+        // exactly once, with the correlationId populated.
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+        const calls = mockTraceLogger.log.mock.calls as Array<
+          [Record<string, unknown>]
+        >;
+        const record = calls[0][0];
+        expect(record.source).toBe('bootstrap');
+        expect(record.correlationId).toBe('corr-1');
+        expect(record.hitCountRaw).toBe(0);
+        expect(record.hitCountReturned).toBe(0);
+      });
+    });
+
+    describe('search observability (#70 follow-up)', () => {
+      it('should log a ContextSearchTrace with source: bootstrap and the mapped fields when the search path is used', async () => {
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'hybrid',
+              durationMs: 12,
+              hitCountRaw: 3,
+              hitCountReturned: 1,
+              truncatedByTokenBudget: true,
+              results: [
+                {
+                  key: 'hit-1',
+                  score: 0.87,
+                  snippet: '"relevant note"',
+                  tokensEstimate: 4,
+                  includedInResult: true,
+                },
+              ],
+              errorMessage: null,
+            });
+            return Promise.resolve([
+              {
+                key: 'hit-1',
+                value: 'relevant note',
+                scope: ContextScope.project,
+                createdAt: 1,
+              },
+            ]);
+          },
+        );
+
+        await service.assemble('corr-1', 'ticket #70 bootstrap search');
+
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+        const calls = mockTraceLogger.log.mock.calls as Array<
+          [Record<string, unknown>]
+        >;
+        const record = calls[0][0];
+        expect(record.source).toBe('bootstrap');
+        expect(record.scope).toBe(ContextScope.project);
+        expect(record.queryText).toBe('ticket #70 bootstrap search');
+        expect(record.correlationId).toBe('corr-1');
+        expect(record.callerRole).toBeNull();
+        expect(record.maxTokens).toBe(4000); // floor(5000 * 0.8)
+        expect(record.engine).toBe('hybrid');
+        expect(record.truncatedByTokenBudget).toBe(true);
+        expect(record.hitCountRaw).toBe(3);
+        expect(record.hitCountReturned).toBe(1);
+        expect(record.queryId).toEqual(expect.any(String));
+        expect(record.timestamp).toEqual(expect.any(String));
+      });
+
+      it('should populate correlationId as null when the invocation carries none', async () => {
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'bm25-only',
+              durationMs: 3,
+              hitCountRaw: 1,
+              hitCountReturned: 1,
+              truncatedByTokenBudget: false,
+              results: [],
+              errorMessage: null,
+            });
+            return Promise.resolve([
+              {
+                key: 'hit-1',
+                value: 'x',
+                scope: ContextScope.project,
+                createdAt: 1,
+              },
+            ]);
+          },
+        );
+
+        await service.assemble(undefined, 'a query');
+
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+        const calls = mockTraceLogger.log.mock.calls as Array<
+          [Record<string, unknown>]
+        >;
+        const record = calls[0][0];
+        expect(record.correlationId).toBeNull();
+      });
+
+      it('should still log a trace carrying errorMessage when search throws after onTrace already captured a trace (QRM7-016 error-path parity)', async () => {
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'hybrid',
+              durationMs: 8,
+              hitCountRaw: 0,
+              hitCountReturned: 0,
+              truncatedByTokenBudget: false,
+              results: [],
+              errorMessage: 'downstream failure',
+            });
+            return Promise.reject(new Error('downstream failure'));
+          },
+        );
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        // Selection still falls back to recency...
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        // ...but the captured trace is still emitted for auditability.
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+        const calls = mockTraceLogger.log.mock.calls as Array<
+          [Record<string, unknown>]
+        >;
+        const record = calls[0][0];
+        expect(record.source).toBe('bootstrap');
+        expect(record.errorMessage).toBe('downstream failure');
+      });
+
+      it('should not double-emit when onTrace never fires before search throws', async () => {
+        // search() rejects without ever invoking onTrace — capturedTrace
+        // stays undefined, so emitBootstrapSearchTrace's `if (!trace)`
+        // guard is a no-op here. Only the catch-path call site runs (the
+        // try-path emit is unreachable once search() rejects), so there is
+        // exactly zero log calls, never a duplicate.
+        mockContextStore.search.mockRejectedValue(new Error('opensearch down'));
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        await service.assemble('corr-1', 'a query');
+
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
+      });
+
+      it('should not double-emit when search resolves normally with hits (single emit, not one per code path)', async () => {
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'hybrid',
+              durationMs: 1,
+              hitCountRaw: 1,
+              hitCountReturned: 1,
+              truncatedByTokenBudget: false,
+              results: [],
+              errorMessage: null,
+            });
+            return Promise.resolve([
+              {
+                key: 'hit-1',
+                value: 'x',
+                scope: ContextScope.project,
+                createdAt: 1,
+              },
+            ]);
+          },
+        );
+
+        await service.assemble('corr-1', 'a query');
+
+        // Emitted once right after search() resolves — not once more
+        // inside the (now-separate) hits.length > 0 branch.
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
       });
     });
   });
