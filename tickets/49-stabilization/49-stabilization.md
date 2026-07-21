@@ -74,11 +74,14 @@ Vendored from the QRM8 context-usage research. Host log paths (`logs/…`) are r
 | Issue | Title | Status |
 |-------|-------|--------|
 | [#65](https://github.com/ia64mail/quorum/issues/65) | Worktree commit/push hardening — agent commits orphan in the shared clone instead of reaching origin · PR #66 | Done |
-| [#67](https://github.com/ia64mail/quorum/issues/67) | Deny-guard multi-`-c` bypass + `system-design.md` doc staleness — #65 review follow-ups | Spec |
+| [#67](https://github.com/ia64mail/quorum/issues/67) | Deny-guard multi-`-c` bypass + `system-design.md` doc staleness — #65 review follow-ups · PR #90 | Done |
 | [#68](https://github.com/ia64mail/quorum/issues/68) | Bump Claude Agent SDK + Claude Code CLI to latest; default to Opus 4.8 · PR #69 | Done |
 | [#72](https://github.com/ia64mail/quorum/issues/72) | Increase teamlead invocation timeout 10 → 15 min for `/code-review` · PR #73 | Done |
-| [#78](https://github.com/ia64mail/quorum/issues/78) | Session-resume durability broken on SDK 0.3.207: FileSessionStore bypassed, agent transcripts on tmpfs · PR #83 (open) | In review |
-| [#80](https://github.com/ia64mail/quorum/issues/80) | Per-role agent model override via environment | Spec |
+| [#78](https://github.com/ia64mail/quorum/issues/78) | Session-resume durability broken on SDK 0.3.207: FileSessionStore bypassed, agent transcripts on tmpfs · PR #83 | Done |
+| [#79](https://github.com/ia64mail/quorum/issues/79) | Commit-message extraction corrupts commit when an agent mentions the `<commit-message>` marker in prose · PR #86 | Done |
+| [#80](https://github.com/ia64mail/quorum/issues/80) | Per-role agent model override via environment · PR #85 | Done |
+| [#87](https://github.com/ia64mail/quorum/issues/87) | Deep-tier `/code-review` skill does not complete inside a single-shot agent invocation (CC CLI 2.1.207 background-agent default) · PR #88 | Done |
+| [#92](https://github.com/ia64mail/quorum/issues/92) | Moderator forced re-login — stale `CLAUDE_CODE_OAUTH_TOKEN` shadows fresh `/login` credentials · PR #93 | Done |
 
 ### Residual hygiene
 
@@ -88,6 +91,7 @@ Vendored from the QRM8 context-usage research. Host log paths (`logs/…`) are r
 | [#51](../51-ticket-library-verification-discipline.md) | Ticket library — "truth about a change, not current state" consumption discipline | Done (closed) |
 | [#76](https://github.com/ia64mail/quorum/issues/76) | Agent prompt actualization — review built-in role prompts + `quorum.md`; land the tested ticket-consumption guidance · PR #77 | Done |
 | [#81](https://github.com/ia64mail/quorum/issues/81) | Review Protocol tier drift — bind review tiers to their skills, ban retroactive skill runs · PR #82 | Done |
+| [#84](https://github.com/ia64mail/quorum/issues/84) | Doc/runbook drift cluster from #68 verification — 4 stale doc references + Check-10 expected-absent list · PR #89 | Done |
 
 ## Deferred
 
