@@ -1,0 +1,19 @@
+{
+  "sampleLabel": "Quorum · research project, AI-authored, ticket-driven agent fleet",
+  "filesAnalyzed": 149,
+  "functions": 1718,
+  "totalFunctionNloc": 15567,
+  "avgCcn": 1.21,
+  "medianCcn": 1,
+  "p90Ccn": 1,
+  "p99Ccn": 6,
+  "maxCcn": 30,
+  "pctFnCcnOver10": 0.3,
+  "pctFnCcnOver15": 0.2,
+  "pctFnCcnOver25": 0.1,
+  "countFnCcnOver15": 3,
+  "avgFunctionNloc": 9.1,
+  "maxFunctionNloc": 97,
+  "avgParams": 0.08,
+  "maxParams": 5
+}

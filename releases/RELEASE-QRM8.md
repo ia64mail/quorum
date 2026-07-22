@@ -109,7 +109,7 @@ QRM8 was validated through progressive deployment on the staging branch. Each ti
 | **Net lines** | 6,397 |
 | **Test suites** | 47 (+2 vs QRM7) |
 | **Tests** | 839 (+81 vs QRM7) |
-| **Total cost** | ~$100 |
+| **Total cost** | ~\$100 |
 
 ### Breakdown by Category
 
@@ -126,12 +126,12 @@ Spec growth outpaces source growth ~3.9× — the strongest spec-to-source ratio
 
 | Metric | Value |
 |--------|-------|
-| **Total milestone spend** | **~$100** |
-| Cost per closed ticket | ~$6.25 (across 16 Done) |
-| Cost per commit | ~$0.83 |
-| Cost per 1,000 net lines | ~$15.63 |
+| **Total milestone spend** | **~\$100** |
+| Cost per closed ticket | ~\$6.25 (across 16 Done) |
+| Cost per commit | ~\$0.83 |
+| Cost per 1,000 net lines | ~\$15.63 |
 
-The ~$100 budget is the lowest since QRM4 ($50) and half of QRM7's $200. The reduction reflects QRM8's character: infrastructure and configuration work with clear, mechanical specifications — worktree lifecycle, entrypoint scripts, Docker volumes, tool-guard updates — rather than QRM7's deep diagnostic cycles against asynchronous transport edge cases. Zero superseded tickets means zero wasted diagnostic loops. The per-ticket cost ($6.25) is the lowest in project history, driven by the high ticket count (16) and the mechanical nature of most changes.
+The ~\$100 budget is the lowest since QRM4 (\$50) and half of QRM7's \$200. The reduction reflects QRM8's character: infrastructure and configuration work with clear, mechanical specifications — worktree lifecycle, entrypoint scripts, Docker volumes, tool-guard updates — rather than QRM7's deep diagnostic cycles against asynchronous transport edge cases. Zero superseded tickets means zero wasted diagnostic loops. The per-ticket cost (\$6.25) is the lowest in project history, driven by the high ticket count (16) and the mechanical nature of most changes.
 
 ### Effectiveness Ratios
 
@@ -157,10 +157,10 @@ The ~$100 budget is the lowest since QRM4 ($50) and half of QRM7's $200. The red
 | Deviation rate per closed ticket | 1.85 | — | 0.33 | 0 | 0.11 | 0 | 0.125 |
 | Test suites | — | — | 39 | 49 | 44 | 45 | 47 |
 | Tests | — | — | 537 | 760 | 681 | 758 | 839 |
-| Total cost | ~$80 | ~$150 | ~$50 | ~$100 | ~$150 | ~$200 | ~$100 |
-| Cost per closed ticket | ~$6.15 | ~$13.64 | ~$8.33 | ~$11 | ~$16.67 | ~$15.38 | ~$6.25 |
+| Total cost | ~\$80 | ~\$150 | ~\$50 | ~\$100 | ~\$150 | ~\$200 | ~\$100 |
+| Cost per closed ticket | ~\$6.15 | ~\$13.64 | ~\$8.33 | ~\$11 | ~\$16.67 | ~\$15.38 | ~\$6.25 |
 
-QRM8 sets a new high-water mark for tests (839, +81 vs QRM7's 758, +79 vs QRM5's previous peak of 760) and test suites (47, +2 vs QRM7). The commit count (121) is the highest of any milestone — a function of the PR-based workflow (#20) which produces merge commits alongside feature commits, and the 8 bug-class tickets each generating their own commit chains. The zero-bugs-in-new-code and zero-post-review-fix patterns continue for the fifth consecutive milestone (QRM4 → QRM8). Cost efficiency returns to QRM4 levels at $6.25 per ticket, driven by the mechanical nature of infrastructure work and zero wasted diagnostic cycles.
+QRM8 sets a new high-water mark for tests (839, +81 vs QRM7's 758, +79 vs QRM5's previous peak of 760) and test suites (47, +2 vs QRM7). The commit count (121) is the highest of any milestone — a function of the PR-based workflow (#20) which produces merge commits alongside feature commits, and the 8 bug-class tickets each generating their own commit chains. The zero-bugs-in-new-code and zero-post-review-fix patterns continue for the fifth consecutive milestone (QRM4 → QRM8). Cost efficiency returns to QRM4 levels at \$6.25 per ticket, driven by the mechanical nature of infrastructure work and zero wasted diagnostic cycles.
 
 ## Documentation Updates
 

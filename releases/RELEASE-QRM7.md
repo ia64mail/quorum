@@ -134,12 +134,12 @@ Spec growth outpaces source growth ~2.3× — the same pattern QRM5 established 
 
 | Metric | Value |
 |--------|-------|
-| **Total milestone spend** | **~$200** |
-| Cost per closed ticket | ~$14.29 (across 14 Done) |
-| Cost per commit | ~$2.63 |
-| Cost per 1,000 net lines | ~$22.07 |
+| **Total milestone spend** | **~\$200** |
+| Cost per closed ticket | ~\$14.29 (across 14 Done) |
+| Cost per commit | ~\$2.63 |
+| Cost per 1,000 net lines | ~\$22.07 |
 
-The $200 budget covered all agent invocations across 14 Done tickets, 1 Research ticket and its implementation, 3 superseded tickets, and the diagnostic instrumentation that drove each supersession. The higher per-ticket cost vs QRM5 ($14.29 vs $11) but a touch under QRM6 ($14.29 vs $16.67) reflects QRM7's character: many small fixes plus deep, repeated debugging cycles against the running stack. The three superseded tickets account for a non-trivial fraction of the spend — each one's diagnostic loop required new instrumentation, fresh log captures, and re-analysis. The split-model setup (Opus 4.6 for agents, Opus 4.7 for the CC CLI moderator) is included in the per-ticket cost; the moderator's 4.7 upgrade landed mid-milestone and is the first such intra-milestone model bump.
+The \$200 budget covered all agent invocations across 14 Done tickets, 1 Research ticket and its implementation, 3 superseded tickets, and the diagnostic instrumentation that drove each supersession. The higher per-ticket cost vs QRM5 (\$14.29 vs \$11) but a touch under QRM6 (\$14.29 vs \$16.67) reflects QRM7's character: many small fixes plus deep, repeated debugging cycles against the running stack. The three superseded tickets account for a non-trivial fraction of the spend — each one's diagnostic loop required new instrumentation, fresh log captures, and re-analysis. The split-model setup (Opus 4.6 for agents, Opus 4.7 for the CC CLI moderator) is included in the per-ticket cost; the moderator's 4.7 upgrade landed mid-milestone and is the first such intra-milestone model bump.
 
 ### Effectiveness Ratios
 
@@ -165,10 +165,10 @@ The $200 budget covered all agent invocations across 14 Done tickets, 1 Research
 | Deviation rate per closed ticket | 1.85 | — | 0.33 | 0 | 0.11 | 0 |
 | Test suites | — | — | 39 | 49 | 44 | 45 |
 | Tests | — | — | 537 | 760 | 681 | 758 |
-| Total cost | ~$80 | ~$150 | ~$50 | ~$100 | ~$150 | ~$200 |
-| Cost per closed ticket | ~$6.15 | ~$13.64 | ~$8.33 | ~$11 | ~$16.67 | ~$15.38 |
+| Total cost | ~\$80 | ~\$150 | ~\$50 | ~\$100 | ~\$150 | ~\$200 |
+| Cost per closed ticket | ~\$6.15 | ~\$13.64 | ~\$8.33 | ~\$11 | ~\$16.67 | ~\$15.38 |
 
-QRM7 restores test-count parity with QRM5's high-water mark (758 vs 760) after QRM6's terminal-deletion drop, and is the **most expensive milestone to date** at $200 — a direct consequence of three superseded diagnostic cycles each requiring fresh instrumentation runs. The zero-bugs-in-new-code and zero-post-review-fix pattern established in QRM4 continues to hold for the fourth consecutive milestone. The 17% supersession rate is unique to QRM7 and reflects the cost of debugging asynchronous transport behavior at a layer where logs are easy to misread; QRM7 invests in `docs/mcp-connectivity.md` and the QRM7-016 trace stream specifically to amortize that cost across future MCP work.
+QRM7 restores test-count parity with QRM5's high-water mark (758 vs 760) after QRM6's terminal-deletion drop, and is the **most expensive milestone to date** at \$200 — a direct consequence of three superseded diagnostic cycles each requiring fresh instrumentation runs. The zero-bugs-in-new-code and zero-post-review-fix pattern established in QRM4 continues to hold for the fourth consecutive milestone. The 17% supersession rate is unique to QRM7 and reflects the cost of debugging asynchronous transport behavior at a layer where logs are easy to misread; QRM7 invests in `docs/mcp-connectivity.md` and the QRM7-016 trace stream specifically to amortize that cost across future MCP work.
 
 The ticket-graph itself encodes the milestone's diagnostic journey: the QRM7-010 → -011 → -012 chain is the supersession trail; the QRM7-015 → -017 split is the research-then-implementation pattern carried over from QRM5-008's runbook approach. Compared to QRM6's "13 bugs, mostly container packaging" profile, QRM7's "10 defect classes, mostly MCP-transport edge cases" profile is the natural next layer — the issues that only surface once the containerized moderator is genuinely in daily use.
 

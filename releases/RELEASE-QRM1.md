@@ -74,7 +74,7 @@ All deviations fall into predictable categories:
 | Metric | Value |
 |--------|-------|
 | **Model** | Claude Opus 4.6 |
-| **Total cost** | ~$80 |
+| **Total cost** | ~\$80 |
 | **Commits** | 48 |
 | **Feature tickets** | 13 |
 | **Bug tickets** | 4 |
@@ -94,8 +94,8 @@ All deviations fall into predictable categories:
 
 | Ratio | Value |
 |-------|-------|
-| Cost per net line of code | ~$0.003 |
-| Cost per feature ticket | ~$6.15 |
+| Cost per net line of code | ~\$0.003 |
+| Cost per feature ticket | ~\$6.15 |
 | Bugs per 1,000 TypeScript LoC | 0.48 |
 | Deviation rate (deviations per ticket) | 1.85 |
 | Self-correction rate (post-review fixes) | 3/13 tickets (23%) |
