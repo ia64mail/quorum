@@ -14,6 +14,8 @@ For a chronological top-line overview across all milestones, see [`../CHANGELOG.
 | [QRM5](RELEASE-QRM5.md) | Semantic search foundation | 2026-04-19 | OpenSearch + Ollama hybrid search |
 | [QRM6](RELEASE-QRM6.md) | Containerized moderator via CC CLI | 2026-05-03 | Custom terminal app retired |
 | [QRM7](RELEASE-QRM7.md) | Stabilization | 2026-05-15 | MCP-transport hardening, CI pipeline |
+| [QRM8](RELEASE-QRM8.md) | Workspace isolation | 2026-05-29 | Git worktree-per-invocation, named-volume git clones |
+| [QRM9](RELEASE-QRM9.md) | Stabilization (context-management rework) | 2026-07-21 | Context-store addressing/budget rework after QRM8 audit |
 
 QRM3 is not listed — it was rescoped into QRM4 before any tickets were filed.
 

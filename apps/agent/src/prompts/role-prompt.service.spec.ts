@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { AgentRole, GENERIC_PROMPT_TEMPLATE } from '@app/common';
+import { AgentRole } from '@app/common';
 import { AgentConfigService } from '../config';
 import { RolePromptService } from './role-prompt.service';
 
@@ -48,7 +48,6 @@ describe('RolePromptService', () => {
       const prompt = service.getSystemPrompt('moderator');
 
       expect(prompt).toContain('Architect');
-      expect(prompt).not.toBe(GENERIC_PROMPT_TEMPLATE);
     });
 
     it('should return a role-specific prompt for teamlead', async () => {
@@ -68,21 +67,20 @@ describe('RolePromptService', () => {
       expect(prompt).toContain('architect');
     });
 
-    it('should return a role-specific prompt for moderator', async () => {
+    it('should throw for moderator — not a deployable agent role (#76 M1)', async () => {
       const service = await createService(AgentRole.moderator);
 
-      const prompt = service.getSystemPrompt('teamlead');
-
-      expect(prompt).toContain('Moderator');
-      expect(prompt).toContain('teamlead');
+      expect(() => service.getSystemPrompt('teamlead')).toThrow(
+        'No role prompt template for role "moderator"',
+      );
     });
 
-    it('should fall back to generic prompt for roles without specific templates', async () => {
+    it('should return a role-specific prompt for qa', async () => {
       const service = await createService(AgentRole.qa);
 
       const prompt = service.getSystemPrompt('moderator');
 
-      // Generic template substituted with caller
+      expect(prompt).toContain('QA Agent');
       expect(prompt).toContain('moderator');
       expect(prompt).not.toContain('{{caller}}');
     });

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AgentConfigService } from '../config';
 import { ClaudeCodeService } from './claude-code.service';
@@ -166,6 +167,86 @@ describe('ClaudeCodeService', () => {
       totalCostUsd: 0.05,
       numTurns: 3,
     });
+  });
+
+  // #87 Guard C — a success-subtype frame with pending background work
+  // (terminal_reason: 'background_requested') must map to a non-success
+  // envelope, not a silent success. This is the guard that catches
+  // /code-review's Task-tool fan-out getting stranded when the model calls
+  // ScheduleWakeup expecting a harness re-invoke that never comes.
+  it('should map a success-subtype result with terminal_reason=background_requested to a non-success envelope (#87 Guard C)', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+    mockQuery.mockReturnValue(
+      generateMessages([
+        initMessage(),
+        assistantMessage(),
+        successResult({ terminal_reason: 'background_requested' }),
+      ]),
+    );
+
+    const result = await service.execute(baseParams);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('background_requested');
+      expect(result.terminalReason).toBe('background_requested');
+      expect(result.durationMs).toBe(1234);
+      expect(result.totalCostUsd).toBe(0.05);
+      expect(result.numTurns).toBe(3);
+    }
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('background_requested'),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  // #87 Guard C — no regression: an ordinary success frame with no
+  // terminal_reason, or terminal_reason 'completed', still maps to a clean
+  // success envelope.
+  it('should still map an ordinary success result to success:true when terminal_reason is absent or completed (#87 no-regression)', async () => {
+    mockQuery.mockReturnValueOnce(
+      generateMessages([initMessage(), successResult()]),
+    );
+    const noReasonResult = await service.execute(baseParams);
+    expect(noReasonResult.success).toBe(true);
+
+    mockQuery.mockReturnValueOnce(
+      generateMessages([
+        initMessage(),
+        successResult({ terminal_reason: 'completed' }),
+      ]),
+    );
+    const completedResult = await service.execute(baseParams);
+    expect(completedResult.success).toBe(true);
+  });
+
+  // #87 Guard C — the guard's failure string must not trip isResumeFailure
+  // (which matches only terminal_reason === 'turn_setup_failed'), so a
+  // background_requested guard failure on a resumed session must NOT
+  // trigger a spurious retry-fresh.
+  it('should not spuriously retry-fresh when Guard C fires on a resumed session (#87)', async () => {
+    mockQuery.mockReturnValueOnce(
+      generateMessages([
+        initMessage('sess-resumed'),
+        successResult({
+          session_id: 'sess-resumed',
+          terminal_reason: 'background_requested',
+        }),
+      ]),
+    );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-resumed',
+    });
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.terminalReason).toBe('background_requested');
+    }
   });
 
   // 2. Error result
@@ -367,6 +448,44 @@ describe('ClaudeCodeService', () => {
         process.env.GH_TOKEN = originalGhToken;
       } else {
         delete process.env.GH_TOKEN;
+      }
+    }
+  });
+
+  // 5a-bis. SDK env allowlist — GH_TOKEN and GIT_CONFIG_GLOBAL must BOTH stay
+  // out of the subprocess env (#65 QRM8 D5 secret-isolation invariant).
+  // A maintainer "fixing" the agent's inability to push by allowlisting
+  // either of these would re-introduce the orphan-commit / token-leak bug
+  // this ticket hardens against. The inline comment on SDK_ENV_ALLOWLIST
+  // documents the rationale.
+  it('should exclude both GH_TOKEN and GIT_CONFIG_GLOBAL from the SDK env (#65 secret boundary)', async () => {
+    const original: Record<string, string | undefined> = {
+      GH_TOKEN: process.env.GH_TOKEN,
+      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+    };
+    process.env.GH_TOKEN = 'ghp_test_secret_token';
+    process.env.GIT_CONFIG_GLOBAL = '/tmp/test-gitconfig';
+
+    try {
+      mockQuery.mockReturnValue(
+        generateMessages([initMessage(), successResult()]),
+      );
+
+      await service.execute(baseParams);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: Record<string, string | undefined> };
+      };
+      expect(callArgs.options.env.GH_TOKEN).toBeUndefined();
+      expect(callArgs.options.env.GIT_CONFIG_GLOBAL).toBeUndefined();
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value !== undefined) {
+          process.env[key] = value;
+        } else {
+          delete process.env[key];
+        }
       }
     }
   });
@@ -848,6 +967,102 @@ describe('ClaudeCodeService', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
+  // #68 Round-2 Finding 6 — resume-failure delivered as an error-result
+  // envelope (SDK 0.3.207 semantic) instead of a thrown error. Must still
+  // route through the retry-fresh path.
+  it('should retry fresh when resume-failure is delivered as an error result envelope (bogus resume-id)', async () => {
+    const bogusResumeResult = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      // Preferred structured signal from the SDK (TerminalReason on 0.3.203+).
+      terminal_reason: 'turn_setup_failed',
+      errors: ['No conversation found with session ID: sess-bogus'],
+      duration_ms: 5,
+      total_cost_usd: 0,
+      num_turns: 0,
+      session_id: 'sess-bogus',
+    };
+
+    mockQuery
+      // First call (with bogus resume) — SDK RETURNS an error envelope, not a throw
+      .mockReturnValueOnce(
+        generateMessages([initMessage('sess-bogus'), bogusResumeResult]),
+      )
+      // Second call (retry-fresh) — success
+      .mockReturnValueOnce(
+        generateMessages([
+          initMessage('sess-new'),
+          successResult({ session_id: 'sess-new' }),
+        ]),
+      );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-bogus',
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+
+    // First call had resume set
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const firstCallArgs = mockQuery.mock.calls[0][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(firstCallArgs.options.resume).toBe('sess-bogus');
+    expect(firstCallArgs.options).not.toHaveProperty('systemPrompt');
+
+    // Second call was fresh
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const secondCallArgs = mockQuery.mock.calls[1][0] as {
+      options: Record<string, unknown>;
+    };
+    expect(secondCallArgs.options).not.toHaveProperty('resume');
+    expect(secondCallArgs.options.systemPrompt).toBe('You are a developer.');
+  });
+
+  // #68 Round-2 Finding 6 — abort-guard preserved on the envelope-path retry:
+  // if the controller is aborted while the envelope is in flight, do not
+  // spawn a second query — the retry would fail immediately and its result
+  // wouldn't be used.
+  it('should not retry-fresh on resume-failure envelope when controller is aborted', async () => {
+    const controller = new AbortController();
+    const bogusResumeResult = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      terminal_reason: 'turn_setup_failed',
+      errors: ['No conversation found with session ID: sess-stale'],
+      duration_ms: 5,
+      total_cost_usd: 0,
+      num_turns: 0,
+      session_id: 'sess-stale',
+    };
+
+    mockQuery.mockReturnValueOnce(
+      (async function* () {
+        yield initMessage('sess-stale');
+        controller.abort();
+        yield bogusResumeResult;
+      })(),
+    );
+
+    const result = await service.execute({
+      ...baseParams,
+      resume: 'sess-stale',
+      abortController: controller,
+    });
+
+    // Retry MUST NOT fire under abort
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // Original envelope failure is what propagates
+      expect(result.error).toBe(
+        'No conversation found with session ID: sess-stale',
+      );
+    }
+  });
+
   it('should return error when retry itself fails', async () => {
     mockQuery
       .mockReturnValueOnce(
@@ -873,6 +1088,63 @@ describe('ClaudeCodeService', () => {
       expect(result.error).toBe('API outage');
     }
     expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
+
+  // #78 — SDKMirrorErrorMessage (system/mirror_error) must surface at warn
+  // level. Previously dropped silently by the case-'system' branch, which
+  // masked the /var/agent-sessions EACCES that broke QRM8 D3 durability.
+  // The frame must not abort the invocation — the model has completed its
+  // work, only the transcript-mirror write failed.
+  it('should log mirror_error at warn and still return the success result', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+    const mirrorErrorFrame = {
+      type: 'system',
+      subtype: 'mirror_error',
+      error:
+        "EACCES: permission denied, open '/var/agent-sessions/sess-1.jsonl'",
+      key: {
+        projectKey: '-var-agent-worktrees-corr-1',
+        sessionId: 'sess-1',
+      },
+      uuid: 'uuid-mirror-1',
+      session_id: 'sess-1',
+    };
+
+    mockQuery.mockReturnValue(
+      generateMessages([initMessage(), mirrorErrorFrame, successResult()]),
+    );
+
+    try {
+      const result = await service.execute(baseParams);
+
+      // The invocation still completes successfully — mirror_error is
+      // observational, not a hard fault.
+      expect(result).toEqual({
+        success: true,
+        result: 'Task completed',
+        sessionId: 'sess-1',
+        durationMs: 1234,
+        totalCostUsd: 0.05,
+        numTurns: 3,
+      });
+
+      // The warn line must include the SDK-reported error text so it's
+      // grep-able in the JSONL logs (this is the whole point of the branch).
+      const warnCalls = warnSpy.mock.calls.map(
+        (call) => call[0] as unknown as string,
+      );
+      const mirrorWarn = warnCalls.find(
+        (line) => typeof line === 'string' && line.includes('mirror_error'),
+      );
+      expect(mirrorWarn).toBeDefined();
+      expect(mirrorWarn).toContain(
+        "EACCES: permission denied, open '/var/agent-sessions/sess-1.jsonl'",
+      );
+      expect(mirrorWarn).toContain('sess-1');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   // 9. Graceful shutdown
@@ -1037,6 +1309,58 @@ describe('ClaudeCodeService', () => {
         expect(result.result).toContain('Before block.');
         expect(result.result).toContain('After block.');
         expect(result.result).not.toContain('commit-message');
+      }
+    });
+
+    it('should extract the real block, not a prose mention of the marker that precedes it (#79)', async () => {
+      // Mirrors commit baec262: the agent references the literal marker in
+      // prose (as documented in the Git Discipline role-prompt section)
+      // before emitting the real block. The prose opening tag has no
+      // matching close, so it must not be paired into the extraction.
+      const resultText =
+        "I'll wire this up per the Git Discipline section, which documents " +
+        'the `<commit-message>` block for handler extraction.\n\n' +
+        'Implementation complete.\n\n' +
+        '<commit-message>\n#79: fix commit-message marker extraction\n</commit-message>';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBe(
+          '#79: fix commit-message marker extraction',
+        );
+        // The prose sentence mentioning the marker is preserved verbatim —
+        // only the real, well-formed block is stripped.
+        expect(result.result).toContain(
+          "I'll wire this up per the Git Discipline section",
+        );
+        expect(result.result).toContain('Implementation complete.');
+        expect(result.result).not.toContain('#79: fix commit-message');
+      }
+    });
+
+    it('should return undefined for an empty <commit-message></commit-message> block', async () => {
+      const resultText = 'Done.\n\n<commit-message></commit-message>';
+      mockQuery.mockReturnValue(
+        generateMessages([
+          initMessage(),
+          successResult({ result: resultText }),
+        ]),
+      );
+
+      const result = await service.execute(baseParams);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.commitMessage).toBeUndefined();
+        expect(result.result).toBe('Done.');
       }
     });
   });

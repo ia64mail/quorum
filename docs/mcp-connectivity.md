@@ -329,7 +329,7 @@ The long-poll path only activates when **both** conditions hold:
 | Any agent | Any agent | 2–30 min | **Sync** — 35-min undici dispatcher |
 | Moderator | productowner | 2 min | **Sync** — under 270 s ceiling |
 | Moderator | moderator | 5 min | **Always-pending** — 300 s exceeds 270 s ceiling |
-| Moderator | teamlead | 10 min | **Always-pending** — exceeds ceiling |
+| Moderator | teamlead | 15 min | **Always-pending** — exceeds ceiling |
 | Moderator | architect | 15 min | **Always-pending** — exceeds ceiling |
 | Moderator | qa | 15 min | **Always-pending** — exceeds ceiling |
 | Moderator | developer | 30 min | **Always-pending** — exceeds ceiling |
@@ -503,7 +503,7 @@ The broker applies a per-role timeout when delivering an invocation. Defined in 
 |---|---|
 | moderator | 5 min (user clarification via elicitation) |
 | productowner | 2 min |
-| teamlead | 10 min |
+| teamlead | 15 min |
 | architect | 15 min |
 | qa | 15 min |
 | developer | 30 min |

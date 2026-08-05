@@ -172,6 +172,11 @@ export class OpenSearchStore extends ContextStore {
         index: this.osConfig.index,
         body: {
           query: { bool: { filter: filters } },
+          // Oldest-first so the result map preserves createdAt-ascending
+          // insertion order — the contract consumers rely on (see getAll
+          // contract on ContextStore). A filter-only query otherwise returns
+          // hits in arbitrary Lucene-internal order. (#55)
+          sort: [{ createdAt: 'asc' }],
           size: 10000,
           _source: { excludes: ['embedding', 'embeddingText'] },
         },
@@ -287,10 +292,13 @@ export class OpenSearchStore extends ContextStore {
       for (const hit of rawHits) {
         const tokens = this.estimateTokens(hit._source.value);
         const valueStr = JSON.stringify(hit._source.value);
-        const fits = !budgetExhausted && consumed + tokens <= tokenBudget;
-        if (fits) {
+        const isTopHit = results.length === 0;
+        const fits = consumed + tokens <= tokenBudget;
+        const include = !budgetExhausted && (fits || isTopHit);
+        if (include) {
           consumed += tokens;
           results.push(hit._source);
+          if (!fits) budgetExhausted = true; // oversized top hit — stop here
         } else {
           budgetExhausted = true;
         }
@@ -299,7 +307,7 @@ export class OpenSearchStore extends ContextStore {
           score: hit._score ?? null,
           snippet: valueStr.slice(0, 200),
           tokensEstimate: tokens,
-          includedInResult: fits,
+          includedInResult: include,
         });
       }
 

@@ -14,6 +14,17 @@ describe('McpServerConfigService', () => {
     expect(service.app).toBeDefined();
     expect(service.broker).toBeDefined();
     expect(service.context).toBeDefined();
+    expect(service.contextStore).toBeDefined();
+  });
+
+  it('should expose the contextStore backend discriminator (#70)', async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [McpServerConfigModule],
+    }).compile();
+
+    const service = module.get<McpServerConfigService>(McpServerConfigService);
+
+    expect(['inmemory', 'opensearch']).toContain(service.contextStore.backend);
   });
 
   it('should have non-nullable broker properties', async () => {

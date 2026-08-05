@@ -22,6 +22,23 @@ const CLAUDE_BINARY_PATH = `/app/node_modules/@anthropic-ai/claude-agent-sdk-lin
  * Everything NOT on this list is excluded — this is the primary defense
  * against leaking secrets (GH_TOKEN, ANTHROPIC_API_KEY from env, etc.)
  * into the model-visible subprocess environment.
+ *
+ * DELIBERATE OMISSIONS (QRM8 D5 secret-isolation boundary, #65):
+ *   - `GH_TOKEN`         — the GitHub PAT held by the handler process for
+ *                          push authentication. Forwarding it would let
+ *                          the model read its own token, print it, write
+ *                          it to a file, or be prompt-injected into doing
+ *                          so via code under review.
+ *   - `GIT_CONFIG_GLOBAL` — points at the gh credential-helper config
+ *                          written by docker/agent/entrypoint.sh; same
+ *                          token-exposure concern as above.
+ *
+ * The intended consequence is that the agent CAN commit (it has git
+ * identity above) but CANNOT push (no credential path). Push reliability
+ * is the handler's responsibility — see InvocationHandler.commitAndPush,
+ * which pushes anything ahead of origin regardless of whether the
+ * commit was framework-made or agent-made (#65 keystone). Do NOT add
+ * either secret to this list to "fix" the push gap.
  */
 const SDK_ENV_ALLOWLIST: readonly string[] = [
   // System essentials
@@ -38,7 +55,7 @@ const SDK_ENV_ALLOWLIST: readonly string[] = [
   'NODE_ENV',
   'TMPDIR',
   'TZ',
-  // Git identity
+  // Git identity (NOT credentials — see comment above)
   'GIT_AUTHOR_NAME',
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
@@ -73,7 +90,42 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     const start = Date.now();
 
     try {
-      return await this.executeQuery(params, controller, start);
+      const result = await this.executeQuery(params, controller, start);
+
+      // Result-envelope resume-failure path (#68 Round-2 Finding 6):
+      // On SDK 0.3.207, a missing-resume-session is delivered as a
+      // result envelope with subtype !== 'success' rather than a thrown
+      // error, so the outer catch below never runs. Detect it here and
+      // route through the same retry-fresh path as thrown errors.
+      // Skip the retry when the controller was aborted (shutdown in
+      // progress) — mirrors the catch-path abort-guard below.
+      if (
+        !result.success &&
+        params.resume &&
+        !controller.signal.aborted &&
+        ClaudeCodeService.isResumeFailure(result.error, result.terminalReason)
+      ) {
+        this.logger.warn(
+          `Session resume failed (sessionId=${params.resume}): ${result.error} — retrying fresh`,
+        );
+        try {
+          return await this.executeQuery(
+            { ...params, resume: undefined },
+            controller,
+            Date.now(),
+          );
+        } catch (retryErr) {
+          return {
+            success: false,
+            error:
+              retryErr instanceof Error ? retryErr.message : String(retryErr),
+            durationMs: Date.now() - start,
+            totalCostUsd: 0,
+          };
+        }
+      }
+
+      return result;
     } catch (err) {
       // Graceful fallback: if resume was requested and the session is missing,
       // retry without resume so the agent starts a fresh session.
@@ -109,6 +161,29 @@ export class ClaudeCodeService implements OnApplicationShutdown {
     } finally {
       this.activeControllers.delete(controller);
     }
+  }
+
+  /**
+   * Detect whether a failure result envelope from the SDK signals a
+   * missing-resume-session condition, so `execute()` can route it through
+   * the same retry-fresh fallback as thrown errors.
+   *
+   * Preferred signal: the SDK's structured `terminal_reason`
+   * (`TerminalReason` in `@anthropic-ai/claude-agent-sdk/sdk.d.ts`) —
+   * `turn_setup_failed` is what 0.3.207 emits when the CLI cannot resume
+   * the requested session. Fallback: substring match against the observed
+   * subprocess-stderr text `No conversation found with session ID`
+   * relayed through the joined `errors` field. See #68 Round-2 Finding 6.
+   */
+  private static isResumeFailure(
+    error: string | undefined,
+    terminalReason: string | undefined,
+  ): boolean {
+    if (terminalReason === 'turn_setup_failed') return true;
+    if (error && error.includes('No conversation found with session ID')) {
+      return true;
+    }
+    return false;
   }
 
   private async executeQuery(
@@ -159,11 +234,8 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           ? { disallowedTools: params.disallowedTools }
           : {}),
         ...(params.canUseTool ? { canUseTool: params.canUseTool } : {}),
-        // QRM6-BUG-005: sessionStore enables the SDK's store-based resume path.
-        // Without it, `resume` only passes --resume to the CLI which silently
-        // starts fresh when the session file is missing (e.g. ephemeral containers).
-        // The InMemorySessionStore is auto-populated by TranscriptMirrorBatcher
-        // on first invocation and loaded back via store.load() on resume.
+        // FileSessionStore (QRM8 D3) persists transcripts as JSONL on the
+        // /var/agent-sessions/ named volume, enabling resume across restarts.
         sessionStore: this.sessionStore,
         ...(params.resume ? { resume: params.resume } : {}),
       },
@@ -214,6 +286,22 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           } else {
             this.logger.debug(`Session started: ${message.session_id}`);
           }
+        } else if (message.subtype === 'mirror_error') {
+          // #78: FileSessionStore.append() failed the SDK's own 3-attempt
+          // retry (SDKMirrorErrorMessage in sdk.d.ts). Surface it at warn —
+          // silently dropping this frame is what masked the /var/agent-sessions
+          // EACCES for the entire PR #69 verification. Session persistence is
+          // broken for this session; the invocation itself is still
+          // recoverable (the model has completed its work) so we do NOT
+          // elevate to a hard failure.
+          const frame = message as unknown as Record<string, unknown>;
+          const terminalReason =
+            typeof frame.terminal_reason === 'string'
+              ? ` terminal_reason=${frame.terminal_reason}`
+              : '';
+          this.logger.warn(
+            `SDK session-store mirror_error (session=${message.session_id}): ${message.error}${terminalReason}`,
+          );
         }
         return null;
 
@@ -243,6 +331,40 @@ export class ClaudeCodeService implements OnApplicationShutdown {
 
       case 'result':
         if (message.subtype === 'success') {
+          // #87 Guard C: on SDK 0.3.207, a turn can end with pending
+          // background work (e.g. /code-review's Task-tool fan-out was
+          // still backgrounded and the model called ScheduleWakeup
+          // expecting a harness re-invoke that never comes in our
+          // single-shot query() model) yet still reports subtype
+          // 'success'. Without this guard that silently maps to
+          // `success: true` with no verdict ever produced ("No changes to
+          // push"). SDKResultSuccess only exposes `terminal_reason` here —
+          // `background_tasks` / `session_crons` live on StopHookInput and
+          // SubagentStopHookInput only and are unreachable from this frame —
+          // so the guard keys off `terminal_reason` alone. With the companion
+          // PreToolUse `Agent` rewrite (sdk-hooks.factory.ts) forcing foreground
+          // sub-agents and `ScheduleWakeup` denied (role-tool-profiles.ts),
+          // this should not fire in practice; it remains as the
+          // fail-loud backstop.
+          if (message.terminal_reason === 'background_requested') {
+            this.logger.warn(
+              'Invocation ended with pending background work ' +
+                '(terminal_reason=background_requested) — sub-agent fan-out ' +
+                'did not complete in the single-shot turn; see #87',
+            );
+            return {
+              success: false,
+              error:
+                'Invocation ended with pending background work ' +
+                '(terminal_reason=background_requested) — sub-agent fan-out ' +
+                'did not complete in the single-shot turn; see #87',
+              durationMs: message.duration_ms,
+              totalCostUsd: message.total_cost_usd,
+              numTurns: message.num_turns,
+              terminalReason: message.terminal_reason,
+            };
+          }
+
           const { message: commitMessage, stripped } =
             ClaudeCodeService.extractCommitMessage(message.result);
           return {
@@ -261,6 +383,12 @@ export class ClaudeCodeService implements OnApplicationShutdown {
           durationMs: message.duration_ms,
           totalCostUsd: message.total_cost_usd,
           numTurns: message.num_turns,
+          // Surface terminal_reason (SDK 0.3.203+) so execute() can detect
+          // missing-resume-session failures without string matching. See
+          // #68 Round-2 Finding 6.
+          ...(message.terminal_reason !== undefined
+            ? { terminalReason: message.terminal_reason }
+            : {}),
         };
 
       default:
@@ -272,24 +400,55 @@ export class ClaudeCodeService implements OnApplicationShutdown {
    * Extract a `<commit-message>...</commit-message>` block from SDK result text.
    * If multiple blocks are present, the last one wins (agent may revise mid-stream).
    * The block is stripped from the returned text so consumers don't see metadata.
+   *
+   * Pairing is done by index rather than a single spanning regex: the last
+   * `</commit-message>` is paired with the last `<commit-message>` that
+   * precedes it. This selects the correct "real" block even when the agent
+   * mentions the literal marker in prose beforehand (the prose opening tag
+   * has no closing tag of its own, so it is never selected as part of a
+   * pair) — see #79. Stripping then removes every well-formed pair,
+   * scanning right-to-left, so multiple genuine blocks (e.g. a
+   * mid-conversation revision) are still fully removed, while a dangling,
+   * unmatched opening tag (the prose mention) is left in place untouched.
    */
   private static extractCommitMessage(text: string): {
     message?: string;
     stripped: string;
   } {
-    const matches = [
-      ...text.matchAll(/<commit-message>([\s\S]*?)<\/commit-message>/gi),
-    ];
+    const OPEN_TAG = '<commit-message>';
+    const CLOSE_TAG = '</commit-message>';
 
-    if (matches.length === 0) {
+    const findLastPair = (
+      haystack: string,
+    ): { openIndex: number; closeIndex: number } | null => {
+      const lower = haystack.toLowerCase();
+      const closeIndex = lower.lastIndexOf(CLOSE_TAG);
+      if (closeIndex === -1) return null;
+      const openIndex = lower.lastIndexOf(OPEN_TAG, closeIndex - 1);
+      if (openIndex === -1) return null;
+      return { openIndex, closeIndex };
+    };
+
+    const lastPair = findLastPair(text);
+    if (!lastPair) {
       return { stripped: text };
     }
 
-    const message = matches[matches.length - 1][1].trim();
-    const stripped = text
-      .replace(/<commit-message>[\s\S]*?<\/commit-message>/gi, '')
-      .replace(/\n{3,}/g, '\n\n')
+    const message = text
+      .slice(lastPair.openIndex + OPEN_TAG.length, lastPair.closeIndex)
       .trim();
+
+    let working = text;
+    for (
+      let pair = findLastPair(working);
+      pair !== null;
+      pair = findLastPair(working)
+    ) {
+      working =
+        working.slice(0, pair.openIndex) +
+        working.slice(pair.closeIndex + CLOSE_TAG.length);
+    }
+    const stripped = working.replace(/\n{3,}/g, '\n\n').trim();
 
     return { message: message || undefined, stripped };
   }

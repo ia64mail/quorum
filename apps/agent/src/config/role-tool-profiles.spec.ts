@@ -35,12 +35,24 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.disallowedTools).toContain('AskUserQuestion');
     });
 
-    it('should include Config in disallowedTools', () => {
-      expect(profile.disallowedTools).toContain('Config');
+    // #68 Round-2 Finding 2: `Config` is not a tool on CC CLI 2.1.207.
+    // The stale rule triggered a "matches no known tool" warning on every
+    // agent spawn; the runtime-config-mutation guard is defense-in-depth
+    // via read_only rootfs, write-guard hook, and moderator permissionMode.
+    it('should not list Config in disallowedTools (not a CC CLI 2.1.207 tool)', () => {
+      expect(profile.disallowedTools).not.toContain('Config');
     });
 
     it('should include ExitPlanMode in disallowedTools', () => {
       expect(profile.disallowedTools).toContain('ExitPlanMode');
+    });
+
+    // #87: a wakeup can never fire in a single-shot invocation — denying
+    // the tool for every role stops the model from ever forming the
+    // "harness will re-invoke me" plan that stranded /code-review's
+    // background sub-agent fan-out.
+    it('should include ScheduleWakeup in disallowedTools (#87)', () => {
+      expect(profile.disallowedTools).toContain('ScheduleWakeup');
     });
 
     it('should not have duplicate disallowedTools entries', () => {
@@ -67,9 +79,21 @@ describe('ROLE_TOOL_PROFILES', () => {
   describe('developer', () => {
     const profile = ROLE_TOOL_PROFILES[AgentRole.developer];
 
-    it('should disallow common tools plus TodoWrite (BUG-010)', () => {
-      expect(profile.disallowedTools).toHaveLength(4); // AskUserQuestion, Config, ExitPlanMode, TodoWrite
+    it('should disallow common tools plus TodoWrite and the Task-tool family (BUG-010 / #68)', () => {
+      // AskUserQuestion, ExitPlanMode, ScheduleWakeup, TodoWrite,
+      // TaskCreate, TaskUpdate, TaskGet, TaskList, TaskStop, TaskOutput
+      expect(profile.disallowedTools).toHaveLength(10);
       expect(profile.disallowedTools).toContain('TodoWrite');
+      expect(profile.disallowedTools).toEqual(
+        expect.arrayContaining([
+          'TaskCreate',
+          'TaskUpdate',
+          'TaskGet',
+          'TaskList',
+          'TaskStop',
+          'TaskOutput',
+        ]),
+      );
     });
 
     it('should not have allowedWritePaths', () => {
@@ -93,9 +117,9 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.disallowedTools).toContain('NotebookEdit');
     });
 
-    it('should NOT deny FileWrite or FileEdit (path-guarded instead)', () => {
-      expect(profile.disallowedTools).not.toContain('FileWrite');
-      expect(profile.disallowedTools).not.toContain('FileEdit');
+    it('should NOT deny Write or Edit (path-guarded instead)', () => {
+      expect(profile.disallowedTools).not.toContain('Write');
+      expect(profile.disallowedTools).not.toContain('Edit');
     });
 
     it('should set allowedWritePaths to docs/ and tickets/', () => {
@@ -106,6 +130,10 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.allowedSkills).toEqual(
         expect.arrayContaining(['code-review', 'simplify']),
       );
+    });
+
+    it('should allow the built-in review skill for tier-2 reviews (#76)', () => {
+      expect(profile.allowedSkills).toContain('review');
     });
 
     it('should include the code-review plugin (BUG-002)', () => {
@@ -128,6 +156,10 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.allowedSkills).toEqual(
         expect.arrayContaining(['code-review', 'simplify']),
       );
+    });
+
+    it('should allow the built-in review skill for tier-2 reviews (#76)', () => {
+      expect(profile.allowedSkills).toContain('review');
     });
 
     it('should include the code-review plugin (BUG-002)', () => {
@@ -174,9 +206,9 @@ describe('ROLE_TOOL_PROFILES', () => {
       expect(profile.disallowedTools).toContain('Agent');
     });
 
-    it('should NOT deny FileWrite or FileEdit (path-guarded instead)', () => {
-      expect(profile.disallowedTools).not.toContain('FileWrite');
-      expect(profile.disallowedTools).not.toContain('FileEdit');
+    it('should NOT deny Write or Edit (path-guarded instead)', () => {
+      expect(profile.disallowedTools).not.toContain('Write');
+      expect(profile.disallowedTools).not.toContain('Edit');
     });
 
     it('should set allowedWritePaths to tickets/', () => {

@@ -4,6 +4,48 @@ All notable changes to Quorum are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely — section names are adapted to the project's needs (New Features, Bug Fixes, Documentation, Internal / Other Changes). Each entry is a one-line summary; for full milestone narrative, follow the cross-reference to the matching release note in [`releases/`](releases/).
 
+## [v0.9.0] (QRM9) — 2026-07-21 — Stabilization (Context-Management Rework)
+
+Full milestone notes: [releases/RELEASE-QRM9.md](releases/RELEASE-QRM9.md)
+
+### New Features
+
+- **Task-aware bootstrap selection** (#70) — `invoke_agent` accepts an optional moderator-authored `searchQuery`; `BootstrapContextService.selectProjectItems` ranks project records by hybrid BM25 + k-NN relevance (OpenSearch backend), with recency `getAll` as fallback; broker strips `searchQuery` before delivery.
+- **Role-keyed agent scope** (#59) — agent scope now partitions by `agent:<role>:<key>` via a shared `resolveScopeId()`, delivering the durable cross-invocation role memory intended since QRM8 #16 (previously keyed by `correlationId`, structurally dead).
+- **Conversation-scope work-unit binding** (#63) — moderator Turn Lifecycle rewritten to mint one `correlationId` per work unit and reuse it across a ticket's collaborating agents, making conversation scope readable across invocations.
+- **Search return-at-least-one floor** (#61) — `context_query mode=search` always admits the top-ranked hit even when it alone exceeds the budget; default `CONTEXT_DEFAULT_MAX_TOKENS` raised 2000 → 3000.
+- **Per-role agent model override** (#80) — `<ROLE>_ANTHROPIC_MODEL` environment wiring selects a distinct model per agent service.
+- **SDK / CLI / model bump** (#68) — Claude Agent SDK `0.2.123 → 0.3.207`, Claude Code CLI `2.1.126 → 2.1.207`, default model `claude-sonnet-4-5 → claude-opus-4-8`; absorbs 0.3.x breaking changes (Task-tool denial, `permissionMode` rename).
+
+### Bug Fixes
+
+- **Bootstrap ignores recency under OpenSearch** (#55) — `OpenSearchStore.getAll()` gains `sort: [{ createdAt: 'asc' }]`; the `.reverse()` "prefer newest" heuristic (valid only for the in-memory store) now holds on both backends.
+- **Bootstrap budget excludes project-notes** (#56) — `BOOTSTRAP_MAX_TOKENS`/`BOOTSTRAP_PROJECT_RATIO` defaults raised to `5000`/`0.8` (4000-tok project budget) so `*-project-notes` records fit; mirrored in `docker-compose.yml`.
+- **`getAll` cap × sort drops newest at scale** (#74) — 10,000-doc cap with ascending sort would return the oldest 10k; closed as superseded by #70 moving the primary bootstrap path off `getAll`.
+- **Agent commits orphan in the shared clone** (#65) — `commitAndPush` rewritten to push anything ahead of `origin/<branch>`; worktree reset-to-origin on entry; tokenized deny-guard replaces prefix matching.
+- **Deny-guard multi-`-c` bypass** (#67) — `extractSegmentHead` now strips leading `-c`/`-C` flags in a repeat-until-stable loop; `system-design.md` push/allowlist docs refreshed.
+- **Session-store durability regression on 0.3.207** (#78) — `/var/agent-sessions` added to the Dockerfile chown block, fixing `EACCES` that silently bypassed FileSessionStore; `system/mirror_error` warn branch added.
+- **Commit corrupted on prose `<commit-message>` mention** (#79) — `extractCommitMessage()` selects the last well-formed marker pair via `findLastPair()` instead of a single non-greedy span.
+- **`/code-review` dies in single-shot invocation** (#87) — PreToolUse hook rewrites `Agent` sub-agent calls to `run_in_background: false`; `ScheduleWakeup` disallowed; Guard C returns non-success on `terminal_reason === 'background_requested'`.
+- **Increase teamlead timeout** (#72) — `ROLE_TIMEOUTS[teamlead]` raised 10 → 15 min for the `/code-review` pipeline.
+
+### Internal / Other Changes
+
+- **Entropy-report Halstead correctness** (#50) — nine tokenizer/aggregation fixes (template-literal recursion, regex-literal handling, quote/number normalization, per-app union maps, canonical `E^⅔/3000`).
+- **Ticket-library consumption discipline** (#51) — "A Ticket Is the Truth About a Change, Not About the Present" subsection added to `tickets/README.md` and pointers in both `CLAUDE.md` files.
+- **Agent prompt actualization** (#76) — shared-workspace fiction replaced with the isolated-worktree model, phantom tool names corrected, dead templates removed, three-tier review model introduced.
+- **Review-tier drift binding** (#81) — review tiers bound to their skills, retroactive skill runs banned, stale QRM5-era "ALWAYS `/code-review`" rule removed from moderator settings.
+- **Moderator OAuth token rotation runbook** (#92) — operational procedure for a stale `CLAUDE_CODE_OAUTH_TOKEN` shadowing fresh `/login` credentials (no code change).
+
+### Documentation
+
+- **`docs/context-store.md`, `docs/context-management.md`** — getAll ordering contract, role-keyed scope, budget and search-floor semantics, task-aware selection, search observability.
+- **`docs/system-design.md`, `docs/message-broker.md`, `docs/mcp-connectivity.md`** — push-gate/allowlist, role-keyed agent scope, corrected `ROLE_TIMEOUTS`.
+- **`docs/claude-code-sdk.md`** — Opus 4.8 default and `<ROLE>_ANTHROPIC_MODEL` override.
+- **Doc/runbook drift cluster** (#84) — four stale doc references and the #68 Check-10 expected-absent list corrected against source-of-truth code.
+
+---
+
 ## [v0.8.0] (QRM8) — 2026-05-29 — Workspace Isolation
 
 Full milestone notes: [releases/RELEASE-QRM8.md](releases/RELEASE-QRM8.md)
@@ -247,6 +289,7 @@ Full milestone notes: [releases/RELEASE-QRM1.md](releases/RELEASE-QRM1.md)
 - **`docs/context-management.md`** + **`docs/context-store.md`** (new) — Context Store concepts and InMemoryStore reference.
 - **`docs/smoke-test-runbook.md`** (new) — 8 scenarios for end-to-end validation.
 
+[v0.9.0]: releases/RELEASE-QRM9.md
 [v0.8.0]: releases/RELEASE-QRM8.md
 [v0.7.0]: releases/RELEASE-QRM7.md
 [v0.6.0-beta]: releases/RELEASE-QRM6.md

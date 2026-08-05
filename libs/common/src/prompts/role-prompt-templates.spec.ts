@@ -1,13 +1,11 @@
 import { AgentRole } from '../messaging/agent-role.enum';
 import {
   getRolePromptTemplate,
-  GENERIC_PROMPT_TEMPLATE,
   SYSTEM_PREAMBLE,
 } from './role-prompt-templates';
 
 describe('getRolePromptTemplate', () => {
   const rolesWithTemplates: AgentRole[] = [
-    AgentRole.moderator,
     AgentRole.architect,
     AgentRole.teamlead,
     AgentRole.developer,
@@ -16,7 +14,7 @@ describe('getRolePromptTemplate', () => {
   ];
 
   describe('system preamble', () => {
-    it.each(Object.values(AgentRole))(
+    it.each(rolesWithTemplates)(
       'should include the system preamble for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
@@ -34,6 +32,7 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('wait: true');
       expect(SYSTEM_PREAMBLE).toContain('wait: false');
       expect(SYSTEM_PREAMBLE).toContain('depth limit');
+      expect(SYSTEM_PREAMBLE).toContain('wait_invocation');
     });
 
     it('should describe the pull-based context model', () => {
@@ -42,6 +41,12 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain('project');
       expect(SYSTEM_PREAMBLE).toContain('conversation');
       expect(SYSTEM_PREAMBLE).toContain('correlationId');
+    });
+
+    it('should include a project-scope size rubric (#76 M4)', () => {
+      expect(SYSTEM_PREAMBLE).toContain(
+        'store a compact summary (≤ ~400 tokens) plus a pointer',
+      );
     });
 
     it('should list all team roles', () => {
@@ -55,17 +60,18 @@ describe('getRolePromptTemplate', () => {
 
     it('should include a Capabilities section describing Claude Code tools', () => {
       expect(SYSTEM_PREAMBLE).toContain('## Capabilities');
-      expect(SYSTEM_PREAMBLE).toContain('FileRead');
-      expect(SYSTEM_PREAMBLE).toContain('FileWrite');
-      expect(SYSTEM_PREAMBLE).toContain('FileEdit');
+      expect(SYSTEM_PREAMBLE).toContain('`Read`');
+      expect(SYSTEM_PREAMBLE).toContain('`Write`');
+      expect(SYSTEM_PREAMBLE).toContain('`Edit`');
       expect(SYSTEM_PREAMBLE).toContain('Glob');
       expect(SYSTEM_PREAMBLE).toContain('Grep');
       expect(SYSTEM_PREAMBLE).toContain('Bash');
     });
 
-    it('should include a Workspace section describing the shared workspace', () => {
+    it('should include a Workspace section describing the isolated worktree model', () => {
       expect(SYSTEM_PREAMBLE).toContain('## Workspace');
-      expect(SYSTEM_PREAMBLE).toContain('/mnt/quorum/workspace');
+      expect(SYSTEM_PREAMBLE).toContain('isolated per-invocation git worktree');
+      expect(SYSTEM_PREAMBLE).toContain('do NOT share a filesystem');
       expect(SYSTEM_PREAMBLE).toContain('quorum.md');
       expect(SYSTEM_PREAMBLE).toContain('docs/');
       expect(SYSTEM_PREAMBLE).toContain('tickets/');
@@ -107,20 +113,110 @@ describe('getRolePromptTemplate', () => {
       expect(SYSTEM_PREAMBLE).toContain(
         '#<issue-number>: <concise description>',
       );
+      expect(SYSTEM_PREAMBLE).toContain(
+        'QRMX(no-ticket): <concise description>',
+      );
       expect(SYSTEM_PREAMBLE).toContain('QRMX-NNN: <concise description>');
     });
 
     it('should note single-commit-per-invocation constraint', () => {
       expect(SYSTEM_PREAMBLE).toContain('one commit per invocation');
     });
+
+    describe('agent-scope content rubric (#59)', () => {
+      it('should include the content rubric with future-you cross-ticket utility guidance', () => {
+        expect(SYSTEM_PREAMBLE).toContain(
+          'Write only what future-you (any role-X invocation on a different ticket)',
+        );
+      });
+
+      it('should include the ≤400-token atomic write cap', () => {
+        expect(SYSTEM_PREAMBLE).toContain('Atomic and ≤ ~400 tokens');
+        expect(SYSTEM_PREAMBLE).toContain('CONTEXT_DEFAULT_MAX_TOKENS=3000');
+      });
+
+      it('should include positive-shape categories (recurring gotcha, stable preference, architectural constraint)', () => {
+        expect(SYSTEM_PREAMBLE).toContain('A recurring multi-site gotcha');
+        expect(SYSTEM_PREAMBLE).toContain('A stable implementation preference');
+        expect(SYSTEM_PREAMBLE).toContain(
+          'An architectural constraint discovered mid-task',
+        );
+      });
+
+      it('should include negative-shape categories (ticket-specific lists, commit SHAs, status markers)', () => {
+        expect(SYSTEM_PREAMBLE).toContain(
+          'Ticket-specific file/line modification lists',
+        );
+        expect(SYSTEM_PREAMBLE).toContain(
+          'Commit SHAs or PR URLs (recoverable from git)',
+        );
+        expect(SYSTEM_PREAMBLE).toContain(
+          '"Research complete for ticket N" status markers',
+        );
+      });
+
+      it('should include the invoke-schema-touch-points specimen', () => {
+        expect(SYSTEM_PREAMBLE).toContain('invoke-schema-touch-points');
+        expect(SYSTEM_PREAMBLE).toContain(
+          'the contract is replicated at three sites that must change together',
+        );
+        expect(SYSTEM_PREAMBLE).toContain(
+          'Verified on #11 (branch field) and #44 (depth field)',
+        );
+      });
+
+      it('should note the new addressing semantics (agent:<role>:<key>)', () => {
+        expect(SYSTEM_PREAMBLE).toContain('agent:<role>:<key>');
+        expect(SYSTEM_PREAMBLE).toContain(
+          'records survive across invocations of the same role',
+        );
+      });
+    });
+
+    describe('progress checkpointing scope relocation (#59)', () => {
+      it('should reference conversation scope (not agent scope) for per-task checkpointing', () => {
+        // Extract the Progress Checkpointing section from SYSTEM_PREAMBLE
+        const checkpointSection = SYSTEM_PREAMBLE.slice(
+          SYSTEM_PREAMBLE.indexOf('## Progress Checkpointing'),
+          SYSTEM_PREAMBLE.indexOf('## Agent Memory'),
+        );
+        expect(checkpointSection).toContain('**conversation** scope');
+        expect(checkpointSection).not.toContain('**agent** scope');
+      });
+
+      it('should qualify the On retry bullet with same-correlationId caveat', () => {
+        expect(SYSTEM_PREAMBLE).toContain(
+          'within the same invocation chain (same correlationId)',
+        );
+      });
+
+      it('should not reference research_findings or steps_completed in agent-scope guidance', () => {
+        // The Agent Memory section should not contain per-task checkpoint patterns
+        const agentMemorySection = SYSTEM_PREAMBLE.slice(
+          SYSTEM_PREAMBLE.indexOf('## Agent Memory'),
+        );
+        expect(agentMemorySection).not.toContain('research_findings');
+        expect(agentMemorySection).not.toContain('steps_completed');
+      });
+    });
+
+    describe('shared context agent-scope bullet (#59)', () => {
+      it('should describe agent scope as durable role memory, not per-task checkpointing', () => {
+        expect(SYSTEM_PREAMBLE).toContain(
+          '**agent** scope — Durable role memory',
+        );
+        expect(SYSTEM_PREAMBLE).not.toContain(
+          '**agent** scope — Private working memory',
+        );
+      });
+    });
   });
 
   describe('specific templates', () => {
     it.each(rolesWithTemplates)(
-      'should return a role-specific template for %s (not generic fallback)',
+      'should return a role-specific template for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
-        expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
         expect(template.length).toBeGreaterThan(SYSTEM_PREAMBLE.length);
       },
     );
@@ -139,9 +235,9 @@ describe('getRolePromptTemplate', () => {
       const template = getRolePromptTemplate(AgentRole.developer);
       expect(template).toContain('Full filesystem access');
       expect(template).toContain('Full bash access');
-      expect(template).toContain('FileRead');
-      expect(template).toContain('FileWrite');
-      expect(template).toContain('FileEdit');
+      expect(template).toContain('`Read`');
+      expect(template).toContain('`Write`');
+      expect(template).toContain('`Edit`');
     });
 
     it('should describe git restrictions', () => {
@@ -151,6 +247,27 @@ describe('getRolePromptTemplate', () => {
       expect(template).toContain('git checkout -b');
       expect(template).toContain('git branch');
       expect(template).toContain('rm -rf /');
+    });
+
+    describe('checkpointing scope (#59)', () => {
+      it('should reference conversation scope for per-task checkpointing, not agent scope', () => {
+        const template = getRolePromptTemplate(AgentRole.developer);
+        // Extract the Context Management section from the developer template
+        const ctxSection = template.slice(
+          template.indexOf('## Context Management'),
+          template.indexOf('## Communication Style'),
+        );
+        expect(ctxSection).toContain(
+          'store a summary of findings in **conversation** scope',
+        );
+        expect(ctxSection).toContain('conversation-scope checkpoint');
+        expect(ctxSection).toContain('Query conversation context on start');
+        expect(ctxSection).not.toContain(
+          'store a summary of findings in **agent** scope',
+        );
+        expect(ctxSection).not.toContain('agent-scope checkpoint');
+        expect(ctxSection).not.toContain('Query agent context on start');
+      });
     });
   });
 
@@ -192,12 +309,36 @@ describe('getRolePromptTemplate', () => {
       expect(template).toContain('tickets/');
       expect(template).toContain('ticket files');
     });
+
+    it('should define code-review execution and PR reporting discipline (#76 follow-up)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('## Code Review');
+      expect(template).toContain('gh pr comment');
+      expect(template).toContain(
+        '"no issues found" is a skill output, not a review report',
+      );
+    });
+
+    it('should describe the three review tiers (#76 follow-up)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('`/review`');
+      expect(template).toContain('`/code-review`');
+      expect(template).toContain('lightweight');
+    });
+
+    it('should bind review tiers to their skills (#81)', () => {
+      const template = getRolePromptTemplate(AgentRole.teamlead);
+      expect(template).toContain('The tier binds the skill');
+      expect(template).toContain('never substitute one for the other');
+      expect(template).toContain('never self-escalate');
+      expect(template).toContain('run the dispatched skill **first**');
+      expect(template).toContain('never retroactively');
+    });
   });
 
   describe('qa template', () => {
-    it('should have a dedicated template (not generic fallback)', () => {
+    it('should have a dedicated template', () => {
       const template = getRolePromptTemplate(AgentRole.qa);
-      expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
       expect(template).toContain('QA Agent');
     });
 
@@ -219,9 +360,8 @@ describe('getRolePromptTemplate', () => {
   });
 
   describe('productowner template', () => {
-    it('should have a dedicated template (not generic fallback)', () => {
+    it('should have a dedicated template', () => {
       const template = getRolePromptTemplate(AgentRole.productowner);
-      expect(template).not.toContain(GENERIC_PROMPT_TEMPLATE);
       expect(template).toContain('Product Owner');
     });
 
@@ -238,41 +378,8 @@ describe('getRolePromptTemplate', () => {
     });
   });
 
-  describe('moderator template', () => {
-    it('should mention agent code-capability awareness', () => {
-      const template = getRolePromptTemplate(AgentRole.moderator);
-      expect(template).toContain('Claude Code instances');
-      expect(template).toContain('read, write, and test code');
-    });
-
-    it('should describe the clarification flow', () => {
-      const template = getRolePromptTemplate(AgentRole.moderator);
-      expect(template).toContain('clarification');
-      expect(template).toContain("do not answer on the user's behalf");
-    });
-  });
-
-  describe('generic fallback', () => {
-    it('should contain {{caller}} placeholder', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('{{caller}}');
-    });
-
-    it('should mention Claude Code built-in tools and permission restrictions', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('Claude Code built-in tools');
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('permission restrictions');
-    });
-
-    it('should reference quorum.md', () => {
-      expect(GENERIC_PROMPT_TEMPLATE).toContain('quorum.md');
-    });
-
-    it('should be a non-empty string', () => {
-      expect(GENERIC_PROMPT_TEMPLATE.length).toBeGreaterThan(0);
-    });
-  });
-
   describe('all templates', () => {
-    it.each(Object.values(AgentRole))(
+    it.each(rolesWithTemplates)(
       'should return a non-empty string for %s',
       (role) => {
         const template = getRolePromptTemplate(role);
@@ -280,5 +387,13 @@ describe('getRolePromptTemplate', () => {
         expect(template.length).toBeGreaterThan(0);
       },
     );
+  });
+
+  describe('non-deployable roles (#76 M1)', () => {
+    it('should throw for moderator — no template exists and none should render', () => {
+      expect(() => getRolePromptTemplate(AgentRole.moderator)).toThrow(
+        'No role prompt template for role "moderator"',
+      );
+    });
   });
 });

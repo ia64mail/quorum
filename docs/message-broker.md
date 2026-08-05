@@ -202,16 +202,16 @@ Different agents have different expected response times. The broker wraps delive
 
 ```typescript
 const ROLE_TIMEOUTS: Partial<Record<AgentRole, number>> = {
-  architect:    5 * 60_000,   // 5 min — design review
-  teamlead:    10 * 60_000,   // 10 min — ticket creation
+  moderator:    5 * 60_000,   // 5 min — user clarification via elicitation
+  architect:   15 * 60_000,   // 15 min — design review / research
+  teamlead:    15 * 60_000,   // 15 min — /code-review pipeline
   developer:   30 * 60_000,   // 30 min — implementation
   qa:          15 * 60_000,   // 15 min — test execution
   productowner: 2 * 60_000,   // 2 min — clarification
-  // moderator: uses defaultTimeoutMs (user interaction time varies)
 };
 ```
 
-Roles not in the map (currently `moderator`) fall back to `defaultTimeoutMs`.
+Every role is now explicit in the map, including `moderator`. Roles not in the map fall back to `defaultTimeoutMs` — currently no deployable role relies on that fallback, but it remains the safety net for any future role added without an explicit entry.
 
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|
@@ -304,8 +304,8 @@ Before delivering an invocation, the broker calls `BootstrapContextService.assem
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|
 | `BOOTSTRAP_ENABLED` | `true` | Master toggle — when `false`, assembly returns `null` |
-| `BOOTSTRAP_MAX_TOKENS` | `1000` | Total token budget for the assembled bootstrap payload |
-| `BOOTSTRAP_PROJECT_RATIO` | `0.6` | Fraction of budget allocated to project-scope items (remainder goes to conversation) |
+| `BOOTSTRAP_MAX_TOKENS` | `5000` | Total token budget for the assembled bootstrap payload |
+| `BOOTSTRAP_PROJECT_RATIO` | `0.8` | Fraction of budget allocated to project-scope items (remainder goes to conversation) |
 
 These are set in `docker-compose.yml` on the `mcp-server` service and read by the config factory in `apps/mcp-server/src/config/bootstrap.config.ts`.
 

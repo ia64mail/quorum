@@ -574,7 +574,10 @@ describe('MessageBroker', () => {
 
       expect(capturedRequest).toBeDefined();
       expect(capturedRequest!.bootstrapContext).toEqual(bootstrapCtx);
-      expect(mockBootstrapService.assemble).toHaveBeenCalledWith('corr-1');
+      expect(mockBootstrapService.assemble).toHaveBeenCalledWith(
+        'corr-1',
+        undefined,
+      );
     });
 
     it('should not set bootstrapContext when assemble returns null', async () => {
@@ -655,7 +658,97 @@ describe('MessageBroker', () => {
 
       await broker.invoke(makeRequest({ sessionId: '' }));
 
-      expect(mockBootstrapService.assemble).toHaveBeenCalledWith('corr-1');
+      expect(mockBootstrapService.assemble).toHaveBeenCalledWith(
+        'corr-1',
+        undefined,
+      );
+    });
+  });
+
+  // #70: searchQuery is a caller-set, broker-read field — consumed by
+  // assemble() for relevance-ranked project selection, then stripped so it
+  // never reaches the target agent's delivered payload.
+  describe('searchQuery — consumed by assembly, stripped before delivery (#70)', () => {
+    it('should forward request.searchQuery to bootstrapContext.assemble', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async () => ({ success: true, result: 'done' });
+      registry.register(connection);
+      mockBootstrapService.assemble.mockResolvedValue(null);
+
+      await broker.invoke(
+        makeRequest({ searchQuery: 'ticket #70 bootstrap search' }),
+      );
+
+      expect(mockBootstrapService.assemble).toHaveBeenCalledWith(
+        'corr-1',
+        'ticket #70 bootstrap search',
+      );
+    });
+
+    it('should NOT include searchQuery on the request delivered to the target agent', async () => {
+      let capturedRequest: InvokeRequest | undefined;
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async (req) => {
+        capturedRequest = req;
+        return { success: true, result: 'done' };
+      };
+      registry.register(connection);
+      mockBootstrapService.assemble.mockResolvedValue(null);
+
+      await broker.invoke(
+        makeRequest({ searchQuery: 'ticket #70 bootstrap search' }),
+      );
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest).not.toHaveProperty('searchQuery');
+    });
+
+    it('should strip searchQuery even when no bootstrapContext is produced', async () => {
+      let capturedRequest: InvokeRequest | undefined;
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async (req) => {
+        capturedRequest = req;
+        return { success: true, result: 'done' };
+      };
+      registry.register(connection);
+      mockBootstrapService.assemble.mockResolvedValue(null);
+
+      await broker.invoke(makeRequest({ searchQuery: 'no hits query' }));
+
+      expect(capturedRequest!.bootstrapContext).toBeUndefined();
+      expect(capturedRequest).not.toHaveProperty('searchQuery');
+    });
+
+    it('should strip searchQuery on resumed sessions too (assemble skipped)', async () => {
+      let capturedRequest: InvokeRequest | undefined;
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async (req) => {
+        capturedRequest = req;
+        return { success: true, result: 'done' };
+      };
+      registry.register(connection);
+      mockBootstrapService.assemble.mockClear();
+
+      await broker.invoke(
+        makeRequest({ sessionId: 'sess-1', searchQuery: 'resumed query' }),
+      );
+
+      expect(mockBootstrapService.assemble).not.toHaveBeenCalled();
+      expect(capturedRequest).not.toHaveProperty('searchQuery');
+    });
+
+    it('should not forward searchQuery when it was never set (undefined passed to assemble)', async () => {
+      const connection = new MockConnection(AgentRole.architect);
+      connection.handleFn = async () => ({ success: true, result: 'done' });
+      registry.register(connection);
+      mockBootstrapService.assemble.mockResolvedValue(null);
+
+      await broker.invoke(makeRequest());
+
+      expect(mockBootstrapService.assemble).toHaveBeenCalledWith(
+        'corr-1',
+        undefined,
+      );
     });
   });
 });

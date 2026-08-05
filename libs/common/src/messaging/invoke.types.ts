@@ -90,6 +90,26 @@ export const invokeRequestSchema = z.object({
   action: z
     .string()
     .describe('What the target should do (natural-language task description)'),
+  /**
+   * One-sentence, moderator-authored description of this task's domain
+   * concept, used to drive relevance-ranked bootstrap context selection.
+   * This is the inverse contract of `bootstrapContext`: caller-set,
+   * broker-read, and — unlike `bootstrapContext` — never forwarded to the
+   * target agent. The Message Broker consumes it at assembly time and
+   * strips it from the request before delivery (see #70); the field
+   * exists on this shared schema only because the agent's `/invoke` HTTP
+   * endpoint validates against the same schema and must not silently drop
+   * it before the broker has a chance to read it.
+   */
+  searchQuery: z
+    .string()
+    .optional()
+    .describe(
+      "One-sentence description of this task's domain concept, used to retrieve " +
+        "the most relevant prior decisions into the target's starting context. " +
+        'Include exact identifiers (ticket #, feature/file name) and a plain-language ' +
+        'concept description; omit slash commands, commit hashes, and branch names.',
+    ),
   /** Optional key-value payload passed to the target agent. */
   context: z
     .record(z.string(), z.unknown())

@@ -15,7 +15,7 @@ describe('contextConfig', () => {
 
   it('should return defaults when no env vars are set', () => {
     const result = contextConfig();
-    expect(result).toEqual({ defaultMaxTokens: 2000, tokenCharRatio: 4 });
+    expect(result).toEqual({ defaultMaxTokens: 3000, tokenCharRatio: 4 });
   });
 
   it('should override defaultMaxTokens from env var', () => {

@@ -12,6 +12,14 @@ export interface ContextSearchTraceRecord {
   queryId: string;
   correlationId: string | null;
   callerRole: string | null;
+  /**
+   * Discriminates which caller issued the search: the `context_query` MCP
+   * tool (agent-invoked) or the bootstrap project-scope relevance search
+   * (server-push, #70). `callerRole` cannot serve this purpose — bootstrap
+   * has no invoking agent, so its `callerRole` would be `null`,
+   * indistinguishable from a `context_query` issued before `register_agent`.
+   */
+  source: 'context_query' | 'bootstrap';
   scope: string;
   id: string | null;
   queryText: string;

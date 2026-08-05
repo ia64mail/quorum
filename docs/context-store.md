@@ -57,14 +57,14 @@ Key design decisions:
 enum ContextScope {
   project = 'project',       // Entire session lifetime
   conversation = 'conversation', // Single task chain (correlationId)
-  agent = 'agent',           // Per-agent working memory
+  agent = 'agent',           // Durable per-role memory (keyed by role, not correlationId)
 }
 
 interface ContextItem {
   key: string;               // Item key within scope
   value: unknown;            // JSON-serializable payload
   scope: ContextScope;
-  id?: string;               // correlationId (conversation) or agentId (agent)
+  id?: string;               // correlationId (conversation) or role (agent)
   createdBy?: string;        // Agent role that created this item
   createdAt: number;         // Epoch milliseconds
   expiresAt?: number;        // Epoch milliseconds (undefined = no expiry)
@@ -74,7 +74,7 @@ interface SetParams {
   scope: ContextScope;
   key: string;
   value: unknown;
-  id?: string;               // correlationId or agentId
+  id?: string;               // correlationId (conversation) or role (agent)
   createdBy?: string;
   ttl?: number;              // Milliseconds, converted to expiresAt
 }
@@ -101,7 +101,7 @@ Centralized scope-aware key construction in `libs/common`. Ensures consistent ke
 **Rules**:
 - **project** scope: `id` is always stripped -> `project:_:key` (even if provided)
 - **conversation** scope: `id` required -> `conversation:{correlationId}:key`
-- **agent** scope: `id` required -> `agent:{agentId}:key`
+- **agent** scope: `id` required -> `agent:{role}:key` (role-partitioned — durable across invocations of the same role)
 - **Throws** if conversation/agent scope is missing `id`
 
 ```typescript
@@ -150,7 +150,7 @@ The `value` field has indexing disabled (`enabled: false`) — it is stored for 
 |--------|----------|
 | `set()` | Builds composite key, pre-renders `embeddingText` via `toEmbeddingText()`, indexes with `refresh: true` (BM25-immediate), emits `'context.change'` event (triggers async embedding) |
 | `get()` | Fetches by composite key document ID. Lazy-expires: if `expiresAt <= now`, deletes and emits `'expire'` event |
-| `getAll()` | Filtered query by scope + id prefix, excludes expired items, excludes `embedding`/`embeddingText` from response |
+| `getAll()` | Filtered query by scope + id prefix, sorted `createdAt` ascending (oldest-first — the `ContextStore.getAll` ordering contract), excludes expired items, excludes `embedding`/`embeddingText` from response |
 | `search()` | Hybrid query (BM25 + k-NN) through `hybrid-search` pipeline; falls back to BM25-only when Ollama unavailable. Applies token budget |
 | `getStats()` | Counts live items and estimates tokens. Aggregates across all scopes if `scope` omitted |
 
@@ -359,7 +359,7 @@ When `backend=inmemory`, `OpenSearchModule` and `EmbeddingModule` are **not impo
 
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|
-| `CONTEXT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for `context_query` search mode |
+| `CONTEXT_DEFAULT_MAX_TOKENS` | `3000` | Default token budget for `context_query` search mode |
 | `CONTEXT_TOKEN_CHAR_RATIO` | `4` | Characters per token estimate (used by `context_summarize`) |
 
 ### OpenSearch
@@ -395,23 +395,27 @@ Docker dependency chain ensures correct ordering:
 
 ## Search Observability
 
-Every `context_query mode=search` call produces a structured trace record in a dedicated JSONL stream at `${LOG_JSON_DIR}/context-search-{startupTimestamp}.jsonl`. This enables offline search-quality analysis without wading through the main MCP log.
+Every `context_query mode=search` call, and every bootstrap project-scope relevance search (#70), produces a structured trace record in a dedicated JSONL stream at `${LOG_JSON_DIR}/context-search-{startupTimestamp}.jsonl`. This enables offline search-quality analysis without wading through the main MCP log.
 
 ### Trace Record
 
-One JSONL record per search invocation. Each record includes session metadata (`queryId`, `correlationId`, `callerRole`, `scope`), the verbatim query text, the effective token budget, the search engine used (`hybrid`, `bm25-only`, or `memory`), timing, and a `results` array with per-hit `key`, `score`, `snippet` (first 200 chars), `tokensEstimate`, and `includedInResult` flag.
+One JSONL record per ranked search invocation. Each record includes session metadata (`queryId`, `correlationId`, `callerRole`, `scope`), a `source: 'context_query' | 'bootstrap'` discriminator, the verbatim query text, the effective token budget, the search engine used (`hybrid`, `bm25-only`, or `memory`), timing, and a `results` array with per-hit `key`, `score`, `snippet` (first 200 chars), `tokensEstimate`, and `includedInResult` flag.
 
 The `truncatedByTokenBudget` boolean signals when the token budget cut lower-ranked hits. `errorMessage` captures OpenSearch or embedding-service failures (null on success).
+
+**`source` discriminator (#70 follow-up).** `callerRole` alone cannot distinguish who issued a search: bootstrap is a server-push with no invoking agent, so its `callerRole` is `null` — indistinguishable from a `context_query` issued before `register_agent`. `source` disambiguates: `'context_query'` for the MCP tool path, `'bootstrap'` for the bootstrap project-scope relevance search. The field lives only on this observability-layer `ContextSearchTraceRecord`; the backend `SearchTrace` contract (`ContextStore.search`'s `onTrace` callback shape) is unchanged.
 
 ### Architecture
 
 The trace flows through three layers:
 
-1. **Backend trace callback** — `ContextStore.search()` accepts an optional `onTrace?: (trace: SearchTrace) => void` callback. `OpenSearchStore` populates the trace with engine choice, raw hit scores, and duration. `InMemoryStore` emits a degenerate trace with `engine=memory` and `score=null`. The callback fires inside `try`/`finally` so the trace lands even on partial errors.
+1. **Backend trace callback** — `ContextStore.search()` accepts an optional `onTrace?: (trace: SearchTrace) => void` callback. `OpenSearchStore` populates the trace with engine choice, raw hit scores, and duration; it fires `onTrace` both on success and when a post-`embedQuery` error is caught internally (with `errorMessage` set). `InMemoryStore` emits a degenerate trace with `engine=memory` and `score=null`.
 
-2. **MCP layer enrichment** — `McpService.registerContextQueryTool()` generates a `queryId` (UUID v4), captures the backend trace via the callback, wraps it with session/correlation metadata, and emits the full record to `ContextSearchTraceLogger`.
+2. **Caller-side enrichment** — two callers wrap the backend trace with session/correlation metadata and a `source` tag before emitting:
+   - `McpService.registerContextQueryTool()` generates a `queryId` (UUID v4), tags `source: 'context_query'`, and includes the resolved `callerRole`.
+   - `BootstrapContextService.selectProjectItems()` (invoked from `assemble()`, which threads `correlationId`) generates its own `queryId`, tags `source: 'bootstrap'`, and sets `callerRole: null` (no invoking agent). It emits as soon as the ranked search completes — regardless of hit count, mirroring `context_query`'s `if (capturedTrace)` guard, which is not conditioned on hit count — or when the search throws after `onTrace` already captured a trace (mirroring the error-path semantics above). Only when **no ranked search executes at all** — an absent query, an InMemory backend, or a search that throws before capturing any trace — is nothing emitted, so an absent bootstrap trace reads as "no ranked search ran," not "observability broken." Project *selection* independently falls back to recency whenever the ranked search yields zero hits, whether or not that search was traced.
 
-3. **JSONL file transport** — `ContextSearchTraceLogger` (in `apps/mcp-server/src/observability/`) owns a dedicated winston file transport. Records match the `QuorumLogger` JSON shape (`timestamp`, `level`, `context`, `message`, `agentRole`, `extra`) for grep compatibility across log streams. The service is exported via `ObservabilityModule` and imported by `McpModule`.
+3. **JSONL file transport** — `ContextSearchTraceLogger` (in `apps/mcp-server/src/observability/`) owns a dedicated winston file transport. Records match the `QuorumLogger` JSON shape (`timestamp`, `level`, `context`, `message`, `agentRole`, `extra`) for grep compatibility across log streams. The service is exported via `ObservabilityModule`, imported by `McpModule` directly and by `MessagingModule` (so `BootstrapContextService` can inject it) — both resolve the same singleton, so bootstrap and `context_query` traces land in one JSONL stream, not two.
 
 ### Breadcrumb
 
@@ -428,6 +432,9 @@ jq -c 'select(.extra.engine == "bm25-only") | {queryId: .extra.queryId, query: .
 
 # Token-budget truncations
 jq -c 'select(.extra.truncatedByTokenBudget == true) | {queryId: .extra.queryId, raw: .extra.hitCountRaw, returned: .extra.hitCountReturned}' logs/context-search-*.jsonl
+
+# Bootstrap-originated searches only (#70 follow-up)
+jq -c 'select(.extra.source == "bootstrap")' logs/context-search-*.jsonl
 ```
 
 ## Future Enhancements

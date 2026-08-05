@@ -81,9 +81,9 @@ COPY --from=builder --chown=quorum:quorum /app/package*.json ./
 RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude/debug \
-      /var/agent-repo /var/agent-worktrees \
+      /var/agent-repo /var/agent-worktrees /var/agent-sessions \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude \
-      /var/agent-repo /var/agent-worktrees \
+      /var/agent-repo /var/agent-worktrees /var/agent-sessions \
  && ln -s /tmp/.claude.json /home/quorum/.claude.json
 
 # Bake the agent entrypoint (gh auth bootstrap).
@@ -125,7 +125,7 @@ RUN groupmod -n quorum -g ${HOST_GID} node && \
     usermod -l quorum -u ${HOST_UID} -g ${HOST_GID} -d /home/quorum -m -s /bin/bash node
 
 # Install Claude Code CLI globally (pinned version from QRM6-001 spike)
-RUN npm install -g @anthropic-ai/claude-code@2.1.126
+RUN npm install -g @anthropic-ai/claude-code@2.1.207
 
 RUN mkdir -p /app/logs /tmp/.claude /home/quorum/.claude /etc/claude /mnt/quorum/workspace \
  && chown -R quorum:quorum /app/logs /tmp/.claude /home/quorum/.claude /etc/claude /mnt/quorum/workspace \

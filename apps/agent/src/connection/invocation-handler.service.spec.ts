@@ -763,6 +763,10 @@ describe('InvocationHandler', () => {
       expect(call.prompt).toContain('## Prior Decisions');
       expect(call.prompt).toContain('### Project Context');
       expect(call.prompt).toContain('### Conversation Context');
+      // Framing line (#76 L3): records are hypotheses to re-verify, not settled fact
+      expect(call.prompt).toContain(
+        'a hypothesis to re-verify against the present code',
+      );
       // All key-value pairs must be rendered
       expect(call.prompt).toContain('- tech-stack: "NestJS with TypeScript"');
       expect(call.prompt).toContain(
@@ -945,9 +949,10 @@ describe('InvocationHandler', () => {
       });
     });
 
-    it('should not commit or push when no changes exist', async () => {
+    it('should not commit or push when no changes exist and branch is not ahead', async () => {
       mockExecute.mockResolvedValue(successResult);
-      // Default mock returns empty stdout → no changes
+      // Default mock returns empty stdout → no changes, and rev-list count
+      // parses to 0 from empty stdout, so no push either (#65 clean no-op).
 
       const result = await handler.handle(baseRequest);
 
@@ -963,11 +968,11 @@ describe('InvocationHandler', () => {
         (call) => call[0] === 'git' && (call[1] as string[])[0] === 'push',
       );
       expect(pushCall).toBeUndefined();
-      // INFO log should note no changes
+      // INFO log should note no changes to push
       const infoLog = (logSpy.mock.calls as unknown[][]).find(
         (call) =>
           typeof call[0] === 'string' &&
-          call[0].includes('No changes to commit after invocation'),
+          call[0].includes('No changes to push after invocation'),
       )?.[0] as string;
       expect(infoLog).toBeDefined();
       expect(infoLog).toContain('correlationId=550e8400');
@@ -999,6 +1004,20 @@ describe('InvocationHandler', () => {
           }
         },
       );
+      // rev-list reports 1 ahead so the push branch is taken
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'rev-list') {
+          cb(null, { stdout: '1\n', stderr: '' });
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       const result = await handler.handle(baseRequest);
 
@@ -1041,6 +1060,20 @@ describe('InvocationHandler', () => {
           }
         },
       );
+      // rev-list reports 1 ahead so the push branch is taken
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'rev-list') {
+          cb(null, { stdout: '1\n', stderr: '' });
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       const result = await handler.handle(baseRequest);
 
@@ -1066,7 +1099,7 @@ describe('InvocationHandler', () => {
       expect(warnMessage).toContain('using fallback');
     });
 
-    it('should return failure with error when push is rejected', async () => {
+    it('should return failure with error when push is rejected and rebase also fails (#65 fail-loud)', async () => {
       const resultWithMsg: ExecuteResult = {
         ...successResult,
         commitMessage: '#12: some change',
@@ -1089,7 +1122,9 @@ describe('InvocationHandler', () => {
           }
         },
       );
-      // git push (execFileAsync) fails
+      // git push (execFileAsync) fails with non-fast-forward;
+      // git pull --rebase also fails (e.g. conflict);
+      // rev-list returns '1\n' so the push branch is taken.
       mockExecFile.mockImplementation((...callArgs: unknown[]) => {
         const file = callArgs[0] as string;
         const args = callArgs[1] as string[];
@@ -1099,6 +1134,10 @@ describe('InvocationHandler', () => {
         ) => void;
         if (file === 'git' && args[0] === 'push') {
           cb(new Error('rejected: non-fast-forward'));
+        } else if (file === 'git' && args[0] === 'pull') {
+          cb(new Error('CONFLICT (content): Merge conflict in foo.ts'));
+        } else if (file === 'git' && args[0] === 'rev-list') {
+          cb(null, { stdout: '1\n', stderr: '' });
         } else {
           cb(null, { stdout: '', stderr: '' });
         }
@@ -1109,6 +1148,7 @@ describe('InvocationHandler', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('Commit/push failed');
       expect(result.error).toContain('push rejected');
+      expect(result.error).toContain('rebase failed');
     });
 
     it('should NOT call commitAndPush when SDK returns failure', async () => {
@@ -1147,6 +1187,19 @@ describe('InvocationHandler', () => {
           }
         },
       );
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'rev-list') {
+          cb(null, { stdout: '1\n', stderr: '' });
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       const result = await handler.handle(baseRequest);
 
@@ -1161,6 +1214,287 @@ describe('InvocationHandler', () => {
       expect(commitCmd).toContain('Add commitAndPush method');
     });
   });
+
+  // ── #65 worktree commit/push hardening ──────────────────────────────────
+  describe('#65 worktree commit/push hardening', () => {
+    it('should push commits that are ahead of origin even when the working tree is clean (agent-made commit)', async () => {
+      // Agent committed inside the worktree itself (bypassing the deny-guard).
+      // Status is clean — but the local ref is one ahead of origin/<branch>.
+      // The handler MUST still push.
+      mockExecute.mockResolvedValue(successResult);
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if (cmd === 'git status --porcelain') {
+            cb(null, { stdout: '', stderr: '' }); // clean tree
+          } else if (cmd === 'git rev-parse --short HEAD') {
+            cb(null, { stdout: 'feedbee\n', stderr: '' });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'rev-list') {
+          // 1 commit ahead of origin — the agent's stranded commit
+          cb(null, { stdout: '1\n', stderr: '' });
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(true);
+
+      // No commit should have been created (clean tree)
+      const execCmds = (mockExec.mock.calls as unknown[][]).map(
+        (call) => call[0] as string,
+      );
+      expect(execCmds.find((c) => c.startsWith('git add'))).toBeUndefined();
+      expect(execCmds.find((c) => c.startsWith('git commit'))).toBeUndefined();
+
+      // But rev-list must have been consulted
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['rev-list', '--count', `origin/${baseRequest.branch}..HEAD`],
+        expect.objectContaining({ cwd: expect.any(String) as string }),
+        expect.any(Function),
+      );
+
+      // And push must have happened
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['push', 'origin', baseRequest.branch],
+        expect.objectContaining({ cwd: expect.any(String) as string }),
+        expect.any(Function),
+      );
+
+      // Success log should report ahead count
+      const pushLog = (logSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Committed and pushed'),
+      )?.[0] as string;
+      expect(pushLog).toBeDefined();
+      expect(pushLog).toContain('ahead=1');
+    });
+
+    it('should run git reset --hard origin/<branch> in the new worktree after worktree add', async () => {
+      mockExecute.mockResolvedValue(successResult);
+
+      await handler.handle(baseRequest);
+
+      // Reset must be invoked with the worktree as cwd, before SDK execute.
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['reset', '--hard', `origin/${baseRequest.branch}`],
+        { cwd: `/var/agent-worktrees/${baseRequest.correlationId}` },
+        expect.any(Function),
+      );
+    });
+
+    it('should reset BEFORE the SDK runs (self-heal divergent local ref)', async () => {
+      // Verifies the ordering invariant from the ticket:
+      //   reset = start-of-invocation, push = end-of-invocation.
+      const callOrder: string[] = [];
+
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'reset') {
+          callOrder.push('git reset');
+        } else if (file === 'git' && args[0] === 'worktree') {
+          callOrder.push(`git worktree ${args[1]}`);
+        } else if (file === 'ln') {
+          callOrder.push('ln -s');
+        } else if (file === 'git' && args[0] === 'rev-list') {
+          callOrder.push('git rev-list');
+        }
+        cb(null, { stdout: '', stderr: '' });
+      });
+
+      mockExecute.mockImplementation(async () => {
+        callOrder.push('sdk-execute');
+        return successResult;
+      });
+
+      await handler.handle(baseRequest);
+
+      const addIdx = callOrder.indexOf('git worktree add');
+      const resetIdx = callOrder.indexOf('git reset');
+      const executeIdx = callOrder.indexOf('sdk-execute');
+
+      expect(addIdx).toBeGreaterThanOrEqual(0);
+      expect(resetIdx).toBeGreaterThan(addIdx);
+      expect(executeIdx).toBeGreaterThan(resetIdx);
+    });
+
+    it('should return failure and clean up worktree when reset --hard fails', async () => {
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'reset') {
+          cb(new Error("fatal: ambiguous argument 'origin/main'"));
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Worktree setup failed');
+      expect(result.error).toContain('reset to origin/main');
+      expect(mockExecute).not.toHaveBeenCalled();
+      // Cleanup must still run
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['worktree', 'remove', '--force', expect.stringContaining(VALID_UUID)],
+        { cwd: '/mnt/quorum/workspace' },
+        expect.any(Function),
+      );
+    });
+
+    it('should recover from a non-ff push by pulling --rebase and retrying', async () => {
+      const resultWithMsg: ExecuteResult = {
+        ...successResult,
+        commitMessage: '#65: recover from non-ff',
+      };
+      mockExecute.mockResolvedValue(resultWithMsg);
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if (cmd === 'git status --porcelain') {
+            cb(null, { stdout: ' M file.ts\n', stderr: '' });
+          } else if (cmd === 'git rev-parse --short HEAD') {
+            cb(null, { stdout: 'abc1234\n', stderr: '' });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      // First push fails; rebase succeeds; second push succeeds.
+      let pushCallCount = 0;
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'push') {
+          pushCallCount++;
+          if (pushCallCount === 1) {
+            cb(new Error('rejected: non-fast-forward (origin moved)'));
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        } else if (file === 'git' && args[0] === 'rev-list') {
+          cb(null, { stdout: '1\n', stderr: '' });
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(true);
+
+      // Push attempted twice, with a pull --rebase between them
+      expect(pushCallCount).toBe(2);
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['pull', '--rebase', 'origin', baseRequest.branch],
+        expect.objectContaining({ cwd: expect.any(String) as string }),
+        expect.any(Function),
+      );
+
+      // The recovery log line should have fired
+      const recoveryLog = (logSpy.mock.calls as unknown[][]).find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('Push succeeded after rebase'),
+      )?.[0] as string;
+      expect(recoveryLog).toBeDefined();
+      expect(recoveryLog).toContain(`correlationId=${VALID_UUID}`);
+    });
+
+    it('should fail loudly when retry-push after rebase still fails (no silent orphan)', async () => {
+      const resultWithMsg: ExecuteResult = {
+        ...successResult,
+        commitMessage: '#65: still non-ff',
+      };
+      mockExecute.mockResolvedValue(resultWithMsg);
+      mockExec.mockImplementation(
+        (
+          cmd: string,
+          _opts: unknown,
+          cb: (
+            err: Error | null,
+            result: { stdout: string; stderr: string },
+          ) => void,
+        ) => {
+          if (cmd === 'git status --porcelain') {
+            cb(null, { stdout: ' M file.ts\n', stderr: '' });
+          } else {
+            cb(null, { stdout: '', stderr: '' });
+          }
+        },
+      );
+
+      // Both pushes fail; rebase succeeds.
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'push') {
+          cb(new Error('rejected: non-fast-forward'));
+        } else if (file === 'git' && args[0] === 'rev-list') {
+          cb(null, { stdout: '1\n', stderr: '' });
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
+
+      const result = await handler.handle(baseRequest);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Commit/push failed');
+      expect(result.error).toContain('retry after rebase failed');
+    });
+  });
+
   describe('worktree lifecycle (#11, #39)', () => {
     const expectedWorktreePath = `/var/agent-worktrees/${VALID_UUID}`;
 
@@ -1456,6 +1790,19 @@ describe('InvocationHandler', () => {
           }
         },
       );
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'rev-list') {
+          cb(null, { stdout: '1\n', stderr: '' });
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       await handler.handle(baseRequest);
 
@@ -1493,6 +1840,19 @@ describe('InvocationHandler', () => {
           }
         },
       );
+      mockExecFile.mockImplementation((...callArgs: unknown[]) => {
+        const file = callArgs[0] as string;
+        const args = callArgs[1] as string[];
+        const cb = callArgs[callArgs.length - 1] as (
+          err: Error | null,
+          result: { stdout: string; stderr: string },
+        ) => void;
+        if (file === 'git' && args[0] === 'rev-list') {
+          cb(null, { stdout: '1\n', stderr: '' });
+        } else {
+          cb(null, { stdout: '', stderr: '' });
+        }
+      });
 
       await handler.handle(baseRequest);
 

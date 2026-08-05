@@ -96,7 +96,7 @@ QRM4 replaced the structured smoke test runbook of QRM1/QRM2 with dogfooding: th
 | Metric | Value |
 |--------|-------|
 | **Model** | Claude Opus 4.6 |
-| **Total cost** | ~$50 |
+| **Total cost** | ~\$50 |
 | **Commits** | 54 |
 | **Feature tickets** | 6 |
 | **Bug tickets** | 15 (14 resolved, 1 deferred) |
@@ -118,8 +118,8 @@ QRM4 replaced the structured smoke test runbook of QRM1/QRM2 with dogfooding: th
 
 | Ratio | Value |
 |-------|-------|
-| Cost per net line of code | ~$0.007 |
-| Cost per feature ticket | ~$8.33 |
+| Cost per net line of code | ~\$0.007 |
+| Cost per feature ticket | ~\$8.33 |
 | Bugs in new feature code | 0 |
 | Post-review fix rate | 0/6 tickets (0%) |
 | Deviation rate (deviations per ticket) | 0.33 |
@@ -132,11 +132,11 @@ QRM4 replaced the structured smoke test runbook of QRM1/QRM2 with dogfooding: th
 | Feature tickets | 13 | 11 | 6 |
 | Bug tickets | 4 | 6 | 15 |
 | Commits | 48 | 59 | 54 |
-| Total cost | ~$80 | ~$150 | ~$50 |
+| Total cost | ~\$80 | ~\$150 | ~\$50 |
 | Net lines | 26,552 | 8,597 | 6,825 |
 | Net TypeScript | 8,257 | 3,579 | 2,419 |
-| Cost per net line | ~$0.003 | ~$0.017 | ~$0.007 |
-| Cost per feature ticket | ~$6.15 | ~$13.64 | ~$8.33 |
+| Cost per net line | ~\$0.003 | ~\$0.017 | ~\$0.007 |
+| Cost per feature ticket | ~\$6.15 | ~\$13.64 | ~\$8.33 |
 | Bugs in new code per 1,000 TS LoC | 0.48 | 1.44 | 0 |
 | Post-review fix rate | 23% | 45% | 0% |
 | Deviation rate per ticket | 1.85 | — | 0.33 |
@@ -145,7 +145,7 @@ QRM4 replaced the structured smoke test runbook of QRM1/QRM2 with dogfooding: th
 
 QRM4 is the smallest milestone by feature count but produced the most bug tickets — a direct consequence of being the first dogfooding milestone. Running the system against itself for 12 sessions exposed integration friction (timeouts, filesystem constraints, identity configuration) and workflow gaps (context search semantics, checkpointing, commit discipline) that unit tests and scripted smoke tests couldn't reach. The 0% post-review fix rate and zero bugs in feature code suggest that the agent's implementation accuracy has improved significantly as the codebase matured and prompt guidance accumulated.
 
-The cost efficiency ($50 for 6 features + 14 bug fixes) reflects both the low-risk additive nature of the bootstrap context feature and the operational focus of the bug tickets — many were prompt-only or config-only changes that required diagnosis time but minimal code.
+The cost efficiency (\$50 for 6 features + 14 bug fixes) reflects both the low-risk additive nature of the bootstrap context feature and the operational focus of the bug tickets — many were prompt-only or config-only changes that required diagnosis time but minimal code.
 
 ---
 

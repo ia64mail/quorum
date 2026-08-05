@@ -466,6 +466,18 @@ describe('OpenSearchStore', () => {
       expect(arg.body._source.excludes).toEqual(['embedding', 'embeddingText']);
     });
 
+    it('should sort by createdAt ascending to honor the recency contract (#55)', async () => {
+      mockSearch.mockResolvedValue(makeHits([]));
+      const { store } = createStore();
+
+      await store.getAll(ContextScope.project);
+
+      const arg = firstCallArg<{
+        body: { sort: Array<Record<string, unknown>> };
+      }>(mockSearch);
+      expect(arg.body.sort).toEqual([{ createdAt: 'asc' }]);
+    });
+
     it('should return empty record on OpenSearch failure', async () => {
       mockSearch.mockRejectedValue(new Error('connection refused'));
       const { store } = createStore();
@@ -907,6 +919,151 @@ describe('OpenSearchStore', () => {
       expect(trace!.truncatedByTokenBudget).toBe(true);
       expect(trace!.results[0].includedInResult).toBe(true);
       expect(trace!.results[1].includedInResult).toBe(false);
+    });
+
+    describe('top-hit floor (#61)', () => {
+      it('should return an oversized sole hit even when it exceeds the budget', async () => {
+        mockEmbedQuery.mockResolvedValue(null);
+        // "x".repeat(100) → '"xxx..."' → 102 chars → ceil(102/4) = 26 tokens
+        mockSearch.mockResolvedValue(
+          makeHits(
+            [
+              {
+                key: 'large-record',
+                value: 'x'.repeat(100),
+                scope: ContextScope.project,
+                id: '_',
+                createdAt: 1000000,
+              },
+            ],
+            [3.5],
+          ),
+        );
+        const { store } = createStore();
+        let trace: SearchTrace | undefined;
+
+        const results = await store.search(
+          ContextScope.project,
+          'test',
+          undefined,
+          5, // budget = 5 tokens, item ≈ 26 tokens
+          (t) => {
+            trace = t;
+          },
+        );
+
+        expect(results).toHaveLength(1);
+        expect(results[0].key).toBe('large-record');
+        expect(trace).toBeDefined();
+        expect(trace!.hitCountReturned).toBe(1);
+        expect(trace!.results[0].includedInResult).toBe(true);
+        expect(trace!.truncatedByTokenBudget).toBe(false); // sole hit, no truncation
+      });
+
+      it('should return only the oversized top hit and stop when smaller hits follow', async () => {
+        mockEmbedQuery.mockResolvedValue(null);
+        // Top hit: "x".repeat(100) ≈ 26 tokens (exceeds budget of 5)
+        // Second hit: "bb" → '"bb"' → 4 chars → ceil(4/4) = 1 token (would fit alone)
+        mockSearch.mockResolvedValue(
+          makeHits(
+            [
+              {
+                key: 'big-notes',
+                value: 'x'.repeat(100),
+                scope: ContextScope.project,
+                id: '_',
+                createdAt: 1000000,
+              },
+              {
+                key: 'small-note',
+                value: 'bb',
+                scope: ContextScope.project,
+                id: '_',
+                createdAt: 1000000,
+              },
+            ],
+            [3.5, 1.0],
+          ),
+        );
+        const { store } = createStore();
+        let trace: SearchTrace | undefined;
+
+        const results = await store.search(
+          ContextScope.project,
+          'test',
+          undefined,
+          5,
+          (t) => {
+            trace = t;
+          },
+        );
+
+        expect(results).toHaveLength(1);
+        expect(results[0].key).toBe('big-notes');
+        expect(trace).toBeDefined();
+        expect(trace!.hitCountRaw).toBe(2);
+        expect(trace!.hitCountReturned).toBe(1);
+        expect(trace!.truncatedByTokenBudget).toBe(true);
+        expect(trace!.results[0].includedInResult).toBe(true);
+        expect(trace!.results[1].includedInResult).toBe(false);
+      });
+
+      it('should preserve normal multi-hit budgeting when top hit fits', async () => {
+        mockEmbedQuery.mockResolvedValue(null);
+        // hit a: "aaaa" → 2 tokens, hit b: "bbbb" → 2 tokens, hit c: "cccc" → 2 tokens
+        // Budget = 4: fits a + b, not c
+        mockSearch.mockResolvedValue(
+          makeHits(
+            [
+              {
+                key: 'a',
+                value: 'aaaa',
+                scope: ContextScope.project,
+                id: '_',
+                createdAt: 1000000,
+              },
+              {
+                key: 'b',
+                value: 'bbbb',
+                scope: ContextScope.project,
+                id: '_',
+                createdAt: 1000000,
+              },
+              {
+                key: 'c',
+                value: 'cccc',
+                scope: ContextScope.project,
+                id: '_',
+                createdAt: 1000000,
+              },
+            ],
+            [3.0, 2.0, 1.0],
+          ),
+        );
+        const { store } = createStore();
+        let trace: SearchTrace | undefined;
+
+        const results = await store.search(
+          ContextScope.project,
+          'test',
+          undefined,
+          4,
+          (t) => {
+            trace = t;
+          },
+        );
+
+        expect(results).toHaveLength(2);
+        expect(results[0].key).toBe('a');
+        expect(results[1].key).toBe('b');
+        expect(trace).toBeDefined();
+        expect(trace!.hitCountRaw).toBe(3);
+        expect(trace!.hitCountReturned).toBe(2);
+        expect(trace!.truncatedByTokenBudget).toBe(true);
+        expect(trace!.results[0].includedInResult).toBe(true);
+        expect(trace!.results[1].includedInResult).toBe(true);
+        expect(trace!.results[2].includedInResult).toBe(false);
+      });
     });
   });
 

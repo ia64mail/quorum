@@ -105,7 +105,7 @@ server.registerResource(
 
 ### Agent Scope (No Resource)
 
-Agent scope is intentionally excluded from MCP resources. Agent-scoped items are private working memory for a single agent instance — exposing them as a browsable resource would break that isolation. Agents access their own agent-scoped items through the `context_store` and `context_query` tools instead.
+Agent scope is intentionally excluded from MCP resources. Agent-scoped items are durable per-role memory — keyed as `agent:<role>:<key>`, not by `correlationId`. Records persist across invocations of the same role, making agent scope the channel for patterns, preferences, and constraints that survive across tickets. Exposing it as a browsable resource would break role isolation. Agents access their own role partition through the `context_store` and `context_query` tools instead.
 
 ### Resource Subscriptions (Not Yet Implemented)
 
@@ -137,8 +137,12 @@ server.registerTool('context_store', {
 
 **Handler logic:**
 - Conversation scope **requires** `correlationId` (returns error if missing)
+- Agent scope **requires** a resolvable role (session role or explicit `agentRole` arg — returns error if missing)
 - Project scope **ignores** `correlationId` — items are always global (`id = undefined`)
-- Conversation/agent scope uses `correlationId` as the `id` partition
+- Scope partition id is resolved via a shared `resolveScopeId()` helper used by both `context_store` and `context_query`:
+  - **project** → `undefined` (global)
+  - **agent** → `state.role ?? args.agentRole` (role-partitioned, session-role-bound — `agentRole` is a fallback, not an override)
+  - **conversation** → `args.correlationId ?? state.correlationId` (per-task chain)
 
 **Usage by agent:**
 ```
@@ -160,7 +164,9 @@ server.registerTool('context_query', {
     query: z.string().optional()
       .describe('Search query (mode=search)'),
     correlationId: z.string().optional()
-      .describe('Scope identifier (correlationId or agentId)'),
+      .describe('Scope identifier for conversation scope'),
+    agentRole: z.enum([...AgentRole]).optional()
+      .describe('Agent role for agent-scope queries'),
     maxTokens: z.number().int().min(1).optional()
       .describe('Token budget for search results'),
   }
@@ -172,7 +178,7 @@ server.registerTool('context_query', {
 | Mode | Behavior | Returns |
 |------|----------|---------|
 | `keys` | Calls `get()` for each key individually | `Record<string, unknown>` (key → value, `undefined` for missing) |
-| `search` | Hybrid BM25 + k-NN vector search with token budget (OpenSearch backend); substring match fallback (InMemory backend) | `ContextItem[]` ranked by relevance (within `maxTokens` budget, defaults to `CONTEXT_DEFAULT_MAX_TOKENS`) |
+| `search` | Hybrid BM25 + k-NN vector search with token budget (OpenSearch backend); substring match fallback (InMemory backend). The top-ranked hit is always returned even if it alone exceeds the budget (top-hit floor); subsequent hits follow skip-and-stop admission. | `ContextItem[]` ranked by relevance (within `maxTokens` budget, defaults to `CONTEXT_DEFAULT_MAX_TOKENS` = 3000) |
 | `get-all` | Returns all items in the scope | `Record<string, unknown>` |
 
 **Search behavior (OpenSearch backend):**
@@ -182,7 +188,7 @@ With the OpenSearch backend active, `search` mode uses **hybrid semantic search*
 1. The query is embedded via `EmbeddingService.embedQuery()` using the `mxbai-embed-large` model (with an asymmetric instruction prefix for retrieval quality)
 2. A hybrid query executes both a **BM25 full-text leg** (matching against pre-rendered `embeddingText`) and a **k-NN vector leg** (cosine similarity on embedding vectors)
 3. Results are fused via the `hybrid-search` pipeline using min-max normalization and weighted combination (30% BM25, 70% k-NN)
-4. Results are **ranked by relevance** — not just filtered by keyword presence — and accumulated within the `maxTokens` budget
+4. Results are **ranked by relevance** — not just filtered by keyword presence — and accumulated within the `maxTokens` budget. The top-ranked hit is always admitted even if it alone exceeds the budget (top-hit floor), ensuring search never returns empty when matches exist; subsequent hits follow skip-and-stop admission (ranked prefix, no bin-packing)
 
 **Graceful degradation:** If Ollama is unavailable, search falls back to BM25-only (still superior to substring matching since it uses tokenized full-text search with TF-IDF ranking). A record written moments ago that hasn't been embedded yet is still found via BM25; it participates in hybrid search once its vector is computed (~300ms async).
 
@@ -211,7 +217,7 @@ server.registerTool('context_summarize', {
 **Handler logic:**
 1. Fetches all items for the conversation via `getAll()`
 2. Splits items into `preserved` (matching `preserveKeys`) and `rest`
-3. Calculates budget: `totalCharBudget = maxTokens × tokenCharRatio` (defaults: 2000 × 4 = 8000 chars)
+3. Calculates budget: `totalCharBudget = maxTokens × tokenCharRatio` (defaults: 3000 × 4 = 12000 chars)
 4. Subtracts preserved items' size from budget
 5. Accumulates non-preserved items until remaining budget exhausted
 6. Stores result as `_summary` key in the conversation scope
@@ -317,21 +323,35 @@ sequenceDiagram
     participant CS as ContextStore
     participant D as Developer
 
-    TL->>B: invoke_agent(developer, "implement QRM-042")
+    TL->>B: invoke_agent(developer, action: "implement QRM-042",<br/>searchQuery: "ticket #42 ...")
 
     alt fresh session (request.sessionId empty)
-        B->>BCS: assemble(correlationId)
-        BCS->>CS: getAll(project)
-        CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+        B->>BCS: assemble(correlationId, request.searchQuery)
+        alt searchQuery present and backend is OpenSearch
+            BCS->>CS: search(project, query, undefined, projectBudget, onTrace)
+            CS-->>BCS: ContextItem[] (relevance-ranked, possibly empty)
+            BCS->>BCS: traceLogger.log({source: "bootstrap", ...}) — emitted for every completed or errored ranked search, regardless of hit count
+            opt zero hits, or search threw after capturing a trace
+                BCS->>CS: getAll(project)
+                CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+                Note over BCS: Recency fallback for selection only — the trace above already recorded the ranked search
+            end
+        else no query, InMemory backend, or search threw before capturing a trace
+            BCS->>CS: getAll(project)
+            CS-->>BCS: {techStack: "NestJS", auth: "JWT", ...}
+            Note over BCS: Apply token budget (greedy, newer items first)
+            Note over BCS: No trace emitted — no ranked search ran
+        end
         BCS->>CS: getAll(conversation, correlationId)
         CS-->>BCS: {taskBreakdown: [...], constraints: [...]}
-        Note over BCS: Apply token budget (greedy, newer items first)
+        Note over BCS: Conversation scope stays recency — already correlationId-scoped
         BCS-->>B: BootstrapContext
 
         B->>B: request.bootstrapContext = assembled context
     else resumed session (request.sessionId set)
         Note over B,BCS: Skip assembly — Prior Decisions already in session transcript
     end
+    B->>B: delete request.searchQuery (never forwarded)
     B->>D: handle(request)
 
     Note over D: buildPrompt() renders "## Prior Decisions"<br/>with ### Project Context and ### Conversation Context
@@ -342,7 +362,15 @@ sequenceDiagram
 
 **How it works:**
 
-The broker calls `BootstrapContextService.assemble(correlationId)` after safeguard checks pass. The service queries `ContextStore.getAll()` for project-scope items (always) and conversation-scope items (when a `correlationId` is present). A token budget (`BOOTSTRAP_MAX_TOKENS`, default 1000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.6). Items are selected via greedy bin-packing in reverse insertion order (newer items preferred). Unused project budget reclaims to the conversation allocation.
+The broker calls `BootstrapContextService.assemble(correlationId, request.searchQuery)` after safeguard checks pass. Conversation-scope selection (Step 7) is unchanged: `ContextStore.getAll()` for the current `correlationId`, greedy bin-packed in reverse insertion order (newer items preferred) — it stays recency-based because every conversation-scope item is already `correlationId`-scoped to the task, so ranking buys nothing.
+
+Project-scope selection is **task-aware since #70**: when a `searchQuery` is present *and* the Context Store backend is OpenSearch, the service calls `ContextStore.search(ContextScope.project, query, undefined, projectBudget)` — the same hybrid BM25 + k-NN search used for `context_query`, already scope-filtered and token-budgeted, and guaranteed to return at least the top-ranked hit even if it exceeds the budget (#61). The returned `ContextItem[]` is mapped into the selected record and its tokens re-summed for the budget-reclaim step. This falls back to the pre-#70 recency `getAll` + greedy bin-pack whenever `searchQuery` is absent, the backend is InMemoryStore (its `search` is substring-only, not ranked), or `search` throws or returns an empty result set — strictly additive, never a regression.
+
+A token budget (`BOOTSTRAP_MAX_TOKENS`, default 5000) is split between project and conversation scopes using `BOOTSTRAP_PROJECT_RATIO` (default 0.8, i.e. a 4000-token project budget). Unused project budget reclaims to the conversation allocation regardless of which project-selection path ran.
+
+**Observability (#70 follow-up).** The ranked project-scope search is traced into the same `logs/context-search-*.jsonl` stream used by `context_query` (see [Search Observability](context-store.md#search-observability)), tagged `source: 'bootstrap'` so it is attributable and distinguishable from `context_query` traces. A trace is emitted whenever a ranked search actually runs — i.e. whenever `onTrace` fires — regardless of hit count: a completed search that matches nothing is still traced (mirroring `context_query`'s `if (capturedTrace)` guard, which is not a hit-count check), because that's exactly the recency-vs-relevance state #70 exists to surface. A trace is also emitted when the search throws after already capturing a trace (`errorMessage` populated). No trace is emitted when **no ranked search executes at all** — `searchQuery` absent, InMemory backend, or a search that throws before ever capturing a trace — by design: an absent bootstrap trace means "no ranked search ran," not "observability broken." Project *selection* still falls back to recency whenever the ranked search yields no hits (traced or not) — selection and tracing are independent outcomes.
+
+`searchQuery` itself is a caller-set, broker-read `InvokeRequest` field — the moderator authors a one-sentence retrieval-shaped query as a sibling to `action` on every `invoke_agent` call. It is the inverse of `bootstrapContext` (broker-set, agent-read): the broker consumes it during assembly and then deletes it from the request before delivery, so it never reaches the target agent's payload.
 
 The assembled `BootstrapContext` is attached to `request.bootstrapContext`. On the agent side, `InvocationHandler.buildPrompt()` renders it as a `## Prior Decisions` section (with `### Project Context` and `### Conversation Context` subsections) prepended before the task description. The `meta` field (item count, estimated tokens, scopes queried) is not rendered — it is internal bookkeeping.
 
@@ -351,8 +379,8 @@ The assembled `BootstrapContext` is attached to `request.bootstrapContext`. On t
 | Environment Variable | Default | Purpose |
 |---------------------|---------|---------|
 | `BOOTSTRAP_ENABLED` | `true` | Master toggle — `false` disables assembly entirely |
-| `BOOTSTRAP_MAX_TOKENS` | `1000` | Total token budget for the bootstrap payload |
-| `BOOTSTRAP_PROJECT_RATIO` | `0.6` | Fraction of budget for project-scope items |
+| `BOOTSTRAP_MAX_TOKENS` | `5000` | Total token budget for the bootstrap payload |
+| `BOOTSTRAP_PROJECT_RATIO` | `0.8` | Fraction of budget for project-scope items |
 
 These are configured in `docker-compose.yml` on the `mcp-server` service. The config factory is in `apps/mcp-server/src/config/bootstrap.config.ts`.
 
@@ -368,7 +396,9 @@ These are configured in `docker-compose.yml` on the `mcp-server` service. The co
 
 ## Agent Identity
 
-Since the MCP SDK doesn't expose client identity in tool handlers, agents must self-identify. The `context_store` tool accepts an optional `agentRole` parameter (from the `AgentRole` enum) to record who created each item. The `invoke_agent` tool uses `callerRole` for the same purpose.
+Since the MCP SDK doesn't expose client identity in tool handlers, agents must self-identify. The `context_store` and `context_query` tools accept an optional `agentRole` parameter (from the `AgentRole` enum). For `context_store`, this records who created each item (`createdBy`) and serves as a fallback for agent-scope partition resolution. For `context_query`, it enables agent-scope queries when no session role is available. The `invoke_agent` tool uses `callerRole` for the same purpose.
+
+Agent-scope partition resolution is **session-role-bound**: the session role (set at `register_agent` time) takes priority over any explicit `agentRole` argument. The explicit argument is a fallback for callers without a session, not an override — an agent cannot write to or read from another role's agent-scope partition.
 
 When agents are invoked through the tool bridge in agent containers, the bridge auto-injects `correlationId` as a default (overridable by the agent for cross-conversation queries). See [Claude Code SDK — Parameter Augmentation](claude-code-sdk.md#parameter-augmentation) for details.
 

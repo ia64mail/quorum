@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Scope:** This file is for Claude Code sessions developing the Quorum codebase from outside the system. The in-container moderator persona — runtime orchestration prompts, MCP tool semantics, session-resume rules — lives in [docker/moderator/CLAUDE.md](docker/moderator/CLAUDE.md) and is not loaded here.
+**Scope:** This file serves two audiences: (1) Claude Code sessions developing the Quorum codebase from outside the system, and (2) every in-container agent session — the agent app auto-loads it from the repo clone (`settingSources: ['project']` in `claude-code.service.ts`), so guidance here (notably the ticket-consumption discipline) reaches all runtime agents. The in-container moderator persona — runtime orchestration prompts, MCP tool semantics, session-resume rules — lives in [docker/moderator/CLAUDE.md](docker/moderator/CLAUDE.md) and is not loaded here.
 
 ## Project Overview
 
@@ -33,7 +33,7 @@ NestJS monorepo with 2 apps and 1 shared library:
 
 ```
 apps/
-  mcp-server/     # MCP Server — 7 tools, 2 resources, Agent Registry, Message Broker, Context Store
+  mcp-server/     # MCP Server — 9 tools, 2 resources, Agent Registry, Message Broker, Context Store
   agent/          # Agent App — single image, multi-role via AGENT_ROLE env var (Claude Agent SDK)
 libs/
   common/         # Shared library — AgentRole, messaging types, prompts, config, logger, tool-mapper
@@ -59,7 +59,7 @@ The `tickets/` directory is an **implementation timeline knowledge base** — no
 
 Tickets complement `docs/` — documentation describes the current system; tickets explain the sequence of decisions that built it. See [tickets/README.md](tickets/README.md) for naming conventions, structure requirements, and writing guidelines.
 
-A ticket is the truth about a *change* at its authoring moment, not a live description of the present — reconcile its concrete claims (`file:line`, payloads, flag names) across the ticket chain and confirm them against current code/runtime before relying on them, and once you open a ticket to act on it, read it in full rather than a grepped fragment (the corrections to its own earlier claims sit at the end). See [A Ticket Is the Truth About a Change, Not About the Present](tickets/README.md#a-ticket-is-the-truth-about-a-change-not-about-the-present) for the full consumption discipline.
+A ticket is the truth about a *change* at its authoring moment, not a live description of the present — reconcile its concrete claims (`file:line`, payloads, flag names) across the ticket chain and confirm them against current code/runtime before relying on them, and once you open a ticket to act on it, read it in full rather than a grepped fragment (the corrections to its own earlier claims sit at the end). A ticket also answers only for its own transition — if no ticket owns the interaction you are examining, that absence is a finding, not an all-clear: investigate the present code as primary evidence, and interrogate any ticket you do consult — ask what it does not cover and what has changed since — rather than reading it as reassurance about nearby code. See [A Ticket Is the Truth About a Change, Not About the Present](tickets/README.md#a-ticket-is-the-truth-about-a-change-not-about-the-present) for the full consumption discipline.
 
 ### Research Tools
 

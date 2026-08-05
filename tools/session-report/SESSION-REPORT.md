@@ -41,6 +41,33 @@ node tools/session-report/parse-logs.mjs > /tmp/digest.md
 | `--verbose` | Include SDK response text in agent activity |
 | `--logs-dir DIR` | Override logs directory (default: `logs/`) |
 
+## discovery-path.mjs
+
+Reconstructs an agent's **knowledge-discovery path** for one invocation — the ordered `search → read → conclude → re-search` loop — from the agent JSONL logs. Where `parse-logs.mjs` *counts* tool usage, this preserves the **sequence and the reasoning narration** that turns an event log into a discovery trace.
+
+```bash
+node tools/session-report/discovery-path.mjs                      # list invocations (latest session)
+node tools/session-report/discovery-path.mjs 20260617T012127      # list invocations for a session
+node tools/session-report/discovery-path.mjs 444c3571             # trace a corrId in the latest session
+node tools/session-report/discovery-path.mjs 20260617T012127 444c3571            # trace, explicit session
+node tools/session-report/discovery-path.mjs 444c3571 --mermaid                  # Mermaid DAG
+node tools/session-report/discovery-path.mjs 58785e5c --recover 0770ceb          # re-run greps/reads
+node tools/session-report/discovery-path.mjs turn1               # moderator turn (results shown inline)
+```
+
+A lone positional is read by shape: a `YYYYMMDDThhmmss` token selects the session, anything else is a corrId against the latest session. The list header prints the resolved session timestamp. A correlationId is **not** unique — retries reuse it, so a corrId may resolve to several invocations (all are rendered, with a notice).
+
+**What it reads.** Each agent tool call logs three events — `SDK reasoning`, `SDK tool start: <Tool> {input}`, `SDK tool done (tool_use_id)`. The tool uses the **start inputs** (grep pattern+path+mode, glob, the file+`offset+limit` of every Read, every Bash command) and the **`SDK response` narration** between calls (the agent's stated takeaway — the causal glue). Output is a reasoning **spine** (`==>` between narration nodes) with **action leaves** (`-->` to the searches/reads each conclusion triggered).
+
+**Moderator logs are supported too** (auto-detected by role). The moderator is a CC CLI session, not a dispatched invocation, so it's segmented by **user turn** (`UserPrompt`) rather than invocation boundary — `turn1`, `turn2`, … appear in the list and are selectable like a corrId. Crucially, the moderator log carries `ToolResult` events — the actual tool **output** that agent logs drop — so its trace shows the full `search → result → conclude` loop **inline** (the `↳` line under each call), with no `--recover` needed. The moderator is usually the most revealing log in a session: it runs the up-front cross-ticket analysis (reading audits, tracing tickets) that no single agent sees.
+
+**Two structural limits for AGENT traces — by design, not omission** (these do not apply to moderator traces, which carry results inline):
+
+1. **Tool outputs are not in the agent logs.** `SDK tool done` is a bare marker — no grep match-list, file contents, or Bash stdout. Recover them two ways: *infer* (the next Read after a Grep is the file it surfaced; narration confirms), or `--recover <commit>` which re-executes each grep/read against that commit via `git grep` / `git show` (best-effort; reports `not available at commit` for paths that differ at the ref, and skips files the agent edited mid-invocation).
+2. **Sub-agents are opaque.** The `Agent` tool spawns a nested context logged elsewhere; its interior greps/reads are **not** in the parent log. Each spawn renders as a flagged node labeled with the sub-agent's task (`⚠ … ⟶ nested`). A review invocation that fans out many sub-agents (e.g. the 16-subagent `/code-review`) is therefore mostly opaque from the parent trace — the footprint is visible, the interior discovery is not.
+
+**Options:** `--mermaid` (DAG instead of text) · `--recover <commit>` (reconstruct outputs) · `--repo-dir DIR` (repo for `--recover`, default cwd) · `--logs-dir DIR` · `--max N` (cap nodes). No args / no corrId / `--list` prints the invocation index with per-invocation grep/read/edit counts.
+
 ## Writing Session Reports
 
 The digest provides the raw data. Claude Code adds narrative analysis. The standard report structure (see `logs/sessions/` for examples) is:

@@ -38,7 +38,7 @@ QRM6 is the **third milestone implemented by the Quorum agent system itself** an
 | QRM6-BUG-006 | Moderator Entrypoint Dangling Symlink | QRM6-008 Run 1 (mid-session) | Dockerfile creates symlink to `/tmp/.claude.json` but `/tmp` is fresh tmpfs on each start; GNU `cp` refuses to write through a dangling symlink. Fixed by writing directly to the symlink target. |
 | QRM6-BUG-008 | Elicitation Timeout Too Short | QRM6-008 Run 1, Scenario 6 | `McpElicitationConnection.handle()` accepted a `timeout` parameter but marked it as unused (`_timeout`), never passing it to `elicitInput()`. The SDK default of 60s was too short for human-in-the-loop. Fixed by forwarding the role timeout (5 min) to the elicitation call. |
 | QRM6-BUG-009 | Moderator Settings Overwrite on Restart | Post-Run 1 | Entrypoint unconditionally copied baked config files, destroying CC CLI state (onboarding, tool permissions) on every `docker compose restart`. Fixed with `jq`-based merge for `settings.json` and moved `claude.json` symlink target from tmpfs to named volume. |
-| QRM6-BUG-010 | Broker Timeout Causes Retry Storm | Development session | Architect research task exceeded 5-minute timeout; moderator retried with same `correlationId`, spawning 3 concurrent SDK sessions ($7 wasted). Fixed by adding a `Map<correlationId, Promise>` idempotency guard in `InvocationHandler` and bumping architect timeout from 5 to 15 minutes. |
+| QRM6-BUG-010 | Broker Timeout Causes Retry Storm | Development session | Architect research task exceeded 5-minute timeout; moderator retried with same `correlationId`, spawning 3 concurrent SDK sessions (\$7 wasted). Fixed by adding a `Map<correlationId, Promise>` idempotency guard in `InvocationHandler` and bumping architect timeout from 5 to 15 minutes. |
 | QRM6-BUG-011 | Server-Side SSE Heartbeat & TCP Keepalive | Long-running invocations | During long agent work, SSE response stream carried zero bytes for 5+ minutes; undici's `bodyTimeout` default killed the connection. CC CLI has no extension point for custom dispatcher. Fixed by adding SSE comment-frame heartbeat (`: ping\n\n` every 30s) on POST responses and TCP keepalive on the server socket. |
 | QRM6-BUG-012 | Agent Image Libc Mismatch | First agent invocation | Builder stage ran on Alpine (musl); agent runtime on Debian (glibc). `npm ci` resolved SDK optionalDependencies to musl variant; copying into glibc image produced incompatible binary. Fixed by switching builder and default stages to Debian bookworm-slim. |
 | QRM6-BUG-013 | Resume Re-injects System Prompt | Cost analysis | Resumed sessions received duplicate system prompt (~2,780 tokens); `bootstrapContext.assemble()` ran even though session already carried it. Fixed by skipping bootstrap assembly and `systemPrompt` when `sessionId` is non-empty. |
@@ -115,12 +115,12 @@ The net-negative TypeScript numbers reflect the defining QRM6 act: **deleting th
 
 | Metric | Value |
 |--------|-------|
-| **Total milestone spend** | **$150** |
-| Cost per feature ticket | ~$16.67 |
-| Cost per commit | ~$1.95 |
-| Cost per bug ticket resolved | ~$6.82 |
+| **Total milestone spend** | **\$150** |
+| Cost per feature ticket | ~\$16.67 |
+| Cost per commit | ~\$1.95 |
+| Cost per bug ticket resolved | ~\$6.82 |
 
-The $150 budget covered all agent invocations across 9 feature tickets, 13 bug tickets, and two live playbook executions — inclusive of the $7 wasted in the retry storm surfaced by BUG-010. The higher per-ticket cost vs QRM5 ($16.67 vs $11) reflects the architectural nature of the work: replacing the moderator transport required iterative debugging against real Docker networking, real CC CLI behavior, and real MCP session management — problems that only manifest in integration and cannot be pre-solved at the unit level.
+The \$150 budget covered all agent invocations across 9 feature tickets, 13 bug tickets, and two live playbook executions — inclusive of the \$7 wasted in the retry storm surfaced by BUG-010. The higher per-ticket cost vs QRM5 (\$16.67 vs \$11) reflects the architectural nature of the work: replacing the moderator transport required iterative debugging against real Docker networking, real CC CLI behavior, and real MCP session management — problems that only manifest in integration and cannot be pre-solved at the unit level.
 
 ### Effectiveness Ratios
 
@@ -146,14 +146,14 @@ The $150 budget covered all agent invocations across 9 feature tickets, 13 bug t
 | Deviation rate per feature ticket | 1.85 | — | 0.33 | 0 | 0.11 |
 | Test suites | — | — | 39 | 49 | 44 |
 | Tests | — | — | 537 | 760 | 681 |
-| Total cost | ~$80 | ~$150 | ~$50 | ~$100 | ~$150 |
-| Cost per feature ticket | ~$6.15 | ~$13.64 | ~$8.33 | ~$11 | ~$16.67 |
+| Total cost | ~\$80 | ~\$150 | ~\$50 | ~\$100 | ~\$150 |
+| Cost per feature ticket | ~\$6.15 | ~\$13.64 | ~\$8.33 | ~\$11 | ~\$16.67 |
 
 QRM6 is the first milestone with **net-negative TypeScript lines** — the terminal deletion removes more code than the new features add, dropping the test count from 760 to 681 (−79 tests, all from deleted terminal spec files). Despite this, the zero-bugs-in-feature-code and zero-post-review-fix patterns established in QRM4 continue to hold.
 
 The bug count (13) is the second-highest across all milestones (tied with QRM2's 6 + QRM4's 15). The difference in character is stark: QRM4's 15 bugs clustered in workflow, prompt, and cost patterns that could be diagnosed from logs; QRM6's 13 bugs clustered in container packaging, configuration paths, and transport lifecycle — problems that only surface when real Docker containers, real CC CLI sessions, and real MCP connections interact. This validates the decision to invest in a live playbook (QRM6-008) rather than unit-test gap-fill: 4 of the 13 bugs (BUG-001, BUG-003, BUG-006, BUG-012) were impossible to catch without real container execution.
 
-The $150 cost matches QRM2 as the most expensive milestone. The higher unit cost per feature ticket ($16.67 vs QRM5's $11) is a direct consequence of the transport replacement's integration complexity: each bug required debugging against the running stack, often spawning additional agent invocations for diagnosis.
+The \$150 cost matches QRM2 as the most expensive milestone. The higher unit cost per feature ticket (\$16.67 vs QRM5's \$11) is a direct consequence of the transport replacement's integration complexity: each bug required debugging against the running stack, often spawning additional agent invocations for diagnosis.
 
 ## Documentation Updates
 

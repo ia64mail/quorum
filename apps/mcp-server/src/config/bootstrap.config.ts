@@ -10,7 +10,7 @@ const schema = z.object({
 export const bootstrapConfig = registerAs('bootstrap', () =>
   schema.parse({
     enabled: process.env.BOOTSTRAP_ENABLED !== 'false',
-    maxTokens: parseInt(process.env.BOOTSTRAP_MAX_TOKENS || '1000', 10),
-    projectRatio: parseFloat(process.env.BOOTSTRAP_PROJECT_RATIO || '0.6'),
+    maxTokens: parseInt(process.env.BOOTSTRAP_MAX_TOKENS || '5000', 10),
+    projectRatio: parseFloat(process.env.BOOTSTRAP_PROJECT_RATIO || '0.8'),
   }),
 );

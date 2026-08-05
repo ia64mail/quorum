@@ -51,14 +51,23 @@ export function createToolGuardHook(
         return { allowed: true };
       }
 
-      const normalised = normaliseBashCommand(raw);
+      // Per-segment scan (#65): split the command on shell separators,
+      // strip leading `cd`/env-assignment/`sudo` per segment, then match
+      // each segment's leading command against the denied verbs.
+      // Closes prefix-only bypasses: `cd <wt> && git commit …`,
+      // `git -C <wt> commit …`, `GIT_AUTHOR_DATE=… git commit …`.
+      const segments = splitShellSegments(raw);
+      for (const segment of segments) {
+        const head = extractSegmentHead(segment);
+        if (head === '') continue;
 
-      for (const prefix of deniedPrefixes) {
-        if (normalised.startsWith(prefix)) {
-          return {
-            allowed: false,
-            reason: `Denied bash command: "${prefix}"`,
-          };
+        for (const prefix of deniedPrefixes) {
+          if (matchesDeniedVerb(head, prefix)) {
+            return {
+              allowed: false,
+              reason: `Denied bash command: "${prefix}"`,
+            };
+          }
         }
       }
 
@@ -97,19 +106,97 @@ export function createToolGuardHook(
 }
 
 /**
- * Normalise a bash command string for prefix matching:
- * - collapse whitespace
- * - strip leading `sudo`
- * - lowercase
+ * Split a bash command into top-level segments on shell separators
+ * `&&`, `||`, `;`, `|`, `&`. The split is deliberately naive — we do
+ * not parse subshells, heredocs, or quoting — because the goal is
+ * defense-in-depth on a short, model-emitted command, not a full shell
+ * parser. False-positive splits are harmless: a quoted `&&` inside a
+ * commit message would split the segment, but each sub-segment is then
+ * matched against denied verbs and only fires on real `git commit` /
+ * `git push` / etc. — the worst case is over-denying a contrived
+ * commit-message string that the agent is not supposed to author.
  */
-function normaliseBashCommand(raw: string): string {
-  let cmd = raw.replace(/\s+/g, ' ').trim().toLowerCase();
+function splitShellSegments(raw: string): string[] {
+  // Order matters: split on `&&` and `||` before falling through to
+  // single-char `&`/`|` which are the bitwise/background variants.
+  return raw
+    .split(/&&|\|\||;|\||&/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
 
-  while (cmd.startsWith('sudo ')) {
-    cmd = cmd.slice(5).trimStart();
+/**
+ * Extract the leading command verb of a single shell segment.
+ * Strips leading env assignments (`FOO=bar`), leading `sudo`, and a
+ * single leading `cd <path>` (the common bypass form). Returns the
+ * remaining text lowercased and whitespace-collapsed; an empty string
+ * if nothing is left (e.g. a bare `cd <path>` segment).
+ *
+ * `git -C <path> <verb>` is normalised to `git <verb>` so the denied
+ * verb list still fires on it.
+ */
+function extractSegmentHead(segment: string): string {
+  let s = segment.replace(/\s+/g, ' ').trim();
+
+  // Strip leading env assignments: `FOO=bar BAZ=qux <cmd>`
+  while (/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/.test(s)) {
+    s = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, '');
   }
 
-  return cmd;
+  // Lowercase after env-strip so we don't mangle env var names in errors.
+  s = s.toLowerCase();
+
+  // Strip leading sudo (repeatable).
+  while (s.startsWith('sudo ')) {
+    s = s.slice(5).trimStart();
+  }
+
+  // Strip a leading `cd <path>` (bare `cd` segments collapse to empty).
+  if (s === 'cd' || /^cd\s+\S+$/.test(s)) {
+    return '';
+  }
+
+  // `git [-c <k=v> | -C <path>]… <verb> …` → `git <verb> …`
+  // Strip ALL leading config/dir flags, not just the first. After the
+  // lowercase above, `-C` and `-c` are identical, and both take exactly one
+  // following token (`-c key=value` is one token; `-C path` consumes the next
+  // token). git accepts them repeated and interleaved before the subcommand,
+  // so loop until no leading `-c <arg>` remains. git rejects the attached
+  // forms `-ckey=value` / `-C<path>`, so only the space-separated shape is
+  // reachable and one regex covers both flags.
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(/^git\s+-c\s+\S+\s+/, 'git ');
+  } while (s !== prev);
+
+  return s;
+}
+
+/**
+ * Match a denied verb (already lowercased) against a normalised segment
+ * head. The matcher uses a hybrid rule: the segment must start with the
+ * verb, and the continuation must respect a word boundary — preventing
+ * `git logs` from matching `git log` while allowing `rm -rf /tmp/foo`
+ * to match `rm -rf /` (legacy developer-profile entry whose trailing
+ * `/` was treated as a path-prefix marker under the old prefix-only
+ * matcher; we preserve that behaviour here).
+ *
+ * Specifically: if the verb ends in an alphanumeric character, the next
+ * character of the segment must be a space (or end of string) — this
+ * is the standard word-boundary check. If the verb ends in punctuation
+ * (e.g. `-b`, `/`), any continuation is accepted, because the verb
+ * itself already encodes the boundary the author wanted.
+ */
+function matchesDeniedVerb(head: string, verb: string): boolean {
+  if (!head.startsWith(verb)) return false;
+  if (head.length === verb.length) return true;
+
+  const lastVerbChar = verb[verb.length - 1];
+  if (/[a-z0-9]/.test(lastVerbChar)) {
+    return head[verb.length] === ' ';
+  }
+  return true;
 }
 
 /** Extract the file path from a write-tool's input. */

@@ -158,7 +158,7 @@ Identical Docker images configured via environment variables. Containers are har
 | **Configuration** | `AGENT_ROLE` environment variable |
 | **Workspace** | Per-role base git clone at `/var/agent-repo` on the `{role}-agent-repo` named volume (cloned from `$REPO_URL` on first boot, HEAD detached so any branch is checkout-able). Per-invocation `git worktree` at `/var/agent-worktrees/<correlationId>` on tmpfs. The SDK subprocess `cwd` is the worktree, not the base repo. The worktree is created by `InvocationHandler.runInvocation()` before SDK execution and removed in `finally` — even on error or SIGKILL (orphans cleaned by `git worktree prune` on next boot). |
 | **Sessions** | `FileSessionStore` persists SDK transcripts to `/var/agent-sessions` on the `{role}-sessions` named volume so resume survives container restarts (QRM8 D3). Lookup is keyed by `sessionId` alone — `projectKey`/cwd is ignored, so worktree-cwd changes don't break resume. |
-| **Git auth** | `gh auth login --with-token` + `gh auth setup-git` in `docker/agent/entrypoint.sh` configure the credential helper; `unset GH_TOKEN` runs before NestJS starts. Handler-side `git clone` / `git fetch` / `git push` authenticate transparently. The SDK subprocess `env` is an **allowlist** (`ANTHROPIC_API_KEY`, `HOME`, `PATH`, `NODE_ENV`, …) that excludes `GH_TOKEN` so the model cannot read the token (QRM8 D5). |
+| **Git auth** | `gh auth login --with-token` + `gh auth setup-git` in `docker/agent/entrypoint.sh` configure the credential helper; `unset GH_TOKEN` runs before NestJS starts. Handler-side `git clone` / `git fetch` / `git push` authenticate transparently. The SDK subprocess `env` is an **allowlist** (`ANTHROPIC_API_KEY`, `HOME`, `PATH`, `NODE_ENV`, …) that excludes both `GH_TOKEN` and `GIT_CONFIG_GLOBAL` so the model cannot read the token or the credential-helper config pointing at it (QRM8 D5). |
 | **MCP Role** | Dual: client (invoke others via tool bridge) + handler (be invoked via `POST /invoke`) |
 | **Permissions** | Per-role tool restrictions enforced mechanically via `disallowedTools` + `canUseTool` hook. All roles deny `git commit`, `git push`, `git checkout -b`, `git branch` — the handler is the sole committer (QRM8 D2). |
 
@@ -199,7 +199,7 @@ Each `invoke_agent` call carries a required `branch` field. The `InvocationHandl
 1. Runs `git fetch origin` in `/var/agent-repo` so the requested branch ref is current
 2. Creates a worktree at `/var/agent-worktrees/<correlationId>` on that branch
 3. Calls `claudeCode.execute({ cwd: <worktree path>, ... })` — the SDK subprocess sees only the worktree
-4. After execution, runs `git status --porcelain`; if dirty, `git add -A && git commit -m <message>` (commit message authored by the agent and returned in `InvokeResponse.commitMessage`, with a deterministic fallback) and `git push origin <branch>`
+4. After execution, runs `git status --porcelain`; if dirty, `git add -A && git commit -m <message>` (commit message authored by the agent and returned in `InvokeResponse.commitMessage`, with a deterministic fallback). Then, regardless of whether a commit just happened, always checks `git rev-list --count origin/<branch>..HEAD` and runs `git push origin <branch>` when the branch is ahead (non-zero count) — a clean, already-pushed tree is a logged no-op (#65 keystone: anything ahead of origin gets pushed, whether the commit was framework-made or agent-made)
 5. `git worktree remove` in `finally` — runs even on error/crash; orphans from SIGKILL are cleaned by `git worktree prune` on next container boot
 
 Two concurrent invocations targeting the same branch are rejected up-front by the Message Broker's **branch-in-flight guard** (`branchLocks` map; see [Message Broker — Safeguards](message-broker.md)). Cross-branch concurrency is unrestricted — multiple worktrees coexist on the same agent container.
@@ -324,7 +324,7 @@ The Context Store backend is configurable via `CONTEXT_STORE_BACKEND`:
 - **`opensearch`** (production): `OpenSearchStore` backed by OpenSearch with hybrid BM25 + k-NN vector search. Embedding vectors are computed asynchronously via Ollama (`mxbai-embed-large`). Documents are BM25-searchable immediately on write and hybrid-searchable within ~300ms after async embedding completes. Graceful degradation ensures the system continues with BM25-only search when Ollama is unavailable.
 - **`inmemory`** (default): `InMemoryStore` — a `Map<string, ContextItem>` with case-insensitive substring search and JSON file persistence (`quorum.context`). Used for tests and development without Docker infrastructure.
 
-Both backends use composite keys (`{scope}:{id}:{key}`) managed by `CompositeKeyBuilder`. Project scope always uses `_` as ID; conversation/agent scopes require an explicit ID (correlationId or agentId).
+Both backends use composite keys (`{scope}:{id}:{key}`) managed by `CompositeKeyBuilder`. Project scope always uses `_` as ID; conversation scope requires an explicit `correlationId` as ID; agent scope requires an explicit **role** as ID (`agent:<role>:<key>`) — records persist per-role, not per-invocation, so a role's durable memory survives across all of its future invocations (#59).
 
 When switching from `inmemory` to `opensearch`, `MigrationService` performs a one-time import of existing `quorum.context` records into the OpenSearch index on first startup.
 
@@ -347,7 +347,7 @@ quorum/
 │   │   │   ├── mcp-server.module.ts
 │   │   │   ├── config/          # Server, broker, context-store, opensearch, embedding config
 │   │   │   ├── health/          # GET /health endpoint (with dependency status)
-│   │   │   ├── mcp/             # MCP protocol (7 tools, 2 resources)
+│   │   │   ├── mcp/             # MCP protocol (9 tools, 2 resources)
 │   │   │   ├── registry/        # Agent registry, HttpAgentConnection
 │   │   │   ├── messaging/       # Message broker, role timeouts
 │   │   │   ├── context-store/   # ContextStoreModule (dynamic), InMemoryStore, opensearch/
@@ -380,6 +380,15 @@ quorum/
 ## Docker Compose Configuration
 
 The Dockerfile uses a multi-target build: `default` target for mcp-server, `agent` target for agents, and `moderator` target for the Claude Code CLI moderator. All accept `HOST_UID`/`HOST_GID` build args to align container user ownership with the host. Use `./scripts/start.sh` to launch — it exports these automatically.
+
+**Single-service recreate.** For post-boot maintenance (e.g. recycling a single agent after a config change) export `HOST_UID`/`HOST_GID` **before** invoking compose, or the tmpfs uid/gid defaults (`${HOST_UID:-1000}`) diverge from the baked container user and the entrypoint aborts with `FATAL: /home/quorum/.claude is owned by uid=…` (agent) or `/home/quorum/.config is owned by uid=…` (moderator):
+
+```bash
+export HOST_UID=$(id -u) HOST_GID=$(id -g)
+docker compose up -d --force-recreate <service>
+```
+
+See [#68 Round-2 Finding 5](../tickets/68-bump-agent-sdk-cc-cli-opus-4-8.md) for the failure mode. The entrypoints emit a fail-loud diagnostic with the fix hint instead of dying on the opaque `mkdir: Permission denied`.
 
 Three YAML anchors provide shared configuration:
 

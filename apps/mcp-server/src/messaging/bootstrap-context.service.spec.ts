@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ContextScope, ContextStore } from '@app/common';
 import { McpServerConfigService } from '../config';
+import { ContextSearchTraceLogger } from '../observability';
 import { BootstrapContextService } from './bootstrap-context.service';
 
 describe('BootstrapContextService', () => {
@@ -8,16 +9,26 @@ describe('BootstrapContextService', () => {
 
   const mockContextStore = {
     getAll: jest.fn(),
+    search: jest.fn(),
+  };
+
+  const mockTraceLogger = {
+    log: jest.fn(),
   };
 
   const defaultBootstrapConfig = {
     enabled: true,
-    maxTokens: 1000,
-    projectRatio: 0.6,
+    maxTokens: 5000,
+    projectRatio: 0.8,
+  };
+
+  const defaultContextStoreConfig = {
+    backend: 'inmemory' as 'inmemory' | 'opensearch',
   };
 
   const mockConfig = {
     bootstrap: { ...defaultBootstrapConfig },
+    contextStore: { ...defaultContextStoreConfig },
   };
 
   /** Helper: estimate tokens for a value (matches production formula). */
@@ -28,13 +39,16 @@ describe('BootstrapContextService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockConfig.bootstrap = { ...defaultBootstrapConfig };
+    mockConfig.contextStore = { ...defaultContextStoreConfig };
     mockContextStore.getAll.mockResolvedValue({});
+    mockContextStore.search.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BootstrapContextService,
         { provide: ContextStore, useValue: mockContextStore },
         { provide: McpServerConfigService, useValue: mockConfig },
+        { provide: ContextSearchTraceLogger, useValue: mockTraceLogger },
       ],
     }).compile();
 
@@ -213,6 +227,33 @@ describe('BootstrapContextService', () => {
       expect(result!.project['key-c']).toBe(smallValue);
       expect(result!.project['key-b']).toBeUndefined();
     });
+
+    it('should admit the six newest project-notes-sized records under the default 4000-token project budget (#56)', async () => {
+      // Use the new defaults: maxTokens 5000 × projectRatio 0.8 = 4000 project budget.
+      // Seven ~600-token records (the upper end of the *-project-notes family
+      // measured on the live index) total 4200 tokens — the budget admits the
+      // six newest and skips the oldest. The pre-#56 600-token budget could not
+      // fit a single full-size project-notes record.
+      const value = 'x'.repeat(2398); // JSON adds 2 quote chars -> ceil(2400/4) = 600 tokens
+      expect(estimateTokens(value)).toBe(600);
+
+      // Insertion order key-0 (oldest) .. key-6 (newest); applyBudget reverses
+      // to prefer newest, so key-0 is the one dropped.
+      const items: Record<string, unknown> = {};
+      for (let i = 0; i < 7; i++) {
+        items[`key-${i}`] = value;
+      }
+
+      mockContextStore.getAll.mockResolvedValue(items);
+
+      const result = await service.assemble();
+
+      expect(result).not.toBeNull();
+      expect(Object.keys(result!.project)).toHaveLength(6);
+      expect(result!.project['key-0']).toBeUndefined(); // oldest dropped
+      expect(result!.project['key-6']).toBe(value); // newest kept
+      expect(result!.meta.estimatedTokens).toBe(3600);
+    });
   });
 
   describe('budget splitting', () => {
@@ -361,6 +402,430 @@ describe('BootstrapContextService', () => {
       const result = await service.assemble('corr-1');
 
       expect(result!.meta.scopesQueried).toEqual(['project', 'conversation']);
+    });
+  });
+
+  describe('relevance search (#70)', () => {
+    beforeEach(() => {
+      mockConfig.contextStore = { backend: 'opensearch' };
+    });
+
+    it('should use ContextStore.search for project scope when a query is present and backend is opensearch', async () => {
+      mockContextStore.search.mockResolvedValue([
+        {
+          key: 'hit-1',
+          value: 'relevant note',
+          scope: ContextScope.project,
+          createdAt: 1,
+        },
+      ]);
+      mockContextStore.getAll.mockResolvedValue({}); // conversation getAll only
+
+      const result = await service.assemble(
+        'corr-1',
+        'ticket #70 bootstrap search',
+      );
+
+      expect(mockContextStore.search).toHaveBeenCalledWith(
+        ContextScope.project,
+        'ticket #70 bootstrap search',
+        undefined,
+        4000, // floor(5000 * 0.8)
+        expect.any(Function), // onTrace (#70 follow-up)
+      );
+      expect(result).not.toBeNull();
+      expect(result!.project).toEqual({ 'hit-1': 'relevant note' });
+    });
+
+    it('should not call getAll(project) when the search path is used', async () => {
+      mockContextStore.search.mockResolvedValue([
+        { key: 'hit-1', value: 'x', scope: ContextScope.project, createdAt: 1 },
+      ]);
+
+      await service.assemble(undefined, 'some query');
+
+      expect(mockContextStore.getAll).not.toHaveBeenCalledWith(
+        ContextScope.project,
+      );
+    });
+
+    it('should sum tokens across returned search hits for the budget reclaim step', async () => {
+      mockConfig.bootstrap.maxTokens = 100;
+      mockConfig.bootstrap.projectRatio = 0.6; // project budget = 60, conversation budget = 40
+
+      const value = 'x'.repeat(38); // JSON adds 2 quotes -> ceil(40/4) = 10 tokens
+      mockContextStore.search.mockResolvedValue([
+        { key: 'hit-1', value, scope: ContextScope.project, createdAt: 1 },
+      ]);
+      // Conversation item needs ~70 tokens — only fits with the 50 tokens
+      // reclaimed from the unused project budget (60 - 10 = 50; 40 + 50 = 90).
+      const convValue = 'c'.repeat(276); // ceil(278/4) = 70 tokens
+      mockContextStore.getAll.mockResolvedValue({ conv: convValue });
+
+      const result = await service.assemble('corr-1', 'query');
+
+      expect(result).not.toBeNull();
+      expect(result!.project).toEqual({ 'hit-1': value });
+      expect(result!.meta.estimatedTokens).toBe(10 + 70);
+      expect(result!.conversation).toHaveProperty('conv');
+    });
+
+    // Team-lead code review of PR #71 (AC5): the #61 top-hit floor means
+    // `search` can return a top hit larger than projectBudget, so
+    // projectTokensUsed can exceed projectBudget. The Step-6 reclaim must
+    // clamp at 0 (never subtract more than the budget) instead of driving
+    // conversationBudget negative, which would otherwise make applyBudget
+    // silently drop ALL conversation-scope context.
+    describe('over-budget top hit (#61 interaction — review fix)', () => {
+      it('should not drop conversation context or go negative when a top hit exceeds the ENTIRE bootstrap budget', async () => {
+        mockConfig.bootstrap.maxTokens = 100;
+        mockConfig.bootstrap.projectRatio = 0.5; // project budget = 50, conversation budget = 50
+
+        // Oversized top hit: 150 tokens — bigger than the whole 100-token
+        // bootstrap budget, not just its own 50-token project share. Under
+        // the pre-fix formula, conversationBudget = maxTokens -
+        // projectTokensUsed = 100 - 150 = -50 (negative), which would make
+        // applyBudget drop every conversation item regardless of size.
+        const oversizedValue = 'x'.repeat(598); // ceil(600/4) = 150 tokens
+        mockContextStore.search.mockResolvedValue([
+          {
+            key: 'huge-hit',
+            value: oversizedValue,
+            scope: ContextScope.project,
+            createdAt: 1,
+          },
+        ]);
+
+        const convValue = 'c'.repeat(118); // ceil(120/4) = 30 tokens
+        mockContextStore.getAll.mockResolvedValue({ conv: convValue });
+
+        const result = await service.assemble('corr-1', 'query');
+
+        expect(result).not.toBeNull();
+        // Conversation context must survive — it gets its full base
+        // allocation (conversationBudgetBase = 50) rather than a negative
+        // budget, because the reclaim term is clamped to Math.max(0, ...).
+        expect(result!.conversation).toEqual({ conv: convValue });
+        expect(result!.project).toEqual({ 'huge-hit': oversizedValue });
+        // Note: meta.estimatedTokens (180) legitimately exceeds
+        // BOOTSTRAP_MAX_TOKENS (100) here — that's the accepted, documented
+        // consequence of #61's "return at least the top hit even when
+        // oversized" floor, not something this fix eliminates. What the fix
+        // guarantees is that the OTHER scope (conversation) is never
+        // collaterally zeroed out by that oversized hit.
+        expect(result!.meta.estimatedTokens).toBe(150 + 30);
+      });
+
+      it('should keep total estimatedTokens within BOOTSTRAP_MAX_TOKENS for a modestly over-budget top hit (realistic #61 magnitude)', async () => {
+        mockConfig.bootstrap.maxTokens = 100;
+        mockConfig.bootstrap.projectRatio = 0.8; // project budget = 80, conversation budget = 20
+
+        // Top hit exceeds its own 80-token project share by 10 tokens — the
+        // realistic #61 scenario (e.g. a *-design-notes record running a
+        // few hundred tokens over its slice), not the pathological
+        // whole-budget-exceeding case above.
+        const value = 'x'.repeat(358); // ceil(360/4) = 90 tokens
+        mockContextStore.search.mockResolvedValue([
+          { key: 'hit-1', value, scope: ContextScope.project, createdAt: 1 },
+        ]);
+
+        const convValue = 'c'.repeat(30); // ceil(32/4) = 8 tokens
+        mockContextStore.getAll.mockResolvedValue({ conv: convValue });
+
+        const result = await service.assemble('corr-1', 'query');
+
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'hit-1': value });
+        expect(result!.conversation).toEqual({ conv: convValue });
+        expect(result!.meta.estimatedTokens).toBe(90 + 8);
+        expect(result!.meta.estimatedTokens).toBeLessThanOrEqual(
+          mockConfig.bootstrap.maxTokens,
+        );
+      });
+    });
+
+    describe('fallback to recency — never worse than pre-#70', () => {
+      it('should use recency getAll when query is absent', async () => {
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1');
+
+        expect(mockContextStore.search).not.toHaveBeenCalled();
+        expect(mockContextStore.getAll).toHaveBeenCalledWith(
+          ContextScope.project,
+        );
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
+      });
+
+      it('should use recency getAll when backend is inmemory even if query is present', async () => {
+        mockConfig.contextStore = { backend: 'inmemory' };
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(mockContextStore.search).not.toHaveBeenCalled();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
+      });
+
+      it('should fall back to recency when search throws', async () => {
+        mockContextStore.search.mockRejectedValue(new Error('opensearch down'));
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        // Search rejected before ever invoking onTrace — nothing was
+        // captured, so there is nothing to log.
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
+      });
+
+      it('should fall back to recency when search returns an empty array', async () => {
+        mockContextStore.search.mockResolvedValue([]);
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
+      });
+
+      it('should still log exactly one trace when search completes (onTrace fires) but returns zero hits (review fix, PR #91)', async () => {
+        // A completed zero-hit search ran a real ranked query — onTrace
+        // fired with hitCountRaw: 0 — and is exactly the
+        // recency-vs-relevance state #70 exists to surface. It must be
+        // traced, mirroring context_query's `if (capturedTrace)` guard
+        // (mcp.service.ts), which is not conditioned on hit count. Project
+        // *selection* still falls back to recency (no hits to use), but
+        // that is orthogonal to whether the search itself was traced.
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'hybrid',
+              durationMs: 5,
+              hitCountRaw: 0,
+              hitCountReturned: 0,
+              truncatedByTokenBudget: false,
+              results: [],
+              errorMessage: null,
+            });
+            return Promise.resolve([]);
+          },
+        );
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        // Selection still falls back to recency...
+        expect(result).not.toBeNull();
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        // ...but the completed (zero-hit) ranked search is still traced,
+        // exactly once, with the correlationId populated.
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+        const calls = mockTraceLogger.log.mock.calls as Array<
+          [Record<string, unknown>]
+        >;
+        const record = calls[0][0];
+        expect(record.source).toBe('bootstrap');
+        expect(record.correlationId).toBe('corr-1');
+        expect(record.hitCountRaw).toBe(0);
+        expect(record.hitCountReturned).toBe(0);
+      });
+    });
+
+    describe('search observability (#70 follow-up)', () => {
+      it('should log a ContextSearchTrace with source: bootstrap and the mapped fields when the search path is used', async () => {
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'hybrid',
+              durationMs: 12,
+              hitCountRaw: 3,
+              hitCountReturned: 1,
+              truncatedByTokenBudget: true,
+              results: [
+                {
+                  key: 'hit-1',
+                  score: 0.87,
+                  snippet: '"relevant note"',
+                  tokensEstimate: 4,
+                  includedInResult: true,
+                },
+              ],
+              errorMessage: null,
+            });
+            return Promise.resolve([
+              {
+                key: 'hit-1',
+                value: 'relevant note',
+                scope: ContextScope.project,
+                createdAt: 1,
+              },
+            ]);
+          },
+        );
+
+        await service.assemble('corr-1', 'ticket #70 bootstrap search');
+
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+        const calls = mockTraceLogger.log.mock.calls as Array<
+          [Record<string, unknown>]
+        >;
+        const record = calls[0][0];
+        expect(record.source).toBe('bootstrap');
+        expect(record.scope).toBe(ContextScope.project);
+        expect(record.queryText).toBe('ticket #70 bootstrap search');
+        expect(record.correlationId).toBe('corr-1');
+        expect(record.callerRole).toBeNull();
+        expect(record.maxTokens).toBe(4000); // floor(5000 * 0.8)
+        expect(record.engine).toBe('hybrid');
+        expect(record.truncatedByTokenBudget).toBe(true);
+        expect(record.hitCountRaw).toBe(3);
+        expect(record.hitCountReturned).toBe(1);
+        expect(record.queryId).toEqual(expect.any(String));
+        expect(record.timestamp).toEqual(expect.any(String));
+      });
+
+      it('should populate correlationId as null when the invocation carries none', async () => {
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'bm25-only',
+              durationMs: 3,
+              hitCountRaw: 1,
+              hitCountReturned: 1,
+              truncatedByTokenBudget: false,
+              results: [],
+              errorMessage: null,
+            });
+            return Promise.resolve([
+              {
+                key: 'hit-1',
+                value: 'x',
+                scope: ContextScope.project,
+                createdAt: 1,
+              },
+            ]);
+          },
+        );
+
+        await service.assemble(undefined, 'a query');
+
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+        const calls = mockTraceLogger.log.mock.calls as Array<
+          [Record<string, unknown>]
+        >;
+        const record = calls[0][0];
+        expect(record.correlationId).toBeNull();
+      });
+
+      it('should still log a trace carrying errorMessage when search throws after onTrace already captured a trace (QRM7-016 error-path parity)', async () => {
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'hybrid',
+              durationMs: 8,
+              hitCountRaw: 0,
+              hitCountReturned: 0,
+              truncatedByTokenBudget: false,
+              results: [],
+              errorMessage: 'downstream failure',
+            });
+            return Promise.reject(new Error('downstream failure'));
+          },
+        );
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        const result = await service.assemble('corr-1', 'a query');
+
+        // Selection still falls back to recency...
+        expect(result!.project).toEqual({ 'tech-stack': 'NestJS' });
+        // ...but the captured trace is still emitted for auditability.
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+        const calls = mockTraceLogger.log.mock.calls as Array<
+          [Record<string, unknown>]
+        >;
+        const record = calls[0][0];
+        expect(record.source).toBe('bootstrap');
+        expect(record.errorMessage).toBe('downstream failure');
+      });
+
+      it('should not double-emit when onTrace never fires before search throws', async () => {
+        // search() rejects without ever invoking onTrace — capturedTrace
+        // stays undefined, so emitBootstrapSearchTrace's `if (!trace)`
+        // guard is a no-op here. Only the catch-path call site runs (the
+        // try-path emit is unreachable once search() rejects), so there is
+        // exactly zero log calls, never a duplicate.
+        mockContextStore.search.mockRejectedValue(new Error('opensearch down'));
+        mockContextStore.getAll.mockResolvedValue({ 'tech-stack': 'NestJS' });
+
+        await service.assemble('corr-1', 'a query');
+
+        expect(mockTraceLogger.log).not.toHaveBeenCalled();
+      });
+
+      it('should not double-emit when search resolves normally with hits (single emit, not one per code path)', async () => {
+        mockContextStore.search.mockImplementation(
+          (
+            _scope: string,
+            _query: string,
+            _id: string | undefined,
+            _maxTokens: number,
+            onTrace?: (trace: unknown) => void,
+          ) => {
+            onTrace?.({
+              engine: 'hybrid',
+              durationMs: 1,
+              hitCountRaw: 1,
+              hitCountReturned: 1,
+              truncatedByTokenBudget: false,
+              results: [],
+              errorMessage: null,
+            });
+            return Promise.resolve([
+              {
+                key: 'hit-1',
+                value: 'x',
+                scope: ContextScope.project,
+                createdAt: 1,
+              },
+            ]);
+          },
+        );
+
+        await service.assemble('corr-1', 'a query');
+
+        // Emitted once right after search() resolves — not once more
+        // inside the (now-separate) hits.length > 0 branch.
+        expect(mockTraceLogger.log).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });

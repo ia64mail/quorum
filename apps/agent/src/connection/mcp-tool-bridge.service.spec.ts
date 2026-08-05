@@ -152,7 +152,7 @@ describe('McpToolBridgeService', () => {
   });
 
   describe('invoke_agent augmentation', () => {
-    it('should inject callerRole, correlationId, and depth+1', async () => {
+    it('should inject callerRole, correlationId, depth+1, and branch', async () => {
       mockCallTool.mockResolvedValue(
         mcpResult('{"success":true,"result":"reviewed"}'),
       );
@@ -167,6 +167,7 @@ describe('McpToolBridgeService', () => {
         callerRole: 'developer',
         correlationId: 'corr-abc',
         depth: 2,
+        branch: 'feature-branch',
       });
     });
 
@@ -192,7 +193,25 @@ describe('McpToolBridgeService', () => {
         callerRole: 'developer',
         correlationId: 'corr-abc',
         depth: 2,
+        branch: 'feature-branch',
       });
+    });
+
+    // #68 Round-2 Finding 1 — regression guard: the LLM never supplies
+    // `branch`, but the server validator requires it. The bridge must
+    // forward the closed-over InvokeRequest.branch even when the caller
+    // args omit it entirely.
+    it('should forward branch from closed-over InvokeRequest even when args omit it', async () => {
+      mockCallTool.mockResolvedValue(mcpResult('ok'));
+      const bridge = service.createBridge(baseRequest);
+      const handler = getToolHandler(bridge, 'invoke_agent');
+
+      await handler({ target: 'teamlead', action: 'review', wait: true }, {});
+
+      expect(mockCallTool).toHaveBeenCalledWith(
+        'invoke_agent',
+        expect.objectContaining({ branch: 'feature-branch' }),
+      );
     });
   });
 
@@ -456,6 +475,7 @@ describe('McpToolBridgeService', () => {
         callerRole: 'developer',
         correlationId: 'req-1',
         depth: 1,
+        branch: 'feature-branch',
       });
       expect(mockCallTool).toHaveBeenNthCalledWith(2, 'invoke_agent', {
         target: 'architect',
@@ -463,6 +483,7 @@ describe('McpToolBridgeService', () => {
         callerRole: 'developer',
         correlationId: 'req-2',
         depth: 4,
+        branch: 'feature-branch',
       });
     });
   });

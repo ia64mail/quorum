@@ -132,6 +132,43 @@ export class InvocationHandler {
       };
     }
 
+    // --- Reset working branch to origin/<branch> (#65) ---
+    // Self-heal divergence: if a prior invocation orphaned a local-ahead
+    // commit on the shared clone's ref, the worktree we just created
+    // inherits that ref. Resetting to the remote-tracking ref (refreshed
+    // by the `git fetch origin` above) discards the stale local-ahead
+    // state so the SDK starts from canonical origin every time.
+    // ORDERING: reset is start-of-invocation, push is end-of-invocation
+    // (commitAndPush). They must not be reordered within one invocation
+    // — a reset after the SDK runs would discard the agent's output
+    // before it can be pushed.
+    try {
+      await execFileAsync(
+        'git',
+        ['reset', '--hard', `origin/${request.branch}`],
+        { cwd: worktreePath },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `worktree reset to origin failed: correlationId=${request.correlationId} ${msg}`,
+      );
+      // Clean up the worktree we just created before returning error
+      try {
+        await execFileAsync(
+          'git',
+          ['worktree', 'remove', '--force', worktreePath],
+          { cwd: repoDir },
+        );
+      } catch {
+        /* best-effort cleanup */
+      }
+      return {
+        success: false,
+        error: `Worktree setup failed: reset to origin/${request.branch}: ${msg}`,
+      };
+    }
+
     // --- Symlink /app/node_modules into worktree ---
     try {
       await execFileAsync('ln', [
@@ -296,7 +333,11 @@ export class InvocationHandler {
       return null;
     }
 
-    const lines: string[] = ['## Prior Decisions'];
+    const lines: string[] = [
+      '## Prior Decisions',
+      '',
+      "The records below are prior agents' stored context — snapshots from earlier invocations, possibly stale. Treat each as a hypothesis to re-verify against the present code, not as settled fact.",
+    ];
 
     if (projectEntries.length > 0) {
       lines.push('', '### Project Context');
@@ -324,41 +365,116 @@ export class InvocationHandler {
       cwd,
     });
 
-    if (!status.trim()) {
+    // 1. Commit any dirty changes the SDK left behind.
+    if (status.trim()) {
+      let message: string;
+      if (response.commitMessage) {
+        message = response.commitMessage;
+      } else {
+        const corrIdShort = request.correlationId.substring(0, 8);
+        message = `(no-message/${corrIdShort}): changes from ${request.target} invocation`;
+        this.logger.warn(
+          `Agent did not provide commitMessage: correlationId=${request.correlationId} — using fallback`,
+        );
+      }
+
+      await execAsync('git add -A', { cwd });
+      await execAsync(`git commit -m ${this.shellQuote(message)}`, { cwd });
+    }
+
+    // 2. Push anything ahead of origin (keystone, #65).
+    //    The handler is the sole pusher (docs/system-design.md:413 — agent is
+    //    a non-pusher by design, QRM8 D5). If the agent committed despite
+    //    the deny-guard, those commits live only in the shared clone until
+    //    we push them; if we don't, they orphan and poison later worktrees.
+    //    Check rev-list against origin/<branch> — the fetch at worktree
+    //    setup keeps the remote-tracking ref current.
+    const aheadCount = await this.countAhead(cwd, request.branch);
+    if (aheadCount === 0) {
       this.logger.log(
-        `No changes to commit after invocation: correlationId=${request.correlationId}`,
+        `No changes to push after invocation: correlationId=${request.correlationId}`,
       );
       return;
     }
 
-    let message: string;
-    if (response.commitMessage) {
-      message = response.commitMessage;
-    } else {
-      const corrIdShort = request.correlationId.substring(0, 8);
-      message = `(no-message/${corrIdShort}): changes from ${request.target} invocation`;
-      this.logger.warn(
-        `Agent did not provide commitMessage: correlationId=${request.correlationId} — using fallback`,
-      );
-    }
-
-    await execAsync('git add -A', { cwd });
-    await execAsync(`git commit -m ${this.shellQuote(message)}`, { cwd });
-
-    try {
-      await execFileAsync('git', ['push', 'origin', request.branch], { cwd });
-    } catch (pushErr) {
-      const stderr =
-        pushErr instanceof Error ? pushErr.message : String(pushErr);
-      throw new Error(`push rejected: ${stderr}`);
-    }
+    await this.pushWithRebaseRetry(cwd, request);
 
     const { stdout: sha } = await execAsync('git rev-parse --short HEAD', {
       cwd,
     });
     this.logger.log(
-      `Committed and pushed: correlationId=${request.correlationId} branch=${request.branch} sha=${sha.trim()}`,
+      `Committed and pushed: correlationId=${request.correlationId} ` +
+        `branch=${request.branch} sha=${sha.trim()} ahead=${aheadCount}`,
     );
+  }
+
+  /**
+   * Count commits on the local HEAD that are not yet on `origin/<branch>`.
+   * Returns 0 when the branch is fully pushed (clean no-op case).
+   */
+  private async countAhead(cwd: string, branch: string): Promise<number> {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['rev-list', '--count', `origin/${branch}..HEAD`],
+      { cwd },
+    );
+    const n = parseInt(stdout.trim(), 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  /**
+   * Push to origin with a single recover-once-then-fail-loud rebase retry.
+   * On a non-fast-forward reject we attempt one `git pull --rebase origin
+   * <branch>` and re-push; if that fails (rebase conflict or the second
+   * push still rejects) we throw a structured `push rejected` error so the
+   * broker surfaces a real failure instead of leaving a silent local
+   * orphan (#65 fail-loud invariant).
+   */
+  private async pushWithRebaseRetry(
+    cwd: string,
+    request: InvokeRequest,
+  ): Promise<void> {
+    try {
+      await execFileAsync('git', ['push', 'origin', request.branch], { cwd });
+      return;
+    } catch (pushErr) {
+      const initialErr =
+        pushErr instanceof Error ? pushErr.message : String(pushErr);
+      this.logger.warn(
+        `Push rejected, attempting rebase + retry: ` +
+          `correlationId=${request.correlationId} branch=${request.branch} ` +
+          `error=${initialErr}`,
+      );
+
+      try {
+        await execFileAsync(
+          'git',
+          ['pull', '--rebase', 'origin', request.branch],
+          { cwd },
+        );
+      } catch (rebaseErr) {
+        const stderr =
+          rebaseErr instanceof Error ? rebaseErr.message : String(rebaseErr);
+        throw new Error(
+          `push rejected: rebase failed (initial=${initialErr}): ${stderr}`,
+        );
+      }
+
+      try {
+        await execFileAsync('git', ['push', 'origin', request.branch], { cwd });
+      } catch (retryErr) {
+        const stderr =
+          retryErr instanceof Error ? retryErr.message : String(retryErr);
+        throw new Error(
+          `push rejected: retry after rebase failed (initial=${initialErr}): ${stderr}`,
+        );
+      }
+
+      this.logger.log(
+        `Push succeeded after rebase: correlationId=${request.correlationId} ` +
+          `branch=${request.branch}`,
+      );
+    }
   }
 
   /** Wraps a string in single quotes, escaping embedded single quotes. */

@@ -269,6 +269,49 @@ describe('McpService', () => {
       expect(call.parentRequestId).toBeUndefined();
     });
 
+    // #70: searchQuery is a sibling field to `action`, forwarded into the
+    // InvokeRequest built for the broker. The broker (not the schema) is
+    // responsible for stripping it before delivery to the target agent.
+    it('should pass searchQuery through to the broker when provided', async () => {
+      mockBroker.invoke.mockResolvedValue({ success: true });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      await handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        action: '/code-review',
+        searchQuery:
+          'ticket #70 bootstrap search — task-aware project selection',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-corr-70',
+        branch: 'feature-branch',
+      });
+
+      const call = mockBroker.invoke.mock.calls[0][0];
+      expect(call.searchQuery).toBe(
+        'ticket #70 bootstrap search — task-aware project selection',
+      );
+    });
+
+    it('should not set searchQuery when omitted', async () => {
+      mockBroker.invoke.mockResolvedValue({ success: true });
+
+      const handler = getToolHandler(service, 'invoke_agent');
+      await handler({
+        callerRole: AgentRole.moderator,
+        target: AgentRole.developer,
+        action: 'implement feature',
+        wait: true,
+        depth: 0,
+        correlationId: 'test-corr-71',
+        branch: 'feature-branch',
+      });
+
+      const call = mockBroker.invoke.mock.calls[0][0];
+      expect(call.searchQuery).toBeUndefined();
+    });
+
     it('should pass sessionId to broker when provided', async () => {
       mockBroker.invoke.mockResolvedValue({
         success: true,
@@ -592,6 +635,7 @@ describe('McpService', () => {
       >;
       const record = calls[0][0];
       expect(record.engine).toBe('hybrid');
+      expect(record.source).toBe('context_query');
       expect(record.queryText).toBe('test trace');
       expect(record.scope).toBe('project');
       expect(record.maxTokens).toBe(2000);
@@ -1923,6 +1967,338 @@ describe('McpService', () => {
         correlationId: string;
       };
       expect(parsed1.correlationId).not.toBe(parsed2.correlationId);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Agent scope — role-keyed partition (#59)
+  // -------------------------------------------------------------------------
+
+  describe('agent scope — role-keyed partition (#59)', () => {
+    describe('context_store agent scope', () => {
+      it('should resolve agent-scope id to role, not correlationId', async () => {
+        mockContextStore.set.mockResolvedValue(undefined);
+
+        const handler = getToolHandler(service, 'context_store');
+        await handler({
+          scope: ContextScope.agent,
+          key: 'my-pattern',
+          value: 'some finding',
+          correlationId: 'corr-123',
+          agentRole: AgentRole.developer,
+        });
+
+        expect(mockContextStore.set).toHaveBeenCalledWith(
+          expect.objectContaining({
+            scope: ContextScope.agent,
+            key: 'my-pattern',
+            value: 'some finding',
+            id: AgentRole.developer, // role, NOT correlationId
+            createdBy: AgentRole.developer,
+          }),
+        );
+      });
+
+      it('should reject agent scope when no role is resolvable', async () => {
+        const handler = getToolHandler(service, 'context_store');
+        const result = await handler({
+          scope: ContextScope.agent,
+          key: 'orphan',
+          value: 'data',
+          // No agentRole, no session → no resolvable role
+        });
+
+        expect(result.isError).toBe(true);
+        expect(textContent(result)).toContain(
+          'A resolvable agent role is required for agent scope',
+        );
+        expect(mockContextStore.set).not.toHaveBeenCalled();
+      });
+
+      it('should allow different roles to write to separate partitions', async () => {
+        mockContextStore.set.mockResolvedValue(undefined);
+
+        const handler = getToolHandler(service, 'context_store');
+
+        await handler({
+          scope: ContextScope.agent,
+          key: 'preference',
+          value: 'dev-pref',
+          agentRole: AgentRole.developer,
+        });
+
+        await handler({
+          scope: ContextScope.agent,
+          key: 'preference',
+          value: 'arch-pref',
+          agentRole: AgentRole.architect,
+        });
+
+        const calls = mockContextStore.set.mock.calls as Array<
+          [{ id: string }]
+        >;
+        expect(calls[0][0].id).toBe(AgentRole.developer);
+        expect(calls[1][0].id).toBe(AgentRole.architect);
+      });
+    });
+
+    describe('context_query agent scope', () => {
+      it('should resolve agent-scope id to role for mode=keys', async () => {
+        mockContextStore.get.mockResolvedValue('cached-pattern');
+
+        const handler = getToolHandler(service, 'context_query');
+        const result = await handler({
+          scope: ContextScope.agent,
+          mode: 'keys',
+          keys: ['my-pattern'],
+          agentRole: AgentRole.developer,
+        });
+
+        expect(mockContextStore.get).toHaveBeenCalledWith(
+          ContextScope.agent,
+          'my-pattern',
+          AgentRole.developer, // role, NOT correlationId
+        );
+        const parsed = JSON.parse(textContent(result)) as Record<
+          string,
+          string
+        >;
+        expect(parsed['my-pattern']).toBe('cached-pattern');
+      });
+
+      it('should resolve agent-scope id to role for mode=get-all', async () => {
+        mockContextStore.getAll.mockResolvedValue({
+          'schema-gotcha': 'touch three files together',
+        });
+
+        const handler = getToolHandler(service, 'context_query');
+        await handler({
+          scope: ContextScope.agent,
+          mode: 'get-all',
+          agentRole: AgentRole.developer,
+        });
+
+        expect(mockContextStore.getAll).toHaveBeenCalledWith(
+          ContextScope.agent,
+          AgentRole.developer,
+        );
+      });
+
+      it('should resolve agent-scope id to role for mode=search', async () => {
+        mockContextStore.search.mockResolvedValue([]);
+
+        const handler = getToolHandler(service, 'context_query');
+        await handler({
+          scope: ContextScope.agent,
+          mode: 'search',
+          query: 'patterns',
+          agentRole: AgentRole.developer,
+        });
+
+        expect(mockContextStore.search).toHaveBeenCalledWith(
+          ContextScope.agent,
+          'patterns',
+          AgentRole.developer, // role, NOT correlationId
+          2000,
+          expect.any(Function),
+        );
+      });
+
+      it('should reject agent scope when no role is resolvable', async () => {
+        const handler = getToolHandler(service, 'context_query');
+        const result = await handler({
+          scope: ContextScope.agent,
+          mode: 'get-all',
+          // No agentRole, no session → no resolvable role
+        });
+
+        expect(result.isError).toBe(true);
+        expect(textContent(result)).toContain(
+          'A resolvable agent role is required for agent scope',
+        );
+        expect(mockContextStore.getAll).not.toHaveBeenCalled();
+      });
+
+      it('should reject agent scope for mode=keys when no role is resolvable', async () => {
+        const handler = getToolHandler(service, 'context_query');
+        const result = await handler({
+          scope: ContextScope.agent,
+          mode: 'keys',
+          keys: ['anything'],
+        });
+
+        expect(result.isError).toBe(true);
+        expect(textContent(result)).toContain(
+          'A resolvable agent role is required for agent scope',
+        );
+        expect(mockContextStore.get).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('cross-invocation same-role persistence', () => {
+      it('should use the same partition for same role across different correlationIds', async () => {
+        // Simulates two invocations of the same role (different correlationIds)
+        // writing and reading from the same agent-scope partition.
+        mockContextStore.set.mockResolvedValue(undefined);
+        mockContextStore.get.mockResolvedValue('shared-finding');
+
+        const storeHandler = getToolHandler(service, 'context_store');
+        const queryHandler = getToolHandler(service, 'context_query');
+
+        // Invocation A writes (correlationId-A, role=developer)
+        await storeHandler({
+          scope: ContextScope.agent,
+          key: 'invoke-schema-touch-points',
+          value: 'three-site contract',
+          correlationId: 'corr-invocation-A',
+          agentRole: AgentRole.developer,
+        });
+
+        // Invocation B reads (correlationId-B, same role=developer)
+        await queryHandler({
+          scope: ContextScope.agent,
+          mode: 'keys',
+          keys: ['invoke-schema-touch-points'],
+          correlationId: 'corr-invocation-B',
+          agentRole: AgentRole.developer,
+        });
+
+        // Both use the developer role as the partition id, not the correlationId
+        expect(mockContextStore.set).toHaveBeenCalledWith(
+          expect.objectContaining({ id: AgentRole.developer }),
+        );
+        expect(mockContextStore.get).toHaveBeenCalledWith(
+          ContextScope.agent,
+          'invoke-schema-touch-points',
+          AgentRole.developer,
+        );
+      });
+    });
+
+    describe('cross-role isolation', () => {
+      it('should use different partitions for different roles', async () => {
+        mockContextStore.set.mockResolvedValue(undefined);
+        mockContextStore.get.mockResolvedValue(undefined);
+
+        const storeHandler = getToolHandler(service, 'context_store');
+        const queryHandler = getToolHandler(service, 'context_query');
+
+        // Developer writes
+        await storeHandler({
+          scope: ContextScope.agent,
+          key: 'secret',
+          value: 'dev-only',
+          agentRole: AgentRole.developer,
+        });
+
+        // Architect reads the same key → different partition
+        await queryHandler({
+          scope: ContextScope.agent,
+          mode: 'keys',
+          keys: ['secret'],
+          agentRole: AgentRole.architect,
+        });
+
+        expect(mockContextStore.set).toHaveBeenCalledWith(
+          expect.objectContaining({ id: AgentRole.developer }),
+        );
+        expect(mockContextStore.get).toHaveBeenCalledWith(
+          ContextScope.agent,
+          'secret',
+          AgentRole.architect, // architect partition, not developer
+        );
+      });
+    });
+
+    describe('regression — conversation and project scopes unchanged', () => {
+      it('should still resolve project scope to undefined id', async () => {
+        mockContextStore.set.mockResolvedValue(undefined);
+        mockContextStore.getAll.mockResolvedValue({});
+
+        const storeHandler = getToolHandler(service, 'context_store');
+        const queryHandler = getToolHandler(service, 'context_query');
+
+        await storeHandler({
+          scope: ContextScope.project,
+          key: 'tech-stack',
+          value: 'NestJS',
+          agentRole: AgentRole.architect,
+        });
+
+        await queryHandler({
+          scope: ContextScope.project,
+          mode: 'get-all',
+        });
+
+        expect(mockContextStore.set).toHaveBeenCalledWith(
+          expect.objectContaining({
+            scope: ContextScope.project,
+            id: undefined,
+          }),
+        );
+        expect(mockContextStore.getAll).toHaveBeenCalledWith(
+          ContextScope.project,
+          undefined,
+        );
+      });
+
+      it('should still resolve conversation scope to correlationId', async () => {
+        mockContextStore.set.mockResolvedValue(undefined);
+        mockContextStore.get.mockResolvedValue('REST');
+
+        const storeHandler = getToolHandler(service, 'context_store');
+        const queryHandler = getToolHandler(service, 'context_query');
+
+        await storeHandler({
+          scope: ContextScope.conversation,
+          key: 'api-style',
+          value: 'REST',
+          correlationId: 'conv-xyz',
+          agentRole: AgentRole.developer,
+        });
+
+        await queryHandler({
+          scope: ContextScope.conversation,
+          mode: 'keys',
+          keys: ['api-style'],
+          correlationId: 'conv-xyz',
+        });
+
+        expect(mockContextStore.set).toHaveBeenCalledWith(
+          expect.objectContaining({
+            scope: ContextScope.conversation,
+            id: 'conv-xyz', // correlationId, not role
+          }),
+        );
+        expect(mockContextStore.get).toHaveBeenCalledWith(
+          ContextScope.conversation,
+          'api-style',
+          'conv-xyz',
+        );
+      });
+
+      it('should still reject conversation scope without correlationId in context_store', async () => {
+        const handler = getToolHandler(service, 'context_store');
+        const result = await handler({
+          scope: ContextScope.conversation,
+          key: 'decision',
+          value: 'data',
+        });
+
+        expect(result.isError).toBe(true);
+        expect(textContent(result)).toContain('correlationId is required');
+      });
+
+      it('should reject conversation scope without correlationId in context_query', async () => {
+        const handler = getToolHandler(service, 'context_query');
+        const result = await handler({
+          scope: ContextScope.conversation,
+          mode: 'get-all',
+        });
+
+        expect(result.isError).toBe(true);
+        expect(textContent(result)).toContain('correlationId is required');
+      });
     });
   });
 });

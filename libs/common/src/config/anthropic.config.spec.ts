@@ -25,7 +25,7 @@ describe('anthropicConfig', () => {
   it('should use default model when not set', () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key';
     const result = anthropicConfig();
-    expect(result.model).toBe('claude-sonnet-4-5-20250929');
+    expect(result.model).toBe('claude-opus-4-8');
   });
 
   it('should override model from env var', () => {
