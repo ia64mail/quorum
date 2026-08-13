@@ -1,0 +1,234 @@
+/* Ticket-graph visualizer — light/dark via CSS vars.
+   Dark wins under OS dark scheme or an explicit data-theme="dark" stamp;
+   an explicit data-theme="light" stamp beats OS dark. */
+.gv-root {
+  color-scheme: light;
+  --surface: #fcfcfb;
+  --page: #f9f9f7;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --hairline: rgba(11, 11, 11, 0.1);
+  --accent: #16558c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) .gv-root,
+  .gv-root:where([data-gv-theme='auto']) {
+    color-scheme: light;
+  }
+  :root:where(:not([data-theme='light'])) .gv-root:not([data-gv-theme='light']),
+  .gv-root[data-gv-theme='dark'] {
+    color-scheme: dark;
+    --surface: #1a1a19;
+    --page: #0d0d0d;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --hairline: rgba(255, 255, 255, 0.1);
+    --accent: #3987e5;
+  }
+}
+:root[data-theme='dark'] .gv-root:not([data-gv-theme='light']),
+.gv-root[data-gv-theme='dark'] {
+  color-scheme: dark;
+  --surface: #1a1a19;
+  --page: #0d0d0d;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --hairline: rgba(255, 255, 255, 0.1);
+  --accent: #3987e5;
+}
+
+.gv-root {
+  display: flex;
+  height: 100vh;
+  min-height: 560px;
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 13px;
+}
+.gv-root *, .gv-root *::before, .gv-root *::after { box-sizing: border-box; }
+
+/* ---- Sidebar ---- */
+.gv-side {
+  width: 300px;
+  flex: 0 0 300px;
+  overflow-y: auto;
+  padding: 12px 14px 24px;
+  border-right: 1px solid var(--grid);
+  background: var(--page);
+}
+.gv-side h1 {
+  font-size: 14px;
+  font-weight: 650;
+  margin: 2px 0 2px;
+}
+.gv-sub {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0 0 10px;
+}
+.gv-section {
+  border-top: 1px solid var(--grid);
+  padding: 8px 0;
+}
+.gv-section > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink-2);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.gv-section > summary::before {
+  content: '';
+  width: 0; height: 0;
+  border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.12s;
+}
+.gv-section[open] > summary::before { transform: rotate(90deg); }
+.gv-section .gv-body { padding: 8px 2px 2px; }
+
+.gv-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+.gv-row label { color: var(--ink-2); }
+
+.gv-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 4px 0;
+  cursor: pointer;
+  color: var(--ink-2);
+}
+.gv-check input { margin: 0; accent-color: var(--accent); }
+.gv-check .count { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+.gv-swatch-node { width: 14px; height: 14px; flex: 0 0 14px; }
+.gv-swatch-edge { width: 22px; height: 0; flex: 0 0 22px; border-top: 2.5px solid; }
+.gv-swatch-edge.dashed { border-top-style: dashed; }
+.gv-swatch-edge.dotted { border-top-style: dotted; border-top-width: 3px; }
+
+button, select, input[type='text'], input[type='search'] {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--grid);
+  border-radius: 6px;
+  padding: 4px 9px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+input[type='range'] { width: 100%; accent-color: var(--accent); }
+
+.gv-search { width: 100%; }
+.gv-stats {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 8px 0 4px;
+}
+
+/* ---- Canvas ---- */
+.gv-main { flex: 1 1 auto; position: relative; min-width: 0; }
+#cy {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+}
+
+/* hover tooltip */
+.gv-tip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 30;
+  max-width: 340px;
+  padding: 6px 9px;
+  background: var(--page);
+  color: var(--ink);
+  border: 1px solid var(--grid);
+  border-radius: 7px;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  display: none;
+  line-height: 1.35;
+}
+.gv-tip .t2 { color: var(--muted); font-size: 11px; }
+
+/* details drawer */
+.gv-details {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  bottom: 12px;
+  width: 340px;
+  max-width: 44%;
+  overflow-y: auto;
+  z-index: 20;
+  background: var(--page);
+  border: 1px solid var(--grid);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.14);
+  display: none;
+}
+.gv-details.open { display: block; }
+.gv-details h2 { font-size: 13px; margin: 0 0 2px; display: flex; gap: 8px; align-items: center; }
+.gv-details .close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  padding: 0 2px;
+}
+.gv-details .meta { color: var(--muted); font-size: 11px; margin: 2px 0 8px; }
+.gv-details .file { font-family: ui-monospace, monospace; font-size: 11px; color: var(--ink-2); word-break: break-all; }
+.gv-details p { margin: 6px 0; color: var(--ink-2); line-height: 1.45; }
+.gv-details .quote {
+  border-left: 3px solid var(--grid);
+  margin: 6px 0;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  background: var(--surface);
+  border-radius: 0 6px 6px 0;
+}
+.gv-details .quote .src { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10.5px; display: block; margin-bottom: 2px; }
+.gv-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--hairline);
+  color: var(--surface);
+}
+.gv-details ul.links { list-style: none; padding: 0; margin: 4px 0; }
+.gv-details ul.links li { padding: 2px 0; color: var(--ink-2); }
+.gv-details ul.links li a { color: var(--accent); cursor: pointer; text-decoration: none; }
+.gv-details ul.links li a:hover { text-decoration: underline; }
+.gv-details .kindword { font-size: 11px; color: var(--muted); }
+
+/* toolbar over canvas */
+.gv-toolbar {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 20;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.gv-toolbar .hint { color: var(--muted); font-size: 11px; background: var(--page); border-radius: 6px; padding: 3px 8px; border: 1px solid var(--grid); }

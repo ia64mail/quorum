@@ -49,6 +49,7 @@ logs/             # Docker JSON logs (bind-mounted, gitignored) — {role}-{time
 tools/            # Developer tooling scripts
   entropy-report/ # Source code entropy/complexity analysis
   session-report/ # Session log parser (parse-logs.mjs) + report writing guide
+  graph-viz/      # Ticket knowledge-graph visualizer (self-contained HTML build)
 CHANGELOG.md      # Top-line chronological summary across all milestones
 quorum.md         # Workspace conventions read by agents at runtime
 ```
@@ -69,6 +70,7 @@ The `tools/` directory holds developer scripts for analyzing the codebase and ru
 |------|---------|
 | [tools/entropy-report/README.md](tools/entropy-report/README.md) | Source-code complexity analysis — Halstead metrics aggregated across commits |
 | [tools/session-report/SESSION-REPORT.md](tools/session-report/SESSION-REPORT.md) | Parse Docker JSON logs into narrative session reports |
+| [tools/graph-viz/README.md](tools/graph-viz/README.md) | Interactive ticket knowledge-graph visualizer — Cytoscape.js, single-file HTML, PNG/SVG figure export |
 
 ## Documentation
 

@@ -1,0 +1,123 @@
+<title>Quorum ticket graph</title>
+<style>
+/*__STYLE__*/
+</style>
+<div class="gv-root" id="gvRoot" data-gv-theme="auto">
+  <aside class="gv-side">
+    <h1>Quorum ticket graph</h1>
+    <p class="gv-sub" id="gvMeta"></p>
+
+    <div class="gv-row">
+      <input class="gv-search" id="gvSearch" type="search" list="gvIds" placeholder="Find ticket (id or title)…" />
+      <datalist id="gvIds"></datalist>
+    </div>
+    <p class="gv-stats" id="gvStats"></p>
+
+    <details class="gv-section" open>
+      <summary>View</summary>
+      <div class="gv-body">
+        <div class="gv-row">
+          <label for="gvLayout">Layout</label>
+          <select id="gvLayout">
+            <option value="fcose">Force (fcose)</option>
+            <option value="timeline">Timeline × milestone</option>
+          </select>
+          <button id="gvRelayout" title="Re-run the current layout">Re-run</button>
+        </div>
+        <div class="gv-row">
+          <label for="gvTheme">Theme</label>
+          <select id="gvTheme">
+            <option value="auto">Auto</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+          <button id="gvFit">Fit</button>
+        </div>
+        <div class="gv-row">
+          <label for="gvHlMode">On click</label>
+          <select id="gvHlMode">
+            <option value="hood">Highlight neighborhood</option>
+            <option value="up">Highlight upstream (referenced)</option>
+            <option value="down">Highlight downstream (referencing)</option>
+          </select>
+        </div>
+        <div class="gv-row">
+          <label for="gvDepth">Depth</label>
+          <select id="gvDepth">
+            <option>1</option><option>2</option><option>3</option><option value="99">∞</option>
+          </select>
+          <span class="gv-sub" style="margin:0">Shift-click 2nd node: path</span>
+        </div>
+      </div>
+    </details>
+
+    <details class="gv-section" open>
+      <summary>Time</summary>
+      <div class="gv-body">
+        <input type="range" id="gvTime" min="0" max="100" value="100" />
+        <div class="gv-row"><span class="gv-sub" style="margin:0" id="gvTimeLabel"></span></div>
+      </div>
+    </details>
+
+    <details class="gv-section" open>
+      <summary>Node types</summary>
+      <div class="gv-body" id="gvNodeTypes"></div>
+    </details>
+
+    <details class="gv-section" open>
+      <summary>Edge kinds</summary>
+      <div class="gv-body" id="gvEdgeKinds"></div>
+    </details>
+
+    <details class="gv-section">
+      <summary>Evidence &amp; direction</summary>
+      <div class="gv-body">
+        <div id="gvChannels"></div>
+        <div id="gvTemporal" style="margin-top:6px"></div>
+        <label class="gv-check" style="margin-top:6px"><input type="checkbox" id="gvHideIsolated" /> hide unconnected nodes</label>
+      </div>
+    </details>
+
+    <details class="gv-section">
+      <summary>Milestones</summary>
+      <div class="gv-body">
+        <div class="gv-row">
+          <button id="gvMsAll">All</button>
+          <button id="gvMsNone">None</button>
+        </div>
+        <div id="gvMilestones"></div>
+      </div>
+    </details>
+
+    <details class="gv-section">
+      <summary>Export &amp; positions</summary>
+      <div class="gv-body">
+        <div class="gv-row">
+          <button class="primary" id="gvPng">PNG ×3</button>
+          <button id="gvSvg">SVG</button>
+        </div>
+        <div class="gv-row">
+          <button id="gvSavePos">Save positions</button>
+          <button id="gvLoadPos">Apply positions…</button>
+          <input type="file" id="gvPosFile" accept=".json" style="display:none" />
+        </div>
+        <p class="gv-sub">Saved-position files dropped into <code>tools/graph-viz/positions/</code> are inlined at build time, making figures reproducible.</p>
+      </div>
+    </details>
+  </aside>
+
+  <main class="gv-main">
+    <div id="cy"></div>
+    <div class="gv-toolbar"><span class="hint" id="gvHint">Click a node to inspect · Esc clears</span></div>
+    <div class="gv-tip" id="gvTip"></div>
+    <div class="gv-details" id="gvDetails"></div>
+  </main>
+</div>
+<!--__LIBS__-->
+<script>
+window.GRAPH_DATA = /*__DATA__*/ null;
+window.SAVED_POSITIONS = /*__POSITIONS__*/ {};
+</script>
+<script>
+/*__APP__*/
+</script>
